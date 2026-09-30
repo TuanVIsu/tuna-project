@@ -1,0 +1,329 @@
+// routes/staff.routes.js
+const express = require('express');
+const router = express.Router();
+const pool = require('../config/db');
+const { authenticateToken } = require('../middlewares/auth');
+
+router.use(authenticateToken);
+
+// Danh sách tài khoản Admin
+router.get('/', async (req, res) => {
+  try {
+    const { rows } = await pool.query(
+      `SELECT id, username, email, full_name AS "fullName", role, 
+              assigned_subject AS "assignedSubject",
+              COALESCE(is_active, true) AS "isActive",
+              TO_CHAR(created_at, 'DD/MM/YYYY HH24:MI') AS "createdAt"
+       FROM admin_users 
+       ORDER BY id ASC`
+    );
+    res.json({ success: true, data: rows });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+// Tạo thủ công tài khoản Admin
+router.post('/', async (req, res) => {
+  const { username, email, fullName, role, password, assignedSubject } = req.body;
+  try {
+    if (!username || !email || !fullName) {
+      return res.status(400).json({ success: false, message: 'Vui lòng điền đủ Username, Email và Họ tên!' });
+    }
+
+    const cleanUsername = username.trim().toLowerCase();
+    const cleanEmail = email.trim().toLowerCase();
+    const cleanPassword = password?.trim() || 'Admin@123';
+    const permissions = role === 'super_admin' ? ['all'] : role === 'instructor' ? ['library', 'schedules', 'broadcast'] : ['community'];
+
+    const insertRes = await pool.query(
+      `INSERT INTO admin_users (username, email, full_name, role, password, assigned_subject, is_active, custom_permissions)
+       VALUES ($1, $2, $3, $4, $5, $6, true, $7)
+       RETURNING id, username, email, full_name AS "fullName", role, is_active AS "isActive"`,
+      [cleanUsername, cleanEmail, fullName.trim(), role || 'instructor', cleanPassword, assignedSubject || null, permissions]
+    );
+
+    res.json({ success: true, message: 'Tạo tài khoản quản trị thành công!', data: insertRes.rows[0] });
+  } catch (err) {
+    res.status(500).json({ success: false, message: 'Tên đăng nhập hoặc Email đã tồn tại trong hệ thống!' });
+  }
+});
+
+// Khóa / Mở khóa Admin
+router.patch('/:id/toggle', async (req, res) => {
+  const { id } = req.params;
+  try {
+    const check = await pool.query(`SELECT id, role, is_active FROM admin_users WHERE id = $1`, [id]);
+    if (check.rows.length === 0) {
+      return res.status(404).json({ success: false, message: 'Tài khoản không tồn tại!' });
+    }
+
+    if (check.rows[0].role === 'super_admin') {
+      return res.status(400).json({ success: false, message: 'Không được phép khóa tài khoản Super Admin!' });
+    }
+
+    const newStatus = !check.rows[0].is_active;
+    await pool.query(`UPDATE admin_users SET is_active = $1 WHERE id = $2`, [newStatus, id]);
+
+    res.json({ 
+      success: true, 
+      isActive: newStatus, 
+      message: newStatus ? 'Đã kích hoạt lại tài khoản' : 'Đã tạm khóa tài khoản' 
+    });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+// Xóa tài khoản Admin
+router.delete('/:id', async (req, res) => {
+  const { id } = req.params;
+  try {
+    const check = await pool.query(`SELECT role FROM admin_users WHERE id = $1`, [id]);
+    if (check.rows.length === 0) return res.status(404).json({ success: false, message: 'Không tìm thấy tài khoản' });
+    if (check.rows[0].role === 'super_admin') {
+      return res.status(400).json({ success: false, message: 'Không thể xóa tài khoản Super Admin!' });
+    }
+
+    await pool.query(`DELETE FROM admin_users WHERE id = $1`, [id]);
+    res.json({ success: true, message: 'Đã xóa tài khoản khỏi hệ thống!' });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+// Danh sách yêu cầu cấp quyền Google
+// routes/staff.routes.js
+
+// Danh sách yêu cầu cấp quyền (chỉ 1 dòng duy nhất cho mỗi email)
+router.get('/access-requests', async (req, res) => {
+  try {
+    const { rows } = await pool.query(
+      `SELECT id, full_name AS "fullName", email, reason, 
+              requested_role AS "requestedRole", 
+              COALESCE(status, 'pending') AS status,
+              TO_CHAR(created_at, 'DD/MM/YYYY HH24:MI') AS "createdAt"
+       FROM admin_access_requests 
+       ORDER BY created_at DESC`
+    );
+    res.json({ success: true, data: rows });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+// Danh sách yêu cầu đặt lại mật khẩu (chỉ 1 dòng duy nhất cho mỗi email)
+router.get('/password-resets', async (req, res) => {
+  try {
+    const { rows } = await pool.query(
+      `SELECT r.id, r.email, r.note, 
+              COALESCE(r.status, 'pending') AS status,
+              TO_CHAR(r.created_at, 'DD/MM/YYYY HH24:MI') AS "createdAt",
+              u.full_name AS "fullName", u.role, u.username
+       FROM admin_password_resets r
+       LEFT JOIN admin_users u ON LOWER(u.email) = LOWER(r.email)
+       ORDER BY r.created_at DESC`
+    );
+    res.json({ success: true, data: rows });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+// Duyệt / Từ chối yêu cầu cấp quyền Google
+// routes/staff.routes.js
+
+// Duyệt / Từ chối yêu cầu cấp quyền Google
+router.post('/approve-access', async (req, res) => {
+  const { requestId, email, fullName, role, action = 'approve' } = req.body;
+  try {
+    const cleanEmail = email.toLowerCase().trim();
+
+    if (action === 'reject') {
+      await pool.query(`UPDATE admin_access_requests SET status = 'rejected' WHERE id = $1`, [requestId]);
+      return res.json({ success: true, message: `Đã từ chối cấp quyền cho ${cleanEmail}` });
+    }
+
+    // 1. Tạo hoặc cập nhật tài khoản vào admin_users
+    const baseUsername = cleanEmail.split('@')[0].replace(/[^a-zA-Z0-9_]/g, '');
+    const permissions = role === 'instructor' ? ['library', 'schedules', 'broadcast'] : ['community'];
+
+    // Kiểm tra xem username đã có chưa, nếu trùng thì thêm đuôi ngẫu nhiên
+    const checkUsername = await pool.query(`SELECT id FROM admin_users WHERE username = $1`, [baseUsername]);
+    const finalUsername = checkUsername.rows.length > 0 
+      ? `${baseUsername}_${Math.floor(100 + Math.random() * 900)}`
+      : baseUsername;
+
+    await pool.query(
+      `INSERT INTO admin_users (username, email, full_name, role, password, is_active, custom_permissions)
+       VALUES ($1, $2, $3, $4, 'Admin@123', true, $5)
+       ON CONFLICT (email) DO UPDATE 
+       SET role = EXCLUDED.role, is_active = true, custom_permissions = EXCLUDED.custom_permissions`,
+      [finalUsername, cleanEmail, fullName, role || 'instructor', permissions]
+    );
+
+    // 2. Đánh dấu đơn hiện tại là approved, đồng thời xóa/hủy các đơn cũ khác của email này để tránh mâu thuẫn
+    await pool.query(
+      `UPDATE admin_access_requests SET status = 'approved' WHERE id = $1`,
+      [requestId]
+    );
+    await pool.query(
+      `DELETE FROM admin_access_requests WHERE LOWER(email) = $1 AND id != $2`,
+      [cleanEmail, requestId]
+    );
+
+    res.json({ success: true, message: `Đã duyệt và cấp quyền [${role}] thành công cho ${fullName}!` });
+  } catch (err) {
+    console.error('❌ Lỗi duyệt quyền:', err.message);
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+// Duyệt và đặt lại mật khẩu
+router.post('/approve-reset-password', async (req, res) => {
+  const { requestId, email, newPassword = 'Admin@123' } = req.body;
+  try {
+    const cleanEmail = email.trim().toLowerCase();
+
+    // 1. Cập nhật mật khẩu mới cho tài khoản
+    await pool.query(
+      `UPDATE admin_users SET password = $1 WHERE LOWER(email) = $2`,
+      [newPassword.trim(), cleanEmail]
+    );
+
+    // 2. Đánh dấu yêu cầu đã approved và xóa các yêu cầu trùng lặp cũ
+    await pool.query(`UPDATE admin_password_resets SET status = 'approved' WHERE id = $1`, [requestId]);
+    await pool.query(
+      `DELETE FROM admin_password_resets WHERE LOWER(email) = $1 AND id != $2`,
+      [cleanEmail, requestId]
+    );
+
+    res.json({ success: true, message: `Mật khẩu của tài khoản ${cleanEmail} đã được đặt lại thành: ${newPassword}` });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+// Danh sách yêu cầu đặt lại mật khẩu
+router.get('/password-resets', async (req, res) => {
+  try {
+    const { rows } = await pool.query(
+      `SELECT r.id, r.email, r.note, 
+              COALESCE(r.status, 'pending') AS status,
+              TO_CHAR(r.created_at, 'DD/MM/YYYY HH24:MI') AS "createdAt",
+              u.full_name AS "fullName", u.role, u.username
+       FROM admin_password_resets r
+       LEFT JOIN admin_users u ON LOWER(u.email) = LOWER(r.email)
+       ORDER BY r.created_at DESC`
+    );
+    res.json({ success: true, data: rows });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+// Duyệt và đặt lại mật khẩu
+router.post('/approve-reset-password', async (req, res) => {
+  const { requestId, email, newPassword = 'Admin@123' } = req.body;
+  try {
+    await pool.query(
+      `UPDATE admin_users SET password = $1 WHERE LOWER(email) = LOWER($2)`,
+      [newPassword.trim(), email.trim()]
+    );
+
+    await pool.query(`UPDATE admin_password_resets SET status = 'approved' WHERE id = $1`, [requestId]);
+
+    res.json({ success: true, message: `Mật khẩu của tài khoản ${email} đã được đặt lại thành: ${newPassword}` });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+// routes/staff.routes.js
+
+// API: Lấy tổng hợp thông báo chờ duyệt và số lượng badge cho Super Admin
+router.get('/notifications', async (req, res) => {
+  try {
+    // 1. Lấy các yêu cầu xin cấp quyền đang chờ (pending)
+    const accessReqs = await pool.query(
+      `SELECT id, full_name AS "fullName", email, requested_role AS "role",
+              'access' AS "type",
+              TO_CHAR(created_at, 'HH24:MI DD/MM') AS "time"
+       FROM admin_access_requests 
+       WHERE status = 'pending' 
+       ORDER BY created_at DESC LIMIT 5`
+    );
+
+    // 2. Lấy các yêu cầu quên mật khẩu đang chờ (pending)
+    const resetReqs = await pool.query(
+      `SELECT id, email, note,
+              'password_reset' AS "type",
+              TO_CHAR(created_at, 'HH24:MI DD/MM') AS "time"
+       FROM admin_password_resets 
+       WHERE status = 'pending' 
+       ORDER BY created_at DESC LIMIT 5`
+    );
+    // routes/staff.routes.js
+
+// Cập nhật thông tin tài khoản quản trị
+router.put('/:id', async (req, res) => {
+  const { id } = req.params;
+  const { fullName, role, email, password } = req.body;
+
+  try {
+    const check = await pool.query(`SELECT id, role, password FROM admin_users WHERE id = $1`, [id]);
+    if (check.rows.length === 0) {
+      return res.status(404).json({ success: false, message: 'Không tìm thấy tài khoản quản trị!' });
+    }
+
+    const cleanEmail = email.trim().toLowerCase();
+    const cleanUsername = cleanEmail.split('@')[0];
+    const permissions = role === 'super_admin' ? ['all'] : role === 'instructor' ? ['library', 'schedules', 'broadcast'] : ['community'];
+
+    let finalPassword = check.rows[0].password;
+    if (password && password.trim()) {
+      finalPassword = await bcrypt.hash(password.trim(), 10);
+    }
+
+    const updateRes = await pool.query(
+      `UPDATE admin_users 
+       SET full_name = $1, email = $2, username = $3, role = $4, password = $5, custom_permissions = $6
+       WHERE id = $7
+       RETURNING id, username, email, full_name AS "fullName", role, is_active AS "isActive"`,
+      [fullName.trim(), cleanEmail, cleanUsername, role, finalPassword, permissions, id]
+    );
+
+    res.json({ success: true, message: 'Cập nhật tài khoản thành công!', data: updateRes.rows[0] });
+  } catch (err) {
+    res.status(500).json({ success: false, message: 'Email đã tồn tại trên một tài khoản khác!' });
+  }
+});
+    // 3. Đếm tổng số chưa duyệt
+    const totalCount = accessReqs.rows.length + resetReqs.rows.length;
+
+    res.json({
+      success: true,
+      totalPending: totalCount,
+      notifications: [
+        ...accessReqs.rows.map(r => ({
+          id: `acc_${r.id}`,
+          rawId: r.id,
+          type: 'access',
+          title: `Yêu cầu cấp quyền: ${r.fullName}`,
+          desc: `${r.email} xin quyền ${r.role === 'instructor' ? 'Giảng viên' : 'Moderator'}`,
+          time: r.time,
+        })),
+        ...resetReqs.rows.map(r => ({
+          id: `pwd_${r.id}`,
+          rawId: r.id,
+          type: 'password_reset',
+          title: `Khôi phục mật khẩu`,
+          desc: `Tài khoản ${r.email} yêu cầu cấp lại mật khẩu`,
+          time: r.time,
+        }))
+      ]
+    });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+module.exports = router;
