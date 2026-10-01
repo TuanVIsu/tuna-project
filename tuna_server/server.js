@@ -22,7 +22,7 @@ const allowedOrigins = [
 
 // Hàm kiểm tra nguồn gốc truy cập hợp lệ
 const isOriginAllowed = (origin) => {
-  if (!origin) return true; // Cho phép native app, curl, server-to-server
+  if (!origin) return true;
   if (allowedOrigins.includes(origin)) return true;
   if (origin.endsWith('.zdn.vn') || origin.endsWith('.zalo.me')) return true;
   return false;
@@ -64,14 +64,29 @@ app.use(cors(corsOptions));
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 
-// Health check route cho Render
+// Trang chủ trả về HTML có thẻ meta xác thực domain của Zalo Developers
 app.get('/', (req, res) => {
-  res.json({ success: true, message: '🚀 TUNA Backend is running smoothly on Render!' });
+  res.setHeader('Content-Type', 'text/html; charset=utf-8');
+  res.send(`<!DOCTYPE html>
+<html lang="vi">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="zalo-platform-site-verification" content="P-IV4eNt3abC-gXHi-qJRsJ-jbY8Y6m1E34s" />
+  <title>TUNA Platform Backend</title>
+</head>
+<body style="font-family: sans-serif; display: flex; align-items: center; justify-content: center; height: 100vh; margin: 0; background: #f8fafc;">
+  <div style="text-align: center; padding: 24px; background: white; border-radius: 16px; box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);">
+    <h1 style="color: #2563eb; margin-bottom: 8px;">🚀 TUNA Backend</h1>
+    <p style="color: #64748b; margin: 0;">Server đang hoạt động bình thường trên Render.</p>
+  </div>
+</body>
+</html>`);
 });
 
-// Phục vụ trực tiếp tệp HTML xác thực của Zalo
+// Giữ lại route xác thực file tĩnh dự phòng
 app.get('/zalo_verifierP-IV4eNt3abC-gXHi-qJRsJ-jbY8Y6m1E34s.html', (req, res) => {
-  res.sendFile(path.join(__dirname, 'P-IV4eNt3abC-gXHi-qJRsJ-jbY8Y6m1E34s.html'));
+  res.setHeader('Content-Type', 'text/html; charset=utf-8');
+  res.send('zalo-platform-site-verification: P-IV4eNt3abC-gXHi-qJRsJ-jbY8Y6m1E34s.html');
 });
 
 // Tạo và phục vụ thư mục uploads tĩnh
