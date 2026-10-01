@@ -24,7 +24,7 @@ router.get('/', async (req, res) => {
   }
 });
 
-// 2. Tạo thủ công tài khoản Admin (Mật khẩu được mã hóa Bcrypt)
+// 2. Tạo thủ công tài khoản Admin
 router.post('/', async (req, res) => {
   const { username, email, fullName, role, password, assignedSubject } = req.body;
   try {
@@ -34,17 +34,14 @@ router.post('/', async (req, res) => {
 
     const cleanUsername = username.trim().toLowerCase();
     const cleanEmail = email.trim().toLowerCase();
-    const rawPassword = password?.trim() || 'Admin@123';
-    
-    // Băm mật khẩu bảo mật
-    const hashedPassword = await bcrypt.hash(rawPassword, 10);
+    const cleanPassword = password?.trim() || 'Admin@123';
     const permissions = role === 'super_admin' ? ['all'] : role === 'instructor' ? ['library', 'schedules', 'broadcast'] : ['community'];
 
     const insertRes = await pool.query(
       `INSERT INTO admin_users (username, email, full_name, role, password, assigned_subject, is_active, custom_permissions)
        VALUES ($1, $2, $3, $4, $5, $6, true, $7)
        RETURNING id, username, email, full_name AS "fullName", role, is_active AS "isActive"`,
-      [cleanUsername, cleanEmail, fullName.trim(), role || 'instructor', hashedPassword, assignedSubject || null, permissions]
+      [cleanUsername, cleanEmail, fullName.trim(), role || 'instructor', cleanPassword, assignedSubject || null, permissions]
     );
 
     res.json({ success: true, message: 'Tạo tài khoản quản trị thành công!', data: insertRes.rows[0] });
@@ -96,7 +93,41 @@ router.delete('/:id', async (req, res) => {
   }
 });
 
-// 5. Danh sách yêu cầu cấp quyền Google (Duy nhất 1 dòng cho mỗi email)
+// 5. Cập nhật thông tin tài khoản
+router.put('/:id', async (req, res) => {
+  const { id } = req.params;
+  const { fullName, role, email, password } = req.body;
+
+  try {
+    const check = await pool.query(`SELECT id, role, password FROM admin_users WHERE id = $1`, [id]);
+    if (check.rows.length === 0) {
+      return res.status(404).json({ success: false, message: 'Không tìm thấy tài khoản quản trị!' });
+    }
+
+    const cleanEmail = email.trim().toLowerCase();
+    const cleanUsername = cleanEmail.split('@')[0];
+    const permissions = role === 'super_admin' ? ['all'] : role === 'instructor' ? ['library', 'schedules', 'broadcast'] : ['community'];
+
+    let finalPassword = check.rows[0].password;
+    if (password && password.trim()) {
+      finalPassword = await bcrypt.hash(password.trim(), 10);
+    }
+
+    const updateRes = await pool.query(
+      `UPDATE admin_users 
+       SET full_name = $1, email = $2, username = $3, role = $4, password = $5, custom_permissions = $6
+       WHERE id = $7
+       RETURNING id, username, email, full_name AS "fullName", role, is_active AS "isActive"`,
+      [fullName.trim(), cleanEmail, cleanUsername, role, finalPassword, permissions, id]
+    );
+
+    res.json({ success: true, message: 'Cập nhật tài khoản thành công!', data: updateRes.rows[0] });
+  } catch (err) {
+    res.status(500).json({ success: false, message: 'Email đã tồn tại trên một tài khoản khác!' });
+  }
+});
+
+// 6. Danh sách yêu cầu cấp quyền
 router.get('/access-requests', async (req, res) => {
   try {
     const { rows } = await pool.query(
@@ -113,7 +144,7 @@ router.get('/access-requests', async (req, res) => {
   }
 });
 
-// 6. Duyệt / Từ chối cấp quyền Google
+// 7. Duyệt / Từ chối cấp quyền Google
 router.post('/approve-access', async (req, res) => {
   const { requestId, email, fullName, role, action = 'approve' } = req.body;
   try {
@@ -125,34 +156,31 @@ router.post('/approve-access', async (req, res) => {
     }
 
     const baseUsername = cleanEmail.split('@')[0].replace(/[^a-zA-Z0-9_]/g, '');
+    const permissions = role === 'instructor' ? ['library', 'schedules', 'broadcast'] : ['community'];
+
     const checkUsername = await pool.query(`SELECT id FROM admin_users WHERE username = $1`, [baseUsername]);
     const finalUsername = checkUsername.rows.length > 0 
       ? `${baseUsername}_${Math.floor(100 + Math.random() * 900)}`
       : baseUsername;
 
-    const permissions = role === 'instructor' ? ['library', 'schedules', 'broadcast'] : ['community'];
-    const defaultHashedPassword = await bcrypt.hash('Admin@123', 10);
-
-    // Chèn hoặc cập nhật admin_users
     await pool.query(
       `INSERT INTO admin_users (username, email, full_name, role, password, is_active, custom_permissions)
-       VALUES ($1, $2, $3, $4, $5, true, $6)
+       VALUES ($1, $2, $3, $4, 'Admin@123', true, $5)
        ON CONFLICT (email) DO UPDATE 
        SET role = EXCLUDED.role, is_active = true, custom_permissions = EXCLUDED.custom_permissions`,
-      [finalUsername, cleanEmail, fullName, role || 'instructor', defaultHashedPassword, permissions]
+      [finalUsername, cleanEmail, fullName, role || 'instructor', permissions]
     );
 
-    // Đổi trạng thái yêu cầu sang 'approved'
     await pool.query(`UPDATE admin_access_requests SET status = 'approved' WHERE id = $1`, [requestId]);
+    await pool.query(`DELETE FROM admin_access_requests WHERE LOWER(email) = $1 AND id != $2`, [cleanEmail, requestId]);
 
     res.json({ success: true, message: `Đã duyệt và cấp quyền [${role}] thành công cho ${fullName}!` });
   } catch (err) {
-    console.error('❌ Lỗi duyệt quyền:', err.message);
     res.status(500).json({ success: false, message: err.message });
   }
 });
 
-// 7. Danh sách yêu cầu đặt lại mật khẩu (Duy nhất 1 dòng cho mỗi email)
+// 8. Danh sách yêu cầu đặt lại mật khẩu
 router.get('/password-resets', async (req, res) => {
   try {
     const { rows } = await pool.query(
@@ -170,19 +198,18 @@ router.get('/password-resets', async (req, res) => {
   }
 });
 
-// 8. Duyệt và đặt lại mật khẩu mới (Mã hóa Bcrypt)
+// 9. Duyệt và đặt lại mật khẩu
 router.post('/approve-reset-password', async (req, res) => {
   const { requestId, email, newPassword = 'Admin@123' } = req.body;
   try {
     const cleanEmail = email.trim().toLowerCase();
-    const hashedPassword = await bcrypt.hash(newPassword.trim(), 10);
-
     await pool.query(
       `UPDATE admin_users SET password = $1 WHERE LOWER(email) = $2`,
-      [hashedPassword, cleanEmail]
+      [newPassword.trim(), cleanEmail]
     );
 
     await pool.query(`UPDATE admin_password_resets SET status = 'approved' WHERE id = $1`, [requestId]);
+    await pool.query(`DELETE FROM admin_password_resets WHERE LOWER(email) = $1 AND id != $2`, [cleanEmail, requestId]);
 
     res.json({ success: true, message: `Mật khẩu của tài khoản ${cleanEmail} đã được đặt lại thành: ${newPassword}` });
   } catch (err) {
@@ -190,7 +217,7 @@ router.post('/approve-reset-password', async (req, res) => {
   }
 });
 
-// 9. API Lấy thông báo chuông và badge đếm số đơn pending
+// 10. Thông báo chờ duyệt cho Super Admin
 router.get('/notifications', async (req, res) => {
   try {
     const accessReqs = await pool.query(
