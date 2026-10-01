@@ -1,7 +1,4 @@
-app.use(cors());
-
-
-
+// tuna_server/server.js
 require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
@@ -10,10 +7,11 @@ const fs = require('fs');
 const http = require('http');
 const { Server } = require('socket.io');
 
+// Khởi tạo app và server trước khi dùng
 const app = express();
 const server = http.createServer(app);
 
-// 1. Cấu hình Socket.IO với CORS mở
+// 1. Socket.IO với CORS mở
 const io = new Server(server, {
   cors: {
     origin: '*',
@@ -22,10 +20,10 @@ const io = new Server(server, {
   },
 });
 
-// Chia sẻ instance io cho toàn bộ Express router sử dụng req.app.get('io')
+// Chia sẻ instance io cho toàn bộ Express router
 app.set('io', io);
 
-// 2. Cấu hình CORS chi tiết cho Express (Hỗ trợ Zalo Mini App WebView & Preflight)
+// 2. Cấu hình CORS chi tiết cho Express
 const corsOptions = {
   origin: '*',
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
@@ -34,12 +32,12 @@ const corsOptions = {
 };
 
 app.use(cors(corsOptions));
-app.options('*', cors(corsOptions)); // Xử lý toàn bộ preflight request
+app.options('*', cors(corsOptions));
 
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 
-// Route kiểm tra máy chủ hoạt động
+// Health check route cho Render
 app.get('/', (req, res) => {
   res.json({ success: true, message: '🚀 TUNA Backend is running smoothly on Render!' });
 });
@@ -75,7 +73,7 @@ app.use('/api/admin/users', require('./routes/users.routes'));
 app.use('/api/admin/staff', require('./routes/staff.routes'));
 app.use('/api/curriculum', require('./routes/curriculum.routes'));
 
-// Mount module Streak & Leaderboard hỗ trợ cả 2 dạng URL
+// Mount module Streak & Leaderboard
 app.use('/api/streak', streakRouter);
 app.use('/api', streakRouter);
 
