@@ -69,9 +69,9 @@ app.get('/', (req, res) => {
   res.json({ success: true, message: '🚀 TUNA Backend is running smoothly on Render!' });
 });
 
-// Route xác thực quyền sở hữu domain của Zalo Developers
+// Phục vụ trực tiếp tệp HTML xác thực của Zalo
 app.get('/zalo_verifierP-IV4eNt3abC-gXHi-qJRsJ-jbY8Y6m1E34s.html', (req, res) => {
-  res.send('zalo-platform-site-verification: P-IV4eNt3abC-gXHi-qJRsJ-jbY8Y6m1E34s.html');
+  res.sendFile(path.join(__dirname, 'P-IV4eNt3abC-gXHi-qJRsJ-jbY8Y6m1E34s.html'));
 });
 
 // Tạo và phục vụ thư mục uploads tĩnh
