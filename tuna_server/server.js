@@ -10,10 +10,26 @@ const { Server } = require('socket.io');
 const app = express();
 const server = http.createServer(app);
 
-// 1. Socket.IO với CORS mở
+// Danh sách tên miền được phép truy cập (Render Admin, Zalo Mini App, Localhost)
+const allowedOrigins = [
+  'https://tuna-admin.onrender.com',
+  'https://h5.zdn.vn',
+  'http://localhost:5173',
+  'http://localhost:3000',
+  'http://127.0.0.1:5173',
+  'http://127.0.0.1:3000',
+];
+
+// 1. Socket.IO với CORS Whitelist
 const io = new Server(server, {
   cors: {
-    origin: '*',
+    origin: (origin, callback) => {
+      if (!origin || allowedOrigins.includes(origin)) {
+        callback(null, true);
+      } else {
+        callback(new Error('Blocked by CORS for Socket.IO'));
+      }
+    },
     methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
     credentials: true,
   },
@@ -21,9 +37,15 @@ const io = new Server(server, {
 
 app.set('io', io);
 
-// 2. Cấu hình CORS an toàn tương thích Express v5
+// 2. Cấu hình CORS an toàn cho Express
 const corsOptions = {
-  origin: '*',
+  origin: function (origin, callback) {
+    if (!origin || allowedOrigins.includes(origin)) {
+      callback(null, true);
+    } else {
+      callback(new Error('Blocked by CORS'));
+    }
+  },
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization', 'bypass-tunnel-reminder', 'x-requested-with'],
   credentials: true,
