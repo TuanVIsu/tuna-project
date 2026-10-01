@@ -123,14 +123,25 @@ export const ManageStaff = () => {
     setActiveMenuId(null);
   };
 
-  const handleSaveEdit = async (e) => {
+const handleSaveEdit = async (e) => {
     e.preventDefault();
     if (!editingStaff) return;
+
+    // Chuẩn bị payload: Chỉ gửi thông tin cần thiết
+    const payload = {
+      fullName: editFormData.fullName.trim(),
+      email: editFormData.email.trim(),
+      role: editFormData.role,
+    };
+    if (editFormData.password && editFormData.password.trim() !== "") {
+      payload.password = editFormData.password.trim();
+    }
+
     try {
       const res = await fetch(`${API_BASE}/admin/staff/${editingStaff.id}`, {
         method: "PUT",
         headers: getHeaders(),
-        body: JSON.stringify(editFormData),
+        body: JSON.stringify(payload),
       });
       const data = await res.json();
       if (data.success) {
