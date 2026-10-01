@@ -4,6 +4,9 @@ const router = express.Router();
 const pool = require('../config/db');
 const { generateContentWithFallback } = require('../utils/gemini');
 
+// Đường dẫn service Python WRR trên Render
+const WRR_SERVICE_URL = process.env.WRR_SERVICE_URL || 'https://tuna-wrr-service.onrender.com';
+
 // Helper: Kiểm tra hạn mức token trong ngày của một user
 const checkUserTokenLimit = async (userId) => {
   try {
@@ -36,8 +39,33 @@ const checkUserTokenLimit = async (userId) => {
     return { allowed: true, settings, usedToday };
   } catch (err) {
     console.error("Lỗi kiểm tra hạn mức AI:", err);
-    return { allowed: true }; // Dự phòng không chặn nếu lỗi DB
+    return { allowed: true };
   }
+};
+
+// Thuật toán Smooth Weighted Round Robin (SWRR) dự phòng bằng JS
+const fallbackSWRR = (items, totalSlots) => {
+  if (!items || items.length === 0) return [];
+  const validItems = items.map(it => ({
+    subject: it.subject,
+    weight: Math.max(1, Math.round(Number(it.weight || 1) * 10)),
+    currentWeight: 0
+  }));
+
+  const totalWeight = validItems.reduce((acc, cur) => acc + cur.weight, 0);
+  const schedule = [];
+
+  for (let i = 0; i < totalSlots; i++) {
+    for (const item of validItems) {
+      item.currentWeight += item.weight;
+    }
+    const best = validItems.reduce((prev, current) => 
+      (prev.currentWeight > current.currentWeight) ? prev : current
+    );
+    schedule.push(best.subject);
+    best.currentWeight -= totalWeight;
+  }
+  return schedule;
 };
 
 // =============================================================================
@@ -48,9 +76,7 @@ const checkUserTokenLimit = async (userId) => {
 router.get('/stats', async (req, res) => {
   try {
     const [settingsRes, statsRes, featuresRes, topUsersRes, recentTasksRes, cacheCountRes] = await Promise.all([
-      // 1. Cấu hình AI
       pool.query(`SELECT * FROM system_ai_settings ORDER BY id DESC LIMIT 1`),
-      // 2. Thống kê chung
       pool.query(`
         SELECT 
           COALESCE(SUM(total_tokens), 0)::BIGINT AS total_tokens,
@@ -60,7 +86,6 @@ router.get('/stats', async (req, res) => {
           COUNT(*)::INT AS total_requests
         FROM ai_token_logs
       `),
-      // 3. Phân bổ tính năng
       pool.query(`
         SELECT 
           feature_type,
@@ -71,7 +96,6 @@ router.get('/stats', async (req, res) => {
         GROUP BY feature_type
         ORDER BY tokens DESC
       `),
-      // 4. Top sinh viên dùng nhiều token
       pool.query(`
         SELECT 
           l.user_id,
@@ -87,7 +111,6 @@ router.get('/stats', async (req, res) => {
         ORDER BY total_tokens DESC
         LIMIT 6
       `),
-      // 5. Nhật ký tác vụ từ ai_tasks
       pool.query(`
         SELECT 
           id, 
@@ -100,7 +123,6 @@ router.get('/stats', async (req, res) => {
         ORDER BY created_at DESC
         LIMIT 8
       `),
-      // 6. Đếm bộ nhớ cache
       pool.query(`SELECT COUNT(*)::INT AS total FROM ai_cached_outputs`).catch(() => ({ rows: [{ total: 0 }] }))
     ]);
 
@@ -151,7 +173,6 @@ router.put('/settings', async (req, res) => {
       );
     }
 
-    // Ghi nhận vào audit log
     await pool.query(
       `INSERT INTO admin_audit_logs (actor_id, actor_name, actor_role, action, target, details)
        VALUES ($1, $2, $3, $4, $5, $6)`,
@@ -182,14 +203,124 @@ router.post('/clear-cache', async (req, res) => {
 });
 
 // =============================================================================
-// 2. APIS SINH DỮ LIỆU & TOKEN GATEWAY (Kết nối Gemini & CSDL)
+// 2. APIS SINH DỮ LIỆU & TOKEN GATEWAY (Gemini, Python WRR, CSDL)
 // =============================================================================
+
+// POST /api/ai/schedule/wrr - Cầu nối gọi Python Service phân bổ ca học thông minh
+router.post(['/schedule/wrr', '/ai/schedule/wrr'], async (req, res) => {
+  try {
+    const payload = req.body || {};
+    
+    // 1. Cố gắng chuyển tiếp request sang Python Flask Service (wrr_service.py)
+    try {
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 6000); // 6s timeout phòng trường hợp Render cold start
+
+      const pyRes = await fetch(`${WRR_SERVICE_URL}/api/schedule/wrr`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+        signal: controller.signal
+      });
+      clearTimeout(timeoutId);
+
+      if (pyRes.ok) {
+        const pyData = await pyRes.json();
+        return res.json(pyData);
+      }
+    } catch (netErr) {
+      console.warn("⚠️ Không kết nối được Python Service, chuyển sang thuật toán Fallback JS:", netErr.message);
+    }
+
+    // 2. Fallback dự phòng bằng Node.js nếu Python service đang spin-up
+    const subjectsData = payload.subjects || [];
+    const totalDays = parseInt(payload.total_days || 28);
+    const goalLevel = payload.goal_level || 'KhaGioi';
+    const currentGpa = parseFloat(payload.current_gpa || 3.0);
+
+    const targetGpa = goalLevel === 'HocBong' ? 3.7 : goalLevel === 'KhaGioi' ? 3.2 : 2.2;
+    const gpaGap = Math.max(0.0, targetGpa - currentGpa);
+    const effortBoost = 1.0 + Math.min(0.8, gpaGap * 0.7);
+
+    let slotsPerDay = 1;
+    if (goalLevel === 'HocBong' || gpaGap >= 0.6) slotsPerDay = 3;
+    else if (goalLevel === 'KhaGioi') slotsPerDay = 2;
+
+    const processedItems = subjectsData.map(item => {
+      const credits = Number(item.credits || 3);
+      const attempts = Number(item.quiz_total || 0);
+      const corrects = Number(item.quiz_correct || 0);
+      const isNearExam = Boolean(item.is_near_exam);
+      const userLevel = item.user_level || 'medium';
+
+      const selfScore = userLevel === 'weak' ? 1.4 : userLevel === 'good' ? 0.3 : 0.6;
+      const quizWeakness = attempts > 0 ? (1.0 - (corrects / attempts)) : 0.5;
+      const examUrgency = isNearExam ? 1.6 : 0.5;
+      const weaknessAmplifier = userLevel === 'weak' ? 1.3 : 1.0;
+
+      const rawWeight = (
+        (credits * 0.7) +
+        (selfScore * 2.2 * weaknessAmplifier) +
+        (quizWeakness * 2.5) +
+        (examUrgency * 1.5)
+      ) * effortBoost;
+
+      return {
+        subject: item.subject_name || item.subject,
+        weight: Number(rawWeight.toFixed(2))
+      };
+    });
+
+    const totalSlots = totalDays * slotsPerDay;
+    const allocatedSubjects = fallbackSWRR(processedItems, totalSlots);
+
+    const dailySchedulePlan = [];
+    let idx = 0;
+    for (let day = 0; day < totalDays; day++) {
+      const dayTasks = [];
+      for (let slot = 0; slot < slotsPerDay; slot++) {
+        const sub = allocatedSubjects[idx] || (processedItems[0]?.subject || 'Môn đại cương');
+        idx++;
+        let taskType = 'doc_study';
+        let title = `Nghiên cứu giáo trình: ${sub}`;
+
+        if (slot === 1) {
+          taskType = 'quiz';
+          title = `Luyện đề trắc nghiệm: ${sub}`;
+        } else if (slot === 2) {
+          taskType = 'flashcard';
+          title = `Ôn thuật ngữ then chốt: ${sub}`;
+        }
+
+        dayTasks.push({
+          subject: sub,
+          task_type: taskType,
+          title: title,
+          slot_index: slot
+        });
+      }
+      dailySchedulePlan.push(dayTasks);
+    }
+
+    return res.json({
+      success: true,
+      source: 'nodejs_fallback',
+      gpa_gap: Number(gpaGap.toFixed(2)),
+      slots_per_day: slotsPerDay,
+      weights: processedItems,
+      schedule_plan: dailySchedulePlan
+    });
+
+  } catch (err) {
+    console.error("Lỗi API schedule/wrr:", err);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
 
 // POST /api/ai/generate - Sinh nội dung trực tiếp qua Gemini
 router.post('/generate', async (req, res) => {
   const { prompt, isJson, userId = 'anonymous', featureType = 'test_api' } = req.body;
   try {
-    // 1. Kiểm tra hạn mức người dùng từ CSDL
     const limitCheck = await checkUserTokenLimit(userId);
     if (!limitCheck.allowed) {
       return res.status(403).json({ success: false, error: limitCheck.reason });
@@ -204,7 +335,6 @@ router.post('/generate', async (req, res) => {
 
     const text = await generateContentWithFallback(prompt, config);
 
-    // Tính toán và ghi nhận chi phí token thực tế
     const promptTokensEst = Math.round((prompt || '').length / 4);
     const compTokensEst = Math.round((text || '').length / 4);
     const totalTokensEst = promptTokensEst + compTokensEst;
@@ -216,7 +346,6 @@ router.post('/generate', async (req, res) => {
       [userId, featureType, promptTokensEst, compTokensEst, totalTokensEst, costUsd]
     ).catch(() => {});
 
-    // Ghi tác vụ hoàn thành vào ai_tasks
     await pool.query(
       `INSERT INTO ai_tasks (id, feature_id, doc_name, status, result_data)
        VALUES ($1, $2, $3, $4, $5)`,
@@ -234,13 +363,11 @@ router.post('/generate', async (req, res) => {
 router.post(['/daily-quiz/generate', '/ai/daily-quiz/generate'], async (req, res) => {
   let { subject, targetGoal = 'KhaGioi', dailyPace = 15, userId = 'B2300001' } = req.body;
 
-  // Xử lý fallback nếu môn học bị undefined
   if (!subject || subject === 'undefined' || subject.trim() === '') {
     subject = 'Cơ sở dữ liệu căn bản';
   }
 
   try {
-    // 1. Kiểm tra trạng thái AI Gateway từ CSDL
     const sysSettings = await pool.query(
       `SELECT max_questions_per_gen, enable_ai_global FROM system_ai_settings ORDER BY id DESC LIMIT 1`
     ).catch(() => ({ rows: [] }));
@@ -253,7 +380,6 @@ router.post(['/daily-quiz/generate', '/ai/daily-quiz/generate'], async (req, res
     const numQuestions = Math.min(dailyPace >= 30 ? 5 : 3, maxQuestions);
     const difficulty = targetGoal === 'HocBong' ? 'Nâng cao' : 'Căn bản';
 
-    // 2. Thử truy vấn câu hỏi có sẵn từ question_bank
     const dbQuiz = await pool.query(
       `SELECT question, options, answer, explain 
        FROM question_bank 
@@ -274,7 +400,6 @@ router.post(['/daily-quiz/generate', '/ai/daily-quiz/generate'], async (req, res
       });
     }
 
-    // 3. Nếu thiếu câu hỏi, gọi Gemini AI sinh đề và trả về JSON thuần
     const prompt = `Bạn là giảng viên đại học. Hãy tạo đúng ${numQuestions} câu hỏi trắc nghiệm và 2 thẻ ghi nhớ (flashcards) cho môn học "${subject}" ở mức độ [${difficulty}].
 YÊU CẦU: Trả về duy nhất một chuỗi JSON hợp lệ không có markdown:
 {
@@ -298,7 +423,6 @@ YÊU CẦU: Trả về duy nhất một chuỗi JSON hợp lệ không có markd
     const cleanJson = textOutput.replace(/```json|```/g, '').trim();
     const parsed = JSON.parse(cleanJson || '{}');
 
-    // Lưu vào question_bank để tái sử dụng
     const generatedQuestions = parsed.questions || [];
     if (Array.isArray(generatedQuestions) && generatedQuestions.length > 0) {
       for (const q of generatedQuestions) {
@@ -317,9 +441,8 @@ YÊU CẦU: Trả về duy nhất một chuỗi JSON hợp lệ không có markd
       questions: generatedQuestions,
       flashcards: parsed.flashcards || [],
     });
-} catch (err) {
+  } catch (err) {
     console.error("Lỗi daily-quiz:", err.message);
-    // Báo lỗi thực tế về giao diện để người dùng biết AI đang gặp trục trặc
     res.status(500).json({
       success: false,
       error: `Không thể tạo bài tập lúc này: ${err.message}`
