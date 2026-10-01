@@ -1,7 +1,11 @@
 // src/admin/AdminDashboard.jsx
 import React, { useState, useEffect } from "react";
 
-const API_BASE = "http://localhost:5000/api";
+const API_BASE = import.meta.env.VITE_API_URL || (
+  window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1"
+    ? "https://tuna-project.onrender.com/api" // hoặc "http://localhost:5000/api" nếu bạn chạy backend ở máy
+    : "https://tuna-project.onrender.com/api"
+);
 
 export const AdminDashboard = ({ onNavigate }) => {
   const [loading, setLoading] = useState(false);

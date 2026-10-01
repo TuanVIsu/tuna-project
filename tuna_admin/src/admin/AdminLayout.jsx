@@ -12,8 +12,11 @@ import { ManageStaff } from "./ManageStaff";
 import logoImg from "../assets/logo.png";
 import "bootstrap-icons/font/bootstrap-icons.css";
 
-const API_BASE = "http://localhost:5000/api";
-
+const API_BASE = import.meta.env.VITE_API_URL || (
+  window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1"
+    ? "https://tuna-project.onrender.com/api" // hoặc "http://localhost:5000/api" nếu bạn chạy backend ở máy
+    : "https://tuna-project.onrender.com/api"
+);
 export const AdminLayout = ({ onExitAdmin }) => {
   const [currentAdmin, setCurrentAdmin] = useState(null);
   const [activeTab, setActiveTab] = useState("dashboard");

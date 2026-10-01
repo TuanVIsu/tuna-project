@@ -1,7 +1,9 @@
 // src/admin/AdminLogin.jsx
 import React, { useState, useEffect } from "react";
 import logoImg from "../assets/logo.png";
-const API_BASE = "http://localhost:5000/api";
+
+// Đổi đường dẫn trỏ thẳng đến máy chủ Render
+const API_BASE = import.meta.env.VITE_API_URL || "https://tuna-project.onrender.com/api";
 const GOOGLE_CLIENT_ID = import.meta.env.VITE_GOOGLE_CLIENT_ID;
 
 export const AdminLogin = ({ onLoginSuccess, onBackToApp }) => {
@@ -52,7 +54,7 @@ export const AdminLogin = ({ onLoginSuccess, onBackToApp }) => {
         setErrorMsg(data.message || "Tài khoản Google này chưa được cấp quyền quản trị trên hệ thống!");
       }
     } catch (err) {
-      setErrorMsg("Không thể kết nối đến máy chủ Backend (Cổng 5000)!");
+      setErrorMsg("Không thể kết nối đến máy chủ Backend!");
     } finally {
       setLoading(false);
     }
@@ -94,7 +96,7 @@ export const AdminLogin = ({ onLoginSuccess, onBackToApp }) => {
     }
   }, []);
 
-  // 2. Kích hoạt luồng "Yêu cầu cấp quyền" độc lập bằng Google OAuth2 Token Client
+  // 2. Kích hoạt luồng "Yêu cầu cấp quyền" bằng Google OAuth2 Token Client
   const handleTriggerGoogleAccessRequest = () => {
     setErrorMsg("");
     setSuccessMsg("");
@@ -111,7 +113,6 @@ export const AdminLogin = ({ onLoginSuccess, onBackToApp }) => {
         if (tokenResponse && tokenResponse.access_token) {
           setLoading(true);
           try {
-            // Lấy thông tin tài khoản trực tiếp từ Google API
             const userInfoRes = await fetch("https://www.googleapis.com/oauth2/v3/userinfo", {
               headers: { Authorization: `Bearer ${tokenResponse.access_token}` },
             });
@@ -124,7 +125,6 @@ export const AdminLogin = ({ onLoginSuccess, onBackToApp }) => {
                 avatar: userInfo.picture || "",
                 googleId: userInfo.sub,
               });
-              // Mở modal nhập thông tin xin quyền
               setShowPermissionModal(true);
             } else {
               setErrorMsg("Không lấy được thông tin từ tài khoản Google đã chọn.");
@@ -203,7 +203,7 @@ export const AdminLogin = ({ onLoginSuccess, onBackToApp }) => {
     }
   };
 
-  // Gửi yêu cầu quên mật khẩu đến Super Admin
+  // Gửi yêu cầu quên mật khẩu
   const handleSendForgotPasswordRequest = async (e) => {
     e.preventDefault();
     if (!forgotEmail) return;
@@ -274,17 +274,17 @@ export const AdminLogin = ({ onLoginSuccess, onBackToApp }) => {
           />
 
           <div className="d-flex flex-column align-items-center w-100 pt-2 position-relative z-1">
-<img
-  src={logoImg}
-  alt="Logo"
-  className="rounded-circle mb-3 shadow-sm bg-white p-1"
-  style={{
-    width: "64px",
-    height: "64px",
-    objectFit: "contain",
-    border: "3px solid #dbeafe",
-  }}
-/>
+            <img
+              src={logoImg}
+              alt="Logo"
+              className="rounded-circle mb-3 shadow-sm bg-white p-1"
+              style={{
+                width: "64px",
+                height: "64px",
+                objectFit: "contain",
+                border: "3px solid #dbeafe",
+              }}
+            />
             <h4 className="fw-bold text-white mb-2 d-flex align-items-center justify-content-center gap-1.5" style={{ fontSize: "21px", letterSpacing: "0.5px" }}>
               TUNA Portal <span style={{ color: "#60a5fa", fontSize: "22px", lineHeight: "0" }}>•</span>
             </h4>
@@ -471,12 +471,12 @@ export const AdminLogin = ({ onLoginSuccess, onBackToApp }) => {
               <hr className="flex-grow-1 my-0 opacity-20" />
             </div>
 
-            {/* Nút Đăng nhập Google tiêu chuẩn */}
+            {/* Nút Đăng nhập Google */}
             <div className="d-flex justify-content-center mb-3">
               <div id="googleCustomBtn"></div>
             </div>
 
-            {/* Bấm link xin cấp quyền -> Mở popup chọn Google Account độc lập */}
+            {/* Yêu cầu cấp quyền */}
             <div className="text-center">
               <p className="text-muted mb-1" style={{ fontSize: "11.5px" }}>
                 Chưa có tài khoản?{" "}
@@ -500,7 +500,7 @@ export const AdminLogin = ({ onLoginSuccess, onBackToApp }) => {
         </div>
       </div>
 
-      {/* ================= MODAL 1: ĐIỀN THÔNG TIN CẤP QUYỀN ================= */}
+      {/* Modal 1: Cấp quyền Google */}
       {showPermissionModal && googleUser && (
         <div
           className="modal show d-block p-3"
@@ -644,7 +644,7 @@ export const AdminLogin = ({ onLoginSuccess, onBackToApp }) => {
         </div>
       )}
 
-      {/* ================= MODAL 2: KHÔI PHỤC MẬT KHẨU QUA SUPER ADMIN ================= */}
+      {/* Modal 2: Quên mật khẩu */}
       {showForgotModal && (
         <div
           className="modal show d-block p-3"
