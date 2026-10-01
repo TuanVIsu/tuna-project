@@ -20,11 +20,19 @@ const allowedOrigins = [
   'http://127.0.0.1:3000',
 ];
 
+// Hàm kiểm tra nguồn gốc truy cập hợp lệ
+const isOriginAllowed = (origin) => {
+  if (!origin) return true; // Cho phép native app, curl, server-to-server
+  if (allowedOrigins.includes(origin)) return true;
+  if (origin.endsWith('.zdn.vn') || origin.endsWith('.zalo.me')) return true;
+  return false;
+};
+
 // 1. Socket.IO với CORS Whitelist
 const io = new Server(server, {
   cors: {
     origin: (origin, callback) => {
-      if (!origin || allowedOrigins.includes(origin)) {
+      if (isOriginAllowed(origin)) {
         callback(null, true);
       } else {
         callback(new Error('Blocked by CORS for Socket.IO'));
@@ -40,7 +48,7 @@ app.set('io', io);
 // 2. Cấu hình CORS an toàn cho Express
 const corsOptions = {
   origin: function (origin, callback) {
-    if (!origin || allowedOrigins.includes(origin)) {
+    if (isOriginAllowed(origin)) {
       callback(null, true);
     } else {
       callback(new Error('Blocked by CORS'));
@@ -59,6 +67,11 @@ app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 // Health check route cho Render
 app.get('/', (req, res) => {
   res.json({ success: true, message: '🚀 TUNA Backend is running smoothly on Render!' });
+});
+
+// Route xác thực quyền sở hữu domain của Zalo Developers
+app.get('/zalo_verifierP-IV4eNt3abC-gXHi-qJRsJ-jbY8Y6m1E34s.html', (req, res) => {
+  res.send('zalo-platform-site-verification: P-IV4eNt3abC-gXHi-qJRsJ-jbY8Y6m1E34s.html');
 });
 
 // Tạo và phục vụ thư mục uploads tĩnh
