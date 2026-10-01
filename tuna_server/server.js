@@ -7,7 +7,6 @@ const fs = require('fs');
 const http = require('http');
 const { Server } = require('socket.io');
 
-// Khởi tạo app và server trước khi dùng
 const app = express();
 const server = http.createServer(app);
 
@@ -20,10 +19,9 @@ const io = new Server(server, {
   },
 });
 
-// Chia sẻ instance io cho toàn bộ Express router
 app.set('io', io);
 
-// 2. Cấu hình CORS chi tiết cho Express
+// 2. Cấu hình CORS an toàn tương thích Express v5
 const corsOptions = {
   origin: '*',
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
@@ -32,7 +30,6 @@ const corsOptions = {
 };
 
 app.use(cors(corsOptions));
-app.options('*', cors(corsOptions));
 
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ extended: true, limit: '50mb' }));
