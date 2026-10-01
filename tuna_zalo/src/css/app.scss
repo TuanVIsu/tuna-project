@@ -1,11 +1,42 @@
-@import 'bootstrap/dist/css/bootstrap.min.css'; 
+@import 'bootstrap/dist/css/bootstrap.min.css';
+
+:root {
+  /* Biến safe area chuẩn hỗ trợ cả iOS mới (env) và iOS cũ (constant) */
+  --sat: env(safe-area-inset-top, 0px);
+  --sab: env(safe-area-inset-bottom, 0px);
+  --sal: env(safe-area-inset-left, 0px);
+  --sar: env(safe-area-inset-right, 0px);
+
+  /* Chiều cao chuẩn thanh tiêu đề */
+  --header-nav-height: 48px;
+  --bottom-bar-height: 60px;
+}
+
+/* Áp dụng chống tràn và phủ toàn diện màn hình */
+html, body {
+  margin: 0;
+  padding: 0;
+  width: 100%;
+  min-height: 100%;
+  -webkit-font-smoothing: antialiased;
+  -webkit-tap-highlight-color: transparent;
+  background-color: #f8fafc;
+}
+
+#app {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
 
 /* Xóa padding cố định để không ép Header thụt lề */
 .page {
   padding: 0;
+  /* Chừa khoảng trống bên dưới bằng chiều cao BottomBar + thanh vuốt iOS */
+  padding-bottom: calc(var(--bottom-bar-height) + var(--sab) + 12px);
 }
 
-/* Ẩn thanh cuộn */
+/* Ẩn thanh cuộn trên mọi nền tảng */
 ::-webkit-scrollbar {
   display: none;
   width: 0px;
@@ -13,6 +44,18 @@
 * {
   -ms-overflow-style: none;
   scrollbar-width: none;
+}
+
+/* Lớp đệm tai thỏ / Dynamic Island cho Header */
+.safe-top-spacer {
+  height: var(--sat);
+  min-height: 20px; /* Fallback an toàn cho Android/máy không có tai thỏ */
+  width: 100%;
+}
+
+/* Lớp đệm thanh vuốt Home đáy cho BottomBar */
+.safe-bottom-padding {
+  padding-bottom: calc(var(--sab) + 6px) !important;
 }
 
 /* Hiệu ứng chuyển slide mượt mà */
@@ -29,4 +72,28 @@
 
 .animate-slide-change {
   animation: slideFadeIn 0.4s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+
+/* Thêm vào app.scss */
+:root {
+  --sat: env(safe-area-inset-top, 44px);
+  --sab: env(safe-area-inset-bottom, 24px);
+  --sal: env(safe-area-inset-left, 0px);
+  --sar: env(safe-area-inset-right, 0px);
+
+  --header-nav-height: 52px;
+  --bottom-bar-height: 64px;
+}
+
+/* Khoảng đệm đỉnh an toàn né Dynamic Island / Tai thỏ của iPhone */
+.safe-top-spacer {
+  width: 100%;
+  height: max(var(--sat), 44px); /* Luôn bảo đảm tối thiểu 44px trên iOS */
+}
+
+/* Giữ khung ứng dụng luôn chiếm trọn 100% bề ngang */
+body, #app, .page {
+  width: 100% !important;
+  max-width: 100% !important;
+  box-sizing: border-box;
 }

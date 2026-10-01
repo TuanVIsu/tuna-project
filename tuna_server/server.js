@@ -83,6 +83,15 @@ app.get('/', (req, res) => {
 </html>`);
 });
 
+// ROUTE HEALTH CHECK CHỐNG NGỦ CHO RENDER
+app.get('/health', (req, res) => {
+  res.status(200).json({
+    status: 'ok',
+    uptime: process.uptime(),
+    timestamp: new Date().toISOString(),
+  });
+});
+
 // Route xác thực file tĩnh dự phòng cho Zalo
 app.get('/zalo_verifierP-IV4eNt3abC-gXHi-qJRsJ-jbY8Y6m1E34s.html', (req, res) => {
   res.setHeader('Content-Type', 'text/html; charset=utf-8');
@@ -93,8 +102,6 @@ app.get('/zalo_verifierP-IV4eNt3abC-gXHi-qJRsJ-jbY8Y6m1E34s.html', (req, res) =>
 app.post('/api/webhook/zalo', (req, res) => {
   const eventData = req.body;
   console.log('📬 Nhận sự kiện Webhook từ Zalo:', JSON.stringify(eventData, null, 2));
-  
-  // Trả về HTTP 200 để xác nhận Webhook URL hoạt động tốt
   res.status(200).json({ success: true, message: 'Webhook received' });
 });
 

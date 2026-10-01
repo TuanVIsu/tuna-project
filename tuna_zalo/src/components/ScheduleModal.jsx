@@ -227,7 +227,8 @@ export const ScheduleModal = ({ isOpen, onClose }) => {
       {/* 1. Header Bar: Căn chỉnh đối xứng, hạ đệm chuẩn né tai thỏ & phím Zalo */}
       <div className="bg-gradient-to-r from-blue-700 via-blue-600 to-indigo-700 text-white sticky-top shadow-xs select-none">
         {/* Khoảng đệm né vạch giờ & pin */}
-        <div className="w-full h-10" />
+        {/* Khoảng đệm tự động theo chuẩn Dynamic Island và tai thỏ */}
+<div style={{ height: "max(var(--sat, 0px), 38px)", width: "100%" }} />
 
         {/* Hàng tiêu đề chính */}
         <div className="px-4 pb-3 pt-1 flex items-center justify-between gap-3">
@@ -251,7 +252,7 @@ export const ScheduleModal = ({ isOpen, onClose }) => {
           </div>
 
           {/* Khoảng trống bên phải rộng 90px để nhường chỗ hoàn toàn cho cụm nút Zalo */}
-          <div className="w-[90px] shrink-0" />
+          <div className="w-[105px] shrink-0 pointer-events-none" />
         </div>
       </div>
 

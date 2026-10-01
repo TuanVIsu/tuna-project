@@ -17,6 +17,13 @@ export const AcademicSurveyModal = ({ isOpen, onSave, onDismiss }) => {
   const [dailyPace, setDailyPace] = useState(15);
   const [reminderTime, setReminderTime] = useState("20:00");
 
+  // Toast thay alert()
+  const [toastMessage, setToastMessage] = useState(null);
+  const showToast = (message, type = "success") => {
+    setToastMessage({ message, type });
+    setTimeout(() => setToastMessage(null), 3200);
+  };
+
   const majors = ["Hệ Thống Thông Tin", "Công Nghệ Thông Tin", "Kỹ Thuật Phần Mềm", "An Ninh Mạng"];
 
   const fetchSubjectsFromDB = useCallback(async (selectedMajor, selectedYear, selectedSem) => {
@@ -126,6 +133,7 @@ export const AcademicSurveyModal = ({ isOpen, onSave, onDismiss }) => {
     if (!trimmed || trimmed === "undefined") return;
     setSubjectLevels((prev) => ({ ...prev, [trimmed]: "medium" }));
     setCustomSubjectInput("");
+    showToast(`Đã thêm môn "${trimmed}" vào danh sách!`);
   };
 
   const handleConfirm = () => {
@@ -134,7 +142,7 @@ export const AcademicSurveyModal = ({ isOpen, onSave, onDismiss }) => {
     );
 
     if (selectedSubs.length === 0) {
-      alert("Vui lòng chọn ít nhất 1 môn học hợp lệ để tạo lộ trình!");
+      showToast("Vui lòng chọn ít nhất 1 môn học hợp lệ để tạo lộ trình!", "error");
       return;
     }
 
@@ -157,7 +165,10 @@ export const AcademicSurveyModal = ({ isOpen, onSave, onDismiss }) => {
     };
 
     localStorage.setItem("user_academic_profile", JSON.stringify(studyPlan));
-    if (onSave) onSave(studyPlan);
+    showToast("Đã lưu kế hoạch và lộ trình học tập cá nhân!");
+    if (onSave) {
+      setTimeout(() => onSave(studyPlan), 600);
+    }
   };
 
   return (
@@ -165,12 +176,37 @@ export const AcademicSurveyModal = ({ isOpen, onSave, onDismiss }) => {
       className="position-absolute top-0 start-0 w-100 h-100 bg-[#F8FAFC] d-flex flex-column"
       style={{ zIndex: 1200, overflowY: "auto", overflowX: "hidden" }}
     >
-      {/* 1. Header Bar: Đồng bộ 100% với ScheduleModal */}
-      <div className="bg-gradient-to-r from-blue-700 via-blue-600 to-indigo-700 text-white sticky-top shadow-xs select-none flex-shrink-0">
-        {/* Khoảng đệm né vạch giờ & pin */}
-        <div className="w-full h-10" />
+      {/* TOAST THÔNG BÁO HIỆN ĐẠI */}
+      {toastMessage && (
+        <div 
+          className="fixed top-24 left-3 right-3 z-50 flex items-center justify-between p-3.5 rounded-2xl shadow-xl border animate-in slide-in-from-top duration-300 backdrop-blur-md"
+          style={{
+            backgroundColor: toastMessage.type === "error" ? "rgba(239, 68, 68, 0.95)" : "rgba(16, 185, 129, 0.95)",
+            color: "white",
+            borderColor: toastMessage.type === "error" ? "#f87171" : "#34d399",
+          }}
+        >
+          <div className="flex items-center gap-2.5 min-w-0 flex-1">
+            <span className="w-7 h-7 rounded-xl bg-white/20 flex items-center justify-center text-sm shrink-0">
+              <i className={`bi ${toastMessage.type === "error" ? "bi-exclamation-triangle-fill" : "bi-check2-circle"} text-base`}></i>
+            </span>
+            <span className="text-xs font-black truncate leading-snug">
+              {toastMessage.message}
+            </span>
+          </div>
+          <button
+            onClick={() => setToastMessage(null)}
+            className="w-6 h-6 rounded-full bg-white/20 text-white flex items-center justify-center border-0 cursor-pointer shrink-0 ml-2"
+          >
+            ✕
+          </button>
+        </div>
+      )}
 
-        {/* Hàng tiêu đề chính */}
+      {/* 1. Header Bar: Đồng bộ 100% chuẩn né tai thỏ */}
+      <div className="bg-[#0045ce] text-white sticky-top shadow-xs select-none flex-shrink-0">
+        <div style={{ height: "max(var(--sat, 0px), 38px)", width: "100%" }} />
+
         <div className="px-4 pb-3 pt-1 flex items-center justify-between gap-3">
           <div className="flex items-center gap-3 min-w-0 flex-1">
             <button
@@ -190,13 +226,11 @@ export const AcademicSurveyModal = ({ isOpen, onSave, onDismiss }) => {
             </div>
           </div>
 
-          {/* Khoảng trống bên phải rộng 90px để nhường chỗ hoàn toàn cho cụm nút Zalo */}
-          <div className="w-[90px] shrink-0" />
+          <div className="w-[105px] shrink-0 pointer-events-none" />
         </div>
       </div>
 
       <div className="p-3.5 space-y-4 flex-1 pb-20 max-w-lg mx-auto w-full">
-        {/* Thanh công cụ xác nhận trên đầu nội dung */}
         <div className="flex items-center justify-between px-1">
           <span className="text-xs font-bold text-slate-500">Thiết lập lộ trình cá nhân</span>
           <button
@@ -211,7 +245,7 @@ export const AcademicSurveyModal = ({ isOpen, onSave, onDismiss }) => {
         {/* Khối 1: Ngành */}
         <div className="bg-white rounded-3xl p-3.5 border border-slate-200/80 shadow-xs space-y-2">
           <label className="font-extrabold text-slate-900 text-xs flex items-center gap-1.5 m-0">
-            <span className="w-5 h-5 rounded-full bg-blue-100 text-blue-700 flex items-center justify-center text-[10.5px] font-black">1</span>
+            <span className="w-5 h-5 rounded-full bg-blue-100 text-[#0045ce] flex items-center justify-center text-[10.5px] font-black">1</span>
             Chuyên ngành đào tạo:
           </label>
           <div className="grid grid-cols-2 gap-2 pt-1">
@@ -225,7 +259,7 @@ export const AcademicSurveyModal = ({ isOpen, onSave, onDismiss }) => {
                 }}
                 className={`p-2.5 rounded-2xl border text-left font-bold transition text-[11px] ${
                   major === item
-                    ? "bg-blue-600 text-white border-blue-600 shadow-xs"
+                    ? "bg-[#0045ce] text-white border-[#0045ce] shadow-xs"
                     : "bg-slate-50 text-slate-700 border-slate-200 hover:bg-slate-100"
                 }`}
               >
@@ -238,7 +272,7 @@ export const AcademicSurveyModal = ({ isOpen, onSave, onDismiss }) => {
         {/* Khối 2: Năm & Kỳ */}
         <div className="bg-white rounded-3xl p-3.5 border border-slate-200/80 shadow-xs space-y-2">
           <label className="font-extrabold text-slate-900 text-xs flex items-center gap-1.5 m-0">
-            <span className="w-5 h-5 rounded-full bg-blue-100 text-blue-700 flex items-center justify-center text-[10.5px] font-black">2</span>
+            <span className="w-5 h-5 rounded-full bg-blue-100 text-[#0045ce] flex items-center justify-center text-[10.5px] font-black">2</span>
             Thời điểm học hiện tại:
           </label>
           <div className="grid grid-cols-2 gap-2 pt-1">
@@ -282,7 +316,7 @@ export const AcademicSurveyModal = ({ isOpen, onSave, onDismiss }) => {
         <div className="bg-white rounded-3xl p-3.5 border border-slate-200/80 shadow-xs space-y-2.5">
           <div className="flex items-center justify-between">
             <label className="font-extrabold text-slate-900 text-xs flex items-center gap-1.5 m-0">
-              <span className="w-5 h-5 rounded-full bg-blue-100 text-blue-700 flex items-center justify-center text-[10.5px] font-black">3</span>
+              <span className="w-5 h-5 rounded-full bg-blue-100 text-[#0045ce] flex items-center justify-center text-[10.5px] font-black">3</span>
               Môn học theo khung ({Object.keys(subjectLevels).filter((k) => k !== "undefined").length} môn đã chọn):
             </label>
             <span className="text-[10px] text-slate-400 font-bold">Lấy từ PostgreSQL</span>
@@ -290,7 +324,7 @@ export const AcademicSurveyModal = ({ isOpen, onSave, onDismiss }) => {
 
           {isLoadingSubjects ? (
             <div className="py-6 text-center text-xs font-bold text-slate-400">
-              <span className="spinner-border spinner-border-sm text-blue-600 me-2"></span>
+              <span className="spinner-border spinner-border-sm text-[#0045ce] me-2"></span>
               Đang tải danh sách môn từ cơ sở dữ liệu...
             </div>
           ) : (
@@ -315,7 +349,7 @@ export const AcademicSurveyModal = ({ isOpen, onSave, onDismiss }) => {
                         <span className="font-bold text-xs text-slate-800">{subName}</span>
                         <span className="text-[10px] text-slate-500 ml-2 font-semibold">({sub.credits} tín chỉ)</span>
                       </div>
-                      <i className={`bi ${isChecked ? "bi-check-circle-fill text-blue-600" : "bi-circle text-slate-300"}`}></i>
+                      <i className={`bi ${isChecked ? "bi-check-circle-fill text-[#0045ce]" : "bi-circle text-slate-300"}`}></i>
                     </div>
 
                     {isChecked && (
@@ -361,11 +395,11 @@ export const AcademicSurveyModal = ({ isOpen, onSave, onDismiss }) => {
           </div>
         </div>
 
-        {/* Khối 4: Điểm GPA hiện tại & Mục tiêu */}
+        {/* Khối 4: Điểm GPA */}
         <div className="bg-white rounded-3xl p-3.5 border border-slate-200/80 shadow-xs space-y-3">
           <div className="flex items-center justify-between">
             <label className="font-extrabold text-slate-900 text-xs flex items-center gap-1.5 m-0">
-              <span className="w-5 h-5 rounded-full bg-blue-100 text-blue-700 flex items-center justify-center text-[10.5px] font-black">4</span>
+              <span className="w-5 h-5 rounded-full bg-blue-100 text-[#0045ce] flex items-center justify-center text-[10.5px] font-black">4</span>
               Điểm GPA hiện tại & Mục tiêu:
             </label>
             <span className="text-[10px] text-slate-400 font-bold">Thang điểm 4.0</span>
@@ -384,7 +418,7 @@ export const AcademicSurveyModal = ({ isOpen, onSave, onDismiss }) => {
                 max="4.0"
                 value={currentGpa}
                 onChange={(e) => setCurrentGpa(e.target.value)}
-                className="w-16 p-1.5 bg-white rounded-xl border border-blue-300 font-black text-center text-sm text-blue-700 focus:outline-none shadow-2xs"
+                className="w-16 p-1.5 bg-white rounded-xl border border-blue-300 font-black text-center text-sm text-[#0045ce] focus:outline-none shadow-2xs"
                 placeholder="3.0"
               />
               <span className="text-xs font-black text-slate-500">/ 4.0</span>
@@ -403,7 +437,7 @@ export const AcademicSurveyModal = ({ isOpen, onSave, onDismiss }) => {
                 onClick={() => setTargetGoal(g.id)}
                 className={`p-2.5 rounded-2xl border text-center transition ${
                   targetGoal === g.id
-                    ? "bg-blue-600 text-white border-blue-600 shadow-sm"
+                    ? "bg-[#0045ce] text-white border-[#0045ce] shadow-sm"
                     : "bg-slate-50 text-slate-700 border-slate-200 hover:bg-slate-100"
                 }`}
               >
@@ -414,10 +448,10 @@ export const AcademicSurveyModal = ({ isOpen, onSave, onDismiss }) => {
           </div>
         </div>
 
-        {/* Khối 5: Kế hoạch tự học mỗi ngày */}
+        {/* Khối 5: Kế hoạch tự học */}
         <div className="bg-white rounded-3xl p-3.5 border border-slate-200/80 shadow-xs space-y-2">
           <label className="font-extrabold text-slate-900 text-xs flex items-center gap-1.5 m-0">
-            <span className="w-5 h-5 rounded-full bg-blue-100 text-blue-700 flex items-center justify-center text-[10.5px] font-black">5</span>
+            <span className="w-5 h-5 rounded-full bg-blue-100 text-[#0045ce] flex items-center justify-center text-[10.5px] font-black">5</span>
             Kế hoạch tự học mỗi ngày:
           </label>
           <div className="grid grid-cols-2 gap-2 pt-1">
@@ -431,7 +465,7 @@ export const AcademicSurveyModal = ({ isOpen, onSave, onDismiss }) => {
                     onClick={() => setDailyPace(pace)}
                     className={`flex-1 py-2 rounded-xl border font-black text-xs transition ${
                       dailyPace === pace
-                        ? "bg-blue-600 text-white border-blue-600 shadow-xs"
+                        ? "bg-[#0045ce] text-white border-[#0045ce] shadow-xs"
                         : "bg-slate-50 text-slate-700 border-slate-200"
                     }`}
                   >

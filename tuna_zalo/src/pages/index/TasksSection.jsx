@@ -42,6 +42,15 @@ export const TasksSection = ({ onNavigate }) => {
   const [isGeneratingDaily, setIsGeneratingDaily] = useState(false);
   const [currentPage, setCurrentPage] = useState(1);
 
+  // Toast Notification hiện đại thay cho alert()
+  const [toastMessage, setToastMessage] = useState(null);
+  const showToast = (message, type = "success") => {
+    setToastMessage({ message, type });
+    setTimeout(() => {
+      setToastMessage(null);
+    }, 3200);
+  };
+
   // Lấy ID người dùng đồng bộ
   const myUserId = useMemo(() => {
     return localStorage.getItem("tuna_user_id") || "B2300001";
@@ -68,7 +77,6 @@ export const TasksSection = ({ onNavigate }) => {
       const p = localStorage.getItem("user_academic_profile");
       if (!p || p === "undefined") return null;
       const parsed = JSON.parse(p);
-      // Lọc bỏ sạch sẽ các phần tử undefined
       if (Array.isArray(parsed.subjects)) {
         parsed.subjects = parsed.subjects.filter((s) => s && s !== "undefined" && s.trim() !== "");
       }
@@ -337,7 +345,7 @@ export const TasksSection = ({ onNavigate }) => {
     } catch (e) {}
 
     saveTaskToDB(updated).catch(() => {});
-    alert("✅ Đã lưu bài tập vào danh sách ôn tập!");
+    showToast("Đã lưu bài tập vào danh sách ôn tập!");
   };
 
   const handleDeleteSaved = async (e, taskId) => {
@@ -359,6 +367,7 @@ export const TasksSection = ({ onNavigate }) => {
     } catch (e) {}
 
     saveTaskToDB(updated).catch(() => {});
+    showToast("Đã bỏ lưu bài tập!");
 
     if (paginatedSavedTasks.length === 1 && currentPage > 1) {
       setCurrentPage((prev) => prev - 1);
@@ -391,7 +400,6 @@ export const TasksSection = ({ onNavigate }) => {
     if (!activeTaskView) return;
 
     if (activeTaskView.isDaily || activeTaskView.is_daily) {
-      // 1. Cập nhật giao diện lập tức (Optimistic)
       const bonusXp = 20;
       const nextXp = userXp + bonusXp;
       setUserXp(nextXp);
@@ -404,7 +412,6 @@ export const TasksSection = ({ onNavigate }) => {
       setTasks((prev) => prev.map((t) => (t.id === completedTask.id ? completedTask : t)));
       saveTaskToDB(completedTask).catch(() => {});
 
-      // 2. GỌI CHÍNH XÁC ROUTE POST /api/streak/check-in ĐỂ LƯU VÀO CSDL
       try {
         const res = await fetch(`${API_BASE}/streak/check-in`, {
           method: "POST",
@@ -415,15 +422,13 @@ export const TasksSection = ({ onNavigate }) => {
           }),
         });
         const data = await res.json();
-        if (data.success) {
-          if (data.current_streak) {
-            localStorage.setItem("user_current_streak", String(data.current_streak));
-          }
-          alert(`🎉 Chúc mừng! Bạn nhận được +${bonusXp} XP và đã giữ vững chuỗi Streak hôm nay!`);
+        if (data.success && data.current_streak) {
+          localStorage.setItem("user_current_streak", String(data.current_streak));
         }
       } catch (err) {
         console.error("Lỗi lưu streak check-in:", err);
       }
+      showToast(`Chúc mừng! Bạn nhận được +${bonusXp} XP và giữ vững chuỗi Streak hôm nay!`, "success");
     }
 
     setActiveTaskView(null);
@@ -445,15 +450,19 @@ export const TasksSection = ({ onNavigate }) => {
     }
   };
 
-  // ================= MÀN HÌNH LÀM BÀI =================
+  // ================= MÀN HÌNH LÀM BÀI TOÀN MÀN HÌNH (SAFE AREA CHUẨN IOS) =================
   if (activeTaskView) {
     const isQuiz = activeTaskView.featureId === "quiz";
     const isFlashcard = activeTaskView.featureId === "flashcard";
 
     return (
-      <div className="position-absolute top-0 start-0 w-100 h-100 bg-[#F8FAFC] d-flex flex-column z-50 overflow-y-auto">
-        <div className="bg-gradient-to-r from-blue-700 to-indigo-700 text-white px-3.5 py-3 d-flex align-items-center justify-content-between sticky-top shadow-sm flex-shrink-0">
-          <div className="d-flex align-items-center gap-2 overflow-hidden">
+      <div className="position-fixed top-0 start-0 w-100 h-100 bg-[#F8FAFC] d-flex flex-column z-50 overflow-y-auto">
+        {/* Header né Dynamic Island / Tai thỏ chuẩn */}
+        <div 
+          className="bg-[#0045ce] text-white px-3.5 pb-3 d-flex align-items-center justify-between sticky-top shadow-sm flex-shrink-0"
+          style={{ paddingTop: "max(var(--sat, 0px), 38px)" }}
+        >
+          <div className="d-flex align-items-center gap-2 overflow-hidden flex-1 min-w-0 pr-2">
             <button
               onClick={() => setActiveTaskView(null)}
               className="w-8 h-8 rounded-full bg-white/20 flex items-center justify-center border-0 text-white active:scale-95 transition cursor-pointer shrink-0"
@@ -461,7 +470,7 @@ export const TasksSection = ({ onNavigate }) => {
               <i className="bi bi-arrow-left font-bold"></i>
             </button>
             <div className="truncate">
-              <h6 className="mb-0 font-black text-sm text-white truncate">
+              <h6 className="mb-0 font-black text-sm text-white truncate leading-tight">
                 {isQuiz ? "Luyện Đề Trắc Nghiệm" : "Bộ Thẻ Flashcard"}
               </h6>
               <span className="text-blue-100 text-[10.5px] truncate block">
@@ -470,11 +479,11 @@ export const TasksSection = ({ onNavigate }) => {
             </div>
           </div>
 
-          <div className="d-flex align-items-center gap-1.5">
+          <div className="d-flex align-items-center gap-1.5 shrink-0">
             {!activeTaskView.isSaved && !activeTaskView.is_saved ? (
               <button
                 onClick={handleSaveCurrentTask}
-                className="px-3 py-1.5 rounded-full bg-white text-blue-700 font-black text-xs border-0 shadow-sm active:scale-95 transition cursor-pointer flex items-center gap-1"
+                className="px-3 py-1.5 rounded-full bg-white text-[#0045ce] font-black text-xs border-0 shadow-sm active:scale-95 transition cursor-pointer flex items-center gap-1"
               >
                 <i className="bi bi-bookmark-plus"></i> Lưu bài
               </button>
@@ -494,14 +503,14 @@ export const TasksSection = ({ onNavigate }) => {
 
               {showRestartMenu && (
                 <div
-                  className="position-absolute end-0 top-100 mt-1 bg-white shadow-xl rounded-2xl p-1.5 border border-slate-200 z-50"
+                  className="position-absolute end-0 top-100 mt-1 bg-white shadow-xl rounded-2xl p-1.5 border border-slate-200 z-50 animate-in fade-in zoom-in-95 duration-100"
                   style={{ minWidth: 160 }}
                 >
                   <button
                     onClick={() => handleRestart("default")}
                     className="w-full text-left py-1.5 px-2.5 rounded-xl text-xs font-bold text-slate-700 hover:bg-slate-100 border-0 bg-transparent flex items-center gap-2 cursor-pointer"
                   >
-                    <i className="bi bi-arrow-counterclockwise text-blue-600"></i> Mặc định
+                    <i className="bi bi-arrow-counterclockwise text-[#0045ce]"></i> Mặc định
                   </button>
                   <button
                     onClick={() => handleRestart("shuffle")}
@@ -515,16 +524,19 @@ export const TasksSection = ({ onNavigate }) => {
           </div>
         </div>
 
-        <div className="p-3.5 space-y-3 pb-24 max-w-lg mx-auto w-full">
+        <div 
+          className="p-3.5 space-y-3 pb-24 max-w-lg mx-auto w-full"
+          style={{ paddingBottom: "calc(var(--sab, 0px) + 36px)" }}
+        >
           {isQuiz && (
             <>
               <div className="bg-white rounded-2xl p-3 border border-slate-200 shadow-xs flex items-center justify-between text-xs font-black text-slate-700">
-                <span>Tiến độ: <b className="text-blue-600">{answeredCount}/{currentQuestions.length}</b> câu</span>
-                <span className="text-blue-600">{Math.round((answeredCount / (currentQuestions.length || 1)) * 100)}%</span>
+                <span>Tiến độ: <b className="text-[#0045ce]">{answeredCount}/{currentQuestions.length}</b> câu</span>
+                <span className="text-[#0045ce]">{Math.round((answeredCount / (currentQuestions.length || 1)) * 100)}%</span>
               </div>
 
               {isAllAnswered && (
-                <div className="bg-gradient-to-r from-blue-600 via-indigo-600 to-indigo-700 text-white rounded-3xl p-4 text-center shadow-lg space-y-2.5">
+                <div className="bg-gradient-to-r from-[#0045ce] via-blue-700 to-indigo-700 text-white rounded-3xl p-4 text-center shadow-lg space-y-2.5">
                   <div>
                     <span className="text-[10px] font-black uppercase tracking-wider text-amber-300 block">
                       Đã hoàn thành bài làm
@@ -553,7 +565,7 @@ export const TasksSection = ({ onNavigate }) => {
                 return (
                   <div key={idx} className="bg-white rounded-3xl p-3.5 border border-slate-200 shadow-xs space-y-2.5">
                     <div className="flex items-start gap-2">
-                      <span className="px-2 py-0.5 rounded-lg bg-blue-50 text-blue-700 font-black text-[10.5px] shrink-0 mt-0.5">
+                      <span className="px-2 py-0.5 rounded-lg bg-blue-50 text-[#0045ce] font-black text-[10.5px] shrink-0 mt-0.5">
                         Câu {idx + 1}
                       </span>
                       <h4 className="text-xs font-black text-slate-900 m-0 leading-snug">
@@ -608,7 +620,7 @@ export const TasksSection = ({ onNavigate }) => {
               <div className="bg-white rounded-2xl p-3 border border-slate-200 shadow-xs flex items-center justify-between">
                 <div className="flex items-center gap-2">
                   <span className="text-xs font-black text-slate-700">
-                    Thẻ: <b className="text-blue-600">{activeCardIndex + 1}</b> / {currentCards.length}
+                    Thẻ: <b className="text-[#0045ce]">{activeCardIndex + 1}</b> / {currentCards.length}
                   </span>
                   <span className="w-1 h-1 rounded-full bg-slate-300"></span>
                   <span className="text-[11px] font-bold text-slate-400">
@@ -638,7 +650,8 @@ export const TasksSection = ({ onNavigate }) => {
                     style={{
                       backfaceVisibility: "hidden",
                       WebkitBackfaceVisibility: "hidden",
-                      background: "linear-gradient(135deg, #1D4ED8 0%, #2563EB 50%, #3B82F6 100%)",
+                      background: "linear-gradient(135deg, #0045ce 0%, #2563EB 100%)",
+                      boxShadow: "0 14px 28px -6px rgba(0, 69, 206, 0.35)",
                     }}
                   >
                     <div className="flex items-center justify-between relative z-10">
@@ -671,6 +684,7 @@ export const TasksSection = ({ onNavigate }) => {
                       WebkitBackfaceVisibility: "hidden",
                       transform: "rotateY(180deg)",
                       background: "linear-gradient(135deg, #047857 0%, #059669 50%, #10B981 100%)",
+                      boxShadow: "0 14px 28px -6px rgba(5, 150, 105, 0.35)",
                     }}
                   >
                     <div className="flex items-center justify-between relative z-10">
@@ -748,9 +762,37 @@ export const TasksSection = ({ onNavigate }) => {
 
   // ================= GIAO DIỆN CHÍNH =================
   return (
-    <div className="flex flex-col gap-3 pb-24 px-1">
+    <div className="flex flex-col gap-3 pb-24 px-1 w-full max-w-full relative">
+      {/* TOAST THÔNG BÁO HIỆN ĐẠI (TỰ BIẾN MẤT - KHÔNG CHẶN MÀN HÌNH) */}
+      {toastMessage && (
+        <div 
+          className="fixed top-24 left-3 right-3 z-50 flex items-center justify-between p-3.5 rounded-2xl shadow-xl border animate-in slide-in-from-top duration-300 backdrop-blur-md"
+          style={{
+            backgroundColor: toastMessage.type === "error" ? "rgba(239, 68, 68, 0.95)" : "rgba(16, 185, 129, 0.95)",
+            color: "white",
+            borderColor: toastMessage.type === "error" ? "#f87171" : "#34d399",
+          }}
+        >
+          <div className="flex items-center gap-2.5 min-w-0 flex-1">
+            <span className="w-7 h-7 rounded-xl bg-white/20 flex items-center justify-center text-sm shrink-0">
+              <i className={`bi ${toastMessage.type === "error" ? "bi-exclamation-triangle-fill" : "bi-check2-circle"} text-base`}></i>
+            </span>
+            <span className="text-xs font-black truncate leading-snug">
+              {toastMessage.message}
+            </span>
+          </div>
+
+          <button
+            onClick={() => setToastMessage(null)}
+            className="w-6 h-6 rounded-full bg-white/20 text-white flex items-center justify-center border-0 cursor-pointer shrink-0 ml-2"
+          >
+            ✕
+          </button>
+        </div>
+      )}
+
       {/* 1. Header Banner */}
-      <div className="bg-gradient-to-br from-blue-700 via-indigo-700 to-indigo-900 text-white rounded-3xl p-4 shadow-md flex items-center justify-between">
+      <div className="bg-gradient-to-br from-[#0045ce] via-blue-700 to-indigo-900 text-white rounded-3xl p-4 shadow-md flex items-center justify-between">
         <div>
           <span className="px-2.5 py-0.5 rounded-full bg-white/20 text-blue-100 text-[10px] font-black uppercase tracking-wide border border-white/20">
             Không gian rèn luyện
@@ -776,11 +818,11 @@ export const TasksSection = ({ onNavigate }) => {
         </div>
       </div>
 
-      {/* 2. KHỐI THỬ THÁCH NGÀY HÔM NAY (ĐÃ CÂN CHỈNH HEADER THOÁNG MẮT, KHÔNG CHÈN ÉP CHỮ) */}
+      {/* 2. KHỐI THỬ THÁCH NGÀY HÔM NAY */}
       <div className="bg-gradient-to-r from-blue-50 to-indigo-50 border border-blue-200/80 rounded-3xl p-3.5 space-y-2.5 shadow-2xs">
         <div className="flex items-center justify-between gap-2">
           <div className="flex items-center gap-1.5 min-w-0 flex-1">
-            <span className={`px-2 py-0.5 rounded-md text-white font-black text-[10px] uppercase shrink-0 ${isDailyDone ? "bg-emerald-600" : "bg-blue-600"}`}>
+            <span className={`px-2 py-0.5 rounded-md text-white font-black text-[10px] uppercase shrink-0 ${isDailyDone ? "bg-emerald-600" : "bg-[#0045ce]"}`}>
               {isDailyDone ? "ĐÃ HOÀN THÀNH" : "THỬ THÁCH HÔM NAY"}
             </span>
             <span className="text-xs font-black text-slate-800 truncate" title={todaySubject}>
@@ -812,7 +854,7 @@ export const TasksSection = ({ onNavigate }) => {
             {todayQuizTask && (
               <div className="bg-white rounded-2xl p-2.5 border border-blue-100 flex items-center justify-between gap-2 shadow-2xs">
                 <div className="truncate flex-1">
-                  <span className="text-[10px] text-blue-600 font-extrabold block">
+                  <span className="text-[10px] text-[#0045ce] font-extrabold block">
                     Đề trắc nghiệm ({todayQuizTask.resultData?.length || 4} câu)
                   </span>
                   <p className="text-xs font-black text-slate-900 m-0 truncate">
@@ -821,7 +863,7 @@ export const TasksSection = ({ onNavigate }) => {
                 </div>
                 <button
                   onClick={() => openStudy(todayQuizTask)}
-                  className="px-3.5 py-1.5 bg-blue-600 text-white rounded-xl text-xs font-black border-0 shadow-sm active:scale-95 transition cursor-pointer shrink-0 flex items-center gap-1"
+                  className="px-3.5 py-1.5 bg-[#0045ce] text-white rounded-xl text-xs font-black border-0 shadow-sm active:scale-95 transition cursor-pointer shrink-0 flex items-center gap-1"
                 >
                   Vào thi ngay <i className="bi bi-arrow-right-short text-base leading-none"></i>
                 </button>
@@ -849,7 +891,7 @@ export const TasksSection = ({ onNavigate }) => {
           </div>
         ) : isGeneratingDaily ? (
           <div className="py-3 bg-white rounded-2xl border border-blue-100 text-center text-xs font-bold text-slate-600 flex items-center justify-center gap-2 shadow-2xs">
-            <span className="spinner-border spinner-border-sm text-blue-600"></span>
+            <span className="spinner-border spinner-border-sm text-[#0045ce]"></span>
             <span>Đang nạp bài tập hôm nay cho môn {todaySubject}...</span>
           </div>
         ) : (
@@ -857,7 +899,7 @@ export const TasksSection = ({ onNavigate }) => {
             <span className="text-xs text-slate-500 font-medium truncate">Chưa có bài tập hôm nay.</span>
             <button
               onClick={() => generateDailyQuizAndFlash(todaySubject)}
-              className="px-3 py-1.5 bg-blue-600 text-white rounded-xl text-xs font-black border-0 active:scale-95 transition cursor-pointer shadow-xs flex items-center gap-1 shrink-0"
+              className="px-3 py-1.5 bg-[#0045ce] text-white rounded-xl text-xs font-black border-0 active:scale-95 transition cursor-pointer shadow-xs flex items-center gap-1 shrink-0"
             >
               <i className="bi bi-lightning-charge-fill text-amber-300"></i> Tạo ngay
             </button>
@@ -877,7 +919,7 @@ export const TasksSection = ({ onNavigate }) => {
             onClick={() => setActiveTab(tab.id)}
             className={`flex-1 py-1.5 rounded-xl text-xs font-black transition border-0 flex items-center justify-center gap-1.5 cursor-pointer ${
               activeTab === tab.id
-                ? "bg-blue-600 text-white shadow-xs"
+                ? "bg-[#0045ce] text-white shadow-xs"
                 : "bg-transparent text-slate-600 hover:text-slate-900"
             }`}
           >
@@ -886,13 +928,13 @@ export const TasksSection = ({ onNavigate }) => {
         ))}
       </div>
 
-      {/* 4. Chọn môn học theo lộ trình (LỌC SẠCH PHẦN TỬ UNDEFINED) */}
+      {/* 4. Chọn môn học theo lộ trình */}
       <div className="flex gap-1.5 overflow-x-auto pb-1 no-scrollbar">
         <button
           onClick={() => setSelectedSubject("all")}
           className={`px-3 py-1 rounded-full text-[11px] font-black border transition shrink-0 cursor-pointer ${
             selectedSubject === "all"
-              ? "bg-blue-700 text-white border-blue-700"
+              ? "bg-[#0045ce] text-white border-[#0045ce]"
               : "bg-white text-slate-600 border-slate-200"
           }`}
         >
@@ -906,7 +948,7 @@ export const TasksSection = ({ onNavigate }) => {
               onClick={() => setSelectedSubject(sub)}
               className={`px-3 py-1 rounded-full text-[11px] font-black border transition shrink-0 cursor-pointer ${
                 selectedSubject === sub
-                  ? "bg-blue-600 text-white border-blue-600 shadow-2xs"
+                  ? "bg-[#0045ce] text-white border-[#0045ce] shadow-2xs"
                   : "bg-white text-slate-600 border-slate-200"
               }`}
             >
@@ -919,7 +961,7 @@ export const TasksSection = ({ onNavigate }) => {
       <div className="space-y-2.5">
         <div className="flex items-center justify-between px-1">
           <h4 className="text-xs font-black text-slate-900 m-0 flex items-center gap-1.5">
-            <i className="bi bi-bookmark-check-fill text-blue-600"></i> Bài tập đã lưu ({allSavedTasks.length})
+            <i className="bi bi-bookmark-check-fill text-[#0045ce]"></i> Bài tập đã lưu ({allSavedTasks.length})
           </h4>
           <span className="text-[10.5px] text-slate-400 font-medium">
             Trang {currentPage} / {totalPages}
@@ -928,7 +970,7 @@ export const TasksSection = ({ onNavigate }) => {
 
         {allSavedTasks.length === 0 ? (
           <div className="bg-white rounded-3xl p-8 text-center border border-slate-200 shadow-2xs">
-            <div className="w-12 h-12 rounded-2xl bg-blue-50 text-blue-600 flex items-center justify-center text-xl mx-auto mb-2">
+            <div className="w-12 h-12 rounded-2xl bg-blue-50 text-[#0045ce] flex items-center justify-center text-xl mx-auto mb-2">
               <i className="bi bi-journal-bookmark"></i>
             </div>
             <h6 className="font-black text-slate-800 text-xs mb-1">Chưa có bài tập lưu trữ</h6>
@@ -950,7 +992,7 @@ export const TasksSection = ({ onNavigate }) => {
                     <div
                       className={`w-10 h-10 rounded-2xl flex items-center justify-center text-lg shrink-0 border ${
                         isQuiz
-                          ? "bg-blue-50 text-blue-600 border-blue-100"
+                          ? "bg-blue-50 text-[#0045ce] border-blue-100"
                           : "bg-emerald-50 text-emerald-600 border-emerald-100"
                       }`}
                     >
@@ -958,7 +1000,7 @@ export const TasksSection = ({ onNavigate }) => {
                     </div>
                     <div className="truncate flex-1">
                       <div className="flex items-center gap-1.5 mb-0.5">
-                        <span className={`px-2 py-0.2 rounded text-[9.5px] font-black uppercase ${isQuiz ? "bg-blue-100 text-blue-700" : "bg-emerald-100 text-emerald-700"}`}>
+                        <span className={`px-2 py-0.2 rounded text-[9.5px] font-black uppercase ${isQuiz ? "bg-blue-100 text-[#0045ce]" : "bg-emerald-100 text-emerald-700"}`}>
                           {isQuiz ? "Trắc nghiệm" : "Flashcard"}
                         </span>
                         <span className="text-[10px] text-slate-400 font-bold">
@@ -977,7 +1019,7 @@ export const TasksSection = ({ onNavigate }) => {
                   <div className="flex items-center gap-1.5 shrink-0" onClick={(e) => e.stopPropagation()}>
                     <button
                       onClick={() => openStudy(task)}
-                      className="px-3 py-1.5 bg-blue-600 text-white rounded-full text-[10.5px] font-black border-0 active:scale-95 transition cursor-pointer shadow-xs"
+                      className="px-3 py-1.5 bg-[#0045ce] text-white rounded-full text-[10.5px] font-black border-0 active:scale-95 transition cursor-pointer shadow-xs"
                     >
                       Luyện lại
                     </button>
@@ -1016,7 +1058,7 @@ export const TasksSection = ({ onNavigate }) => {
                         <button
                           className={`page-link rounded-2 border-0 shadow-2xs font-black text-xs px-3 ${
                             currentPage === pageNum
-                              ? "bg-blue-600 text-white"
+                              ? "bg-[#0045ce] text-white"
                               : "text-slate-700 hover:bg-slate-100"
                           }`}
                           onClick={() => setCurrentPage(pageNum)}

@@ -6,7 +6,7 @@ const API_BASE = "https://tuna-project.onrender.com/api";
 const ITEMS_PER_PAGE = 10;
 
 const SUB_CATEGORIES = {
-  lecture_slide: { label: "Slide bài giảng", badge: "bg-blue-50 text-blue-700 border-blue-200", icon: "bi-file-earmark-easel" },
+  lecture_slide: { label: "Slide bài giảng", badge: "bg-blue-50 text-[#0045ce] border-blue-200", icon: "bi-file-earmark-easel" },
   exam_prep: { label: "Đề thi & Trắc nghiệm", badge: "bg-purple-50 text-purple-700 border-purple-200", icon: "bi-patch-question" },
   textbook: { label: "Giáo trình chính", badge: "bg-emerald-50 text-emerald-700 border-emerald-200", icon: "bi-journal-bookmark" },
   assignment_project: { label: "Bài tập / Đồ án", badge: "bg-amber-50 text-amber-800 border-amber-200", icon: "bi-code-square" },
@@ -44,6 +44,13 @@ export const LibraryModal = ({ isOpen, onClose, userMajor = "Hệ Thống Thông
   const [selectedAnswers, setSelectedAnswers] = useState({});
 
   const [profile, setProfile] = useState({ year: 4, semester: 1, major: userMajor });
+
+  // Toast thay alert()
+  const [toastMessage, setToastMessage] = useState(null);
+  const showToast = (message, type = "success") => {
+    setToastMessage({ message, type });
+    setTimeout(() => setToastMessage(null), 3200);
+  };
 
   useEffect(() => {
     if (!isOpen) return;
@@ -219,10 +226,10 @@ export const LibraryModal = ({ isOpen, onClose, userMajor = "Hệ Thống Thông
       if (d.success && d.data) {
         setActiveQuizExam(d.data);
       } else {
-        alert("Không tải được chi tiết bộ câu hỏi!");
+        showToast("Không tải được chi tiết bộ câu hỏi!", "error");
       }
     } catch (err) {
-      alert("Lỗi kết nối máy chủ");
+      showToast("Lỗi kết nối máy chủ!", "error");
     }
   };
 
@@ -243,14 +250,16 @@ export const LibraryModal = ({ isOpen, onClose, userMajor = "Hệ Thống Thông
       };
 
       await saveDocumentToDB(newDoc);
-      alert(`✅ Đã tải "${doc.title}" về không gian Tài liệu cá nhân!`);
+      showToast(`Đã lưu "${doc.title}" vào Không gian Tài liệu cá nhân!`);
 
       if (onNavigateToDocs) {
-        onClose();
-        onNavigateToDocs();
+        setTimeout(() => {
+          onClose();
+          onNavigateToDocs();
+        }, 1200);
       }
     } catch (err) {
-      alert("Lỗi khi tải tài liệu: " + err.message);
+      showToast("Lỗi khi tải tài liệu: " + err.message, "error");
     } finally {
       setDownloadingId(null);
     }
@@ -261,12 +270,37 @@ export const LibraryModal = ({ isOpen, onClose, userMajor = "Hệ Thống Thông
       className="position-absolute top-0 start-0 w-100 h-100 bg-[#F8FAFC] d-flex flex-column"
       style={{ zIndex: 1050, overflowY: "auto", overflowX: "hidden" }}
     >
-      {/* 1. Header Bar: Đồng bộ 100% với ScheduleModal */}
-      <div className="bg-gradient-to-r from-blue-700 via-blue-600 to-indigo-700 text-white sticky-top shadow-xs select-none">
-        {/* Khoảng đệm né vạch giờ & pin */}
-        <div className="w-full h-10" />
+      {/* TOAST THÔNG BÁO HIỆN ĐẠI */}
+      {toastMessage && (
+        <div 
+          className="fixed top-24 left-3 right-3 z-50 flex items-center justify-between p-3.5 rounded-2xl shadow-xl border animate-in slide-in-from-top duration-300 backdrop-blur-md"
+          style={{
+            backgroundColor: toastMessage.type === "error" ? "rgba(239, 68, 68, 0.95)" : "rgba(16, 185, 129, 0.95)",
+            color: "white",
+            borderColor: toastMessage.type === "error" ? "#f87171" : "#34d399",
+          }}
+        >
+          <div className="flex items-center gap-2.5 min-w-0 flex-1">
+            <span className="w-7 h-7 rounded-xl bg-white/20 flex items-center justify-center text-sm shrink-0">
+              <i className={`bi ${toastMessage.type === "error" ? "bi-exclamation-triangle-fill" : "bi-check2-circle"} text-base`}></i>
+            </span>
+            <span className="text-xs font-black truncate leading-snug">
+              {toastMessage.message}
+            </span>
+          </div>
+          <button
+            onClick={() => setToastMessage(null)}
+            className="w-6 h-6 rounded-full bg-white/20 text-white flex items-center justify-center border-0 cursor-pointer shrink-0 ml-2"
+          >
+            ✕
+          </button>
+        </div>
+      )}
 
-        {/* Hàng tiêu đề chính */}
+      {/* 1. Header Bar: Đệm né Dynamic Island / Tai thỏ iOS */}
+      <div className="bg-[#0045ce] text-white sticky-top shadow-xs select-none">
+        <div style={{ height: "max(var(--sat, 0px), 38px)", width: "100%" }} />
+
         <div className="px-4 pb-3 pt-1 flex items-center justify-between gap-3">
           <div className="flex items-center gap-3 min-w-0 flex-1">
             <button
@@ -287,18 +321,17 @@ export const LibraryModal = ({ isOpen, onClose, userMajor = "Hệ Thống Thông
             </div>
           </div>
 
-          {/* Khoảng trống bên phải rộng 90px để nhường chỗ hoàn toàn cho cụm nút Zalo */}
-          <div className="w-[90px] shrink-0" />
+          <div className="w-[105px] shrink-0 pointer-events-none" />
         </div>
       </div>
 
-      {/* 2. Thanh chuyển đổi 3 Tabs: Tài liệu / Video / Đề thi */}
+      {/* 2. Thanh chuyển đổi 3 Tabs */}
       <div className="bg-white px-3 py-2 border-b border-slate-200 flex items-center justify-between gap-2 shadow-2xs">
         <div className="bg-slate-100 p-1 rounded-2xl flex flex-1 border border-slate-200/70">
           <button
             onClick={() => setActiveTab("docs")}
             className={`flex-1 py-1.5 rounded-xl text-[11px] font-black transition border-0 flex items-center justify-center gap-1 cursor-pointer ${
-              activeTab === "docs" ? "bg-blue-600 text-white shadow-xs" : "bg-transparent text-slate-600 hover:text-slate-900"
+              activeTab === "docs" ? "bg-[#0045ce] text-white shadow-xs" : "bg-transparent text-slate-600 hover:text-slate-900"
             }`}
           >
             <i className="bi bi-file-earmark-text"></i> Tài liệu ({resources.docs.length})
@@ -306,7 +339,7 @@ export const LibraryModal = ({ isOpen, onClose, userMajor = "Hệ Thống Thông
           <button
             onClick={() => setActiveTab("videos")}
             className={`flex-1 py-1.5 rounded-xl text-[11px] font-black transition border-0 flex items-center justify-center gap-1 cursor-pointer ${
-              activeTab === "videos" ? "bg-blue-600 text-white shadow-xs" : "bg-transparent text-slate-600 hover:text-slate-900"
+              activeTab === "videos" ? "bg-[#0045ce] text-white shadow-xs" : "bg-transparent text-slate-600 hover:text-slate-900"
             }`}
           >
             <i className="bi bi-play-circle-fill"></i> Video ({resources.videos.length})
@@ -322,7 +355,7 @@ export const LibraryModal = ({ isOpen, onClose, userMajor = "Hệ Thống Thông
         </div>
       </div>
 
-      {/* 3. Khu vực tìm kiếm NLP và Nút Lộ trình / Bộ lọc */}
+      {/* 3. Khu vực tìm kiếm */}
       <div className="bg-white px-3 py-2.5 border-b border-slate-200 flex flex-col gap-2">
         <div className="flex items-center gap-2">
           <div className="relative flex-1 flex items-center">
@@ -332,7 +365,7 @@ export const LibraryModal = ({ isOpen, onClose, userMajor = "Hệ Thống Thông
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
               placeholder="Tìm theo môn, mã HP, trắc nghiệm, giảng viên..."
-              className="w-full bg-slate-100 border border-slate-200/80 rounded-2xl pl-8 pr-8 py-2 text-xs font-bold text-slate-800 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:bg-white transition"
+              className="w-full bg-slate-100 border border-slate-200/80 rounded-2xl pl-8 pr-8 py-2 text-xs font-bold text-slate-800 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-[#0045ce] focus:bg-white transition"
             />
             {searchQuery && (
               <button
@@ -344,13 +377,12 @@ export const LibraryModal = ({ isOpen, onClose, userMajor = "Hệ Thống Thông
             )}
           </div>
 
-          {/* Nút lọc Lộ trình cá nhân đặt ở đây cực kỳ cân đối và thuận tay bấm */}
           <button
             onClick={isRoadmapOnly ? handleResetFilters : handleApplyRoadmapFilter}
             className={`px-3 py-2 rounded-2xl font-black text-xs flex items-center gap-1.5 border-0 shadow-xs active:scale-95 transition cursor-pointer shrink-0 ${
               isRoadmapOnly
                 ? "bg-amber-400 text-slate-950"
-                : "bg-blue-600 text-white shadow-blue-500/20"
+                : "bg-[#0045ce] text-white shadow-blue-500/20"
             }`}
           >
             <i className={`bi ${isRoadmapOnly ? "bi-globe" : "bi-mortarboard-fill"} text-xs`}></i>
@@ -366,7 +398,7 @@ export const LibraryModal = ({ isOpen, onClose, userMajor = "Hệ Thống Thông
               setSelectedMajor(e.target.value);
               setIsRoadmapOnly(false);
             }}
-            className="bg-slate-50 border border-slate-200 rounded-xl px-2 py-1.5 text-[11px] font-bold text-slate-700 focus:outline-none focus:border-blue-500 truncate"
+            className="bg-slate-50 border border-slate-200 rounded-xl px-2 py-1.5 text-[11px] font-bold text-slate-700 focus:outline-none focus:border-[#0045ce] truncate"
           >
             <option value="all">Tất cả ngành</option>
             {allMajors.map((m, idx) => (
@@ -380,7 +412,7 @@ export const LibraryModal = ({ isOpen, onClose, userMajor = "Hệ Thống Thông
               setSelectedYear(e.target.value);
               setIsRoadmapOnly(false);
             }}
-            className="bg-slate-50 border border-slate-200 rounded-xl px-2 py-1.5 text-[11px] font-bold text-slate-700 focus:outline-none focus:border-blue-500"
+            className="bg-slate-50 border border-slate-200 rounded-xl px-2 py-1.5 text-[11px] font-bold text-slate-700 focus:outline-none focus:border-[#0045ce]"
           >
             <option value="all">Tất cả năm</option>
             <option value="1">Năm 1</option>
@@ -395,7 +427,7 @@ export const LibraryModal = ({ isOpen, onClose, userMajor = "Hệ Thống Thông
               setSelectedSemester(e.target.value);
               setIsRoadmapOnly(false);
             }}
-            className="bg-slate-50 border border-slate-200 rounded-xl px-2 py-1.5 text-[11px] font-bold text-slate-700 focus:outline-none focus:border-blue-500"
+            className="bg-slate-50 border border-slate-200 rounded-xl px-2 py-1.5 text-[11px] font-bold text-slate-700 focus:outline-none focus:border-[#0045ce]"
           >
             <option value="all">Tất cả kỳ</option>
             <option value="1">Học kỳ 1</option>
@@ -421,7 +453,7 @@ export const LibraryModal = ({ isOpen, onClose, userMajor = "Hệ Thống Thông
                 onClick={() => setFilterSubCategory(key)}
                 className={`px-2 py-0.5 rounded-full text-[10px] font-extrabold border transition text-nowrap ${
                   filterSubCategory === key
-                    ? "bg-blue-600 text-white border-blue-600"
+                    ? "bg-[#0045ce] text-white border-[#0045ce]"
                     : "bg-white text-slate-600 border-slate-200 hover:bg-slate-50"
                 }`}
               >
@@ -431,27 +463,27 @@ export const LibraryModal = ({ isOpen, onClose, userMajor = "Hệ Thống Thông
           </div>
 
           <span className="text-[10px] font-bold text-slate-500 shrink-0 ml-2">
-            Tổng: <b className="text-blue-600">{activeLength}</b>
+            Tổng: <b className="text-[#0045ce]">{activeLength}</b>
           </span>
         </div>
       </div>
 
-      {/* 4. Nội dung danh sách học liệu theo Tab */}
+      {/* 4. Danh sách học liệu */}
       <div className="p-3 space-y-2.5 flex-1">
         {activeTab === "docs" && (
           <>
             {loading ? (
               <div className="text-center py-8 text-slate-400 text-xs font-semibold">
-                <span className="spinner-border spinner-border-sm me-2 text-blue-600"></span> Đang nạp tài liệu...
+                <span className="spinner-border spinner-border-sm me-2 text-[#0045ce]"></span> Đang nạp tài liệu...
               </div>
             ) : currentDocs.length === 0 ? (
               <div className="bg-white rounded-3xl p-8 text-center border border-slate-200 shadow-2xs">
-                <div className="w-12 h-12 rounded-2xl bg-blue-50 text-blue-600 flex items-center justify-center text-xl mx-auto mb-2">
+                <div className="w-12 h-12 rounded-2xl bg-blue-50 text-[#0045ce] flex items-center justify-center text-xl mx-auto mb-2">
                   <i className="bi bi-folder-x"></i>
                 </div>
                 <h6 className="font-black text-slate-800 text-xs mb-1">Không tìm thấy tài liệu phù hợp</h6>
                 <p className="text-[10.5px] text-slate-400 mb-3">Thử thay đổi bộ lọc hoặc xóa từ khóa tìm kiếm.</p>
-                <button onClick={handleResetFilters} className="px-3 py-1 rounded-full bg-blue-50 text-blue-700 font-extrabold text-[10.5px] border border-blue-200">
+                <button onClick={handleResetFilters} className="px-3 py-1 rounded-full bg-blue-50 text-[#0045ce] font-extrabold text-[10.5px] border border-blue-200">
                   Xem tất cả
                 </button>
               </div>
@@ -469,7 +501,7 @@ export const LibraryModal = ({ isOpen, onClose, userMajor = "Hệ Thống Thông
                       </div>
                       <div className="truncate flex-1">
                         <div className="flex items-center gap-1 mb-0.5 flex-wrap">
-                          <span className="px-1.5 py-0.2 rounded text-[9px] font-extrabold bg-blue-50 text-blue-700 border border-blue-200 truncate max-w-[120px]">
+                          <span className="px-1.5 py-0.2 rounded text-[9px] font-extrabold bg-blue-50 text-[#0045ce] border border-blue-200 truncate max-w-[120px]">
                             {doc.subject}
                           </span>
                           {doc.curriculumSubjectCode && (
@@ -494,7 +526,7 @@ export const LibraryModal = ({ isOpen, onClose, userMajor = "Hệ Thống Thông
                     <button
                       disabled={downloadingId === doc.id}
                       onClick={() => handleDownloadAndSaveToDocs(doc)}
-                      className="w-7 h-7 rounded-full bg-blue-600 text-white flex items-center justify-center text-xs shrink-0 border-0 active:scale-95 transition cursor-pointer shadow-xs"
+                      className="w-7 h-7 rounded-full bg-[#0045ce] text-white flex items-center justify-center text-xs shrink-0 border-0 active:scale-95 transition cursor-pointer shadow-xs"
                       title="Lưu vào Không gian Tài liệu cá nhân"
                     >
                       {downloadingId === doc.id ? (
@@ -514,16 +546,16 @@ export const LibraryModal = ({ isOpen, onClose, userMajor = "Hệ Thống Thông
           <>
             {loading ? (
               <div className="text-center py-8 text-slate-400 text-xs font-semibold">
-                <span className="spinner-border spinner-border-sm me-2 text-blue-600"></span> Đang nạp video bài giảng...
+                <span className="spinner-border spinner-border-sm me-2 text-[#0045ce]"></span> Đang nạp video bài giảng...
               </div>
             ) : currentVideos.length === 0 ? (
               <div className="bg-white rounded-3xl p-8 text-center border border-slate-200 shadow-2xs">
-                <div className="w-12 h-12 rounded-2xl bg-blue-50 text-blue-600 flex items-center justify-center text-xl mx-auto mb-2">
+                <div className="w-12 h-12 rounded-2xl bg-blue-50 text-[#0045ce] flex items-center justify-center text-xl mx-auto mb-2">
                   <i className="bi bi-camera-video-off"></i>
                 </div>
                 <h6 className="font-black text-slate-800 text-xs mb-1">Chưa có video bài giảng</h6>
                 <p className="text-[10.5px] text-slate-400 mb-3">Không có video phù hợp bộ lọc đang chọn.</p>
-                <button onClick={handleResetFilters} className="px-3 py-1 rounded-full bg-blue-50 text-blue-700 font-extrabold text-[10.5px] border border-blue-200">
+                <button onClick={handleResetFilters} className="px-3 py-1 rounded-full bg-blue-50 text-[#0045ce] font-extrabold text-[10.5px] border border-blue-200">
                   Xem tất cả
                 </button>
               </div>
@@ -542,7 +574,7 @@ export const LibraryModal = ({ isOpen, onClose, userMajor = "Hệ Thống Thông
 
                   <div className="px-0.5 space-y-0.5">
                     <div className="flex items-center gap-1 flex-wrap">
-                      <span className="px-1.5 py-0.2 rounded text-[9px] font-extrabold bg-blue-50 text-blue-700 border border-blue-200">
+                      <span className="px-1.5 py-0.2 rounded text-[9px] font-extrabold bg-blue-50 text-[#0045ce] border border-blue-200">
                         {vid.subject}
                       </span>
                       <span className="text-[9px] font-bold text-slate-400">
@@ -640,7 +672,7 @@ export const LibraryModal = ({ isOpen, onClose, userMajor = "Hệ Thống Thông
           </button>
 
           <span className="text-[11px] font-black text-slate-700">
-            Trang <b className="text-blue-600">{currentPage}</b> / {totalPages}
+            Trang <b className="text-[#0045ce]">{currentPage}</b> / {totalPages}
           </span>
 
           <button
@@ -665,7 +697,7 @@ export const LibraryModal = ({ isOpen, onClose, userMajor = "Hệ Thống Thông
             onClick={(e) => e.stopPropagation()}
           >
             <div className="flex items-center justify-between border-b pb-2">
-              <span className="px-2.5 py-0.5 rounded-md bg-blue-50 text-blue-700 font-extrabold text-[10px]">
+              <span className="px-2.5 py-0.5 rounded-md bg-blue-50 text-[#0045ce] font-extrabold text-[10px]">
                 {previewDoc.subject} (Năm {previewDoc.year} - Kỳ {previewDoc.semester})
               </span>
               <button
@@ -694,7 +726,7 @@ export const LibraryModal = ({ isOpen, onClose, userMajor = "Hệ Thống Thông
                 setPreviewDoc(null);
                 handleDownloadAndSaveToDocs(target);
               }}
-              className="w-full py-2.5 bg-blue-600 text-white rounded-xl text-xs font-black shadow-md border-0 active:scale-95 transition cursor-pointer flex items-center justify-center gap-1.5"
+              className="w-full py-2.5 bg-[#0045ce] text-white rounded-xl text-xs font-black shadow-md border-0 active:scale-95 transition cursor-pointer flex items-center justify-center gap-1.5"
             >
               <i className="bi bi-download"></i> Tải về và thêm vào Tài liệu cá nhân
             </button>

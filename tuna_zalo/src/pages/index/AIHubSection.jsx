@@ -56,7 +56,7 @@ const shuffleQuizCompletely = (questions) => {
 
 export const AIHubSection = () => {
   const [documents, setDocuments] = useState([]);
-  const [allSavedDocs, setAllSavedDocs] = useState([]); // Chứa toàn bộ CSDL để kiểm tra tóm tắt đã lưu hay chưa
+  const [allSavedDocs, setAllSavedDocs] = useState([]);
   const [selectedDocId, setSelectedDocId] = useState(null);
 
   const [configModal, setConfigModal] = useState(null);
@@ -65,7 +65,6 @@ export const AIHubSection = () => {
   const [targetLang, setTargetLang] = useState("Tiếng Việt");
 
   const [tasks, setTasks] = useState([]);
-
   const [activeTask, setActiveTask] = useState(null);
   const [currentQuestions, setCurrentQuestions] = useState([]);
   const [currentCards, setCurrentCards] = useState([]);
@@ -76,13 +75,19 @@ export const AIHubSection = () => {
   const [showRestartMenu, setShowRestartMenu] = useState(false);
   const [isGeneratingMore, setIsGeneratingMore] = useState(false);
 
+  // Toast Notification thay thế alert()
+  const [toastMessage, setToastMessage] = useState(null);
+  const showToast = (message, type = "success") => {
+    setToastMessage({ message, type });
+    setTimeout(() => setToastMessage(null), 3200);
+  };
+
   useEffect(() => {
     let isMounted = true;
     const loadData = async () => {
       const docs = await fetchDocumentsFromDB();
       if (isMounted && docs && docs.length > 0) {
         setAllSavedDocs(docs);
-        // Chỉ hiện file gốc ở khung nguồn tài liệu, không hiện file tóm tắt AI
         const originalDocsOnly = docs.filter(
           (d) => d.type !== "AI_SUMMARY" && !d.name?.startsWith("[Tóm tắt]") && !d.name?.startsWith("[Bản dịch]")
         );
@@ -106,7 +111,6 @@ export const AIHubSection = () => {
     const reader = new FileReader();
     reader.onload = async (event) => {
       let rawContent = event.target.result;
-
       if (file.name.toLowerCase().endsWith(".pdf")) {
         const matches = rawContent.match(/[a-zA-Z0-9\sàáạảãâầấậẩẫăằắặẳẵèéẹẻẽêềếệểễìíịỉĩòóọỏõôồốộổỗơờớợởỡùúụủũưừứựửữỳýỵỷỹđĐ.,:;!?()/-]{4,}/g);
         rawContent = matches ? matches.join(" ") : rawContent.slice(0, 10000);
@@ -124,6 +128,7 @@ export const AIHubSection = () => {
       setAllSavedDocs((prev) => [newDoc, ...prev]);
       setSelectedDocId(newDoc.id);
       await saveDocumentToDB(newDoc);
+      showToast(`Đã tải lên tài liệu "${file.name}"!`);
     };
     reader.readAsText(file);
   };
@@ -137,9 +142,10 @@ export const AIHubSection = () => {
       setSelectedDocId(filtered.length > 0 ? filtered[0].id : null);
     }
     await deleteDocumentFromDB(docId);
+    showToast("Đã xóa tài liệu ôn tập!");
   };
 
-const handleSaveItem = async (e, task) => {
+  const handleSaveItem = async (e, task) => {
     e.stopPropagation();
     const isDocResource = task.featureId === "summary" || task.featureId === "translate";
 
@@ -159,42 +165,30 @@ const handleSaveItem = async (e, task) => {
         date: "Vừa lưu từ AI",
       };
 
-      // 1. Lưu vào bảng user_documents và cập nhật danh sách allSavedDocs
       await saveDocumentToDB(newDoc);
       setAllSavedDocs((prev) => [newDoc, ...prev]);
 
-      // 2. Lưu vào Cache CSDL theo hash để tái sử dụng
       try {
         const activeDoc = documents.find((d) => d.name === task.docName) || documents[0];
         if (activeDoc) {
           const contentHash = await computeContentHash(activeDoc.content);
-          await savePostgresCache(
-            contentHash, 
-            task.featureId, 
-            task.resultData, 
-            task.docName, 
-            task.config?.difficulty || "Căn bản"
-          );
+          await savePostgresCache(contentHash, task.featureId, task.resultData, task.docName, task.config?.difficulty || "Căn bản");
         }
       } catch (err) {
         console.error("Lỗi lưu cache CSDL:", err);
       }
 
-      // 3. Cập nhật trạng thái chỉ cho duy nhất task hiện tại
       const updatedTask = { ...task, isSaved: false, isDocSaved: true };
       setTasks((prev) => prev.map((t) => (t.id === task.id ? updatedTask : t)));
       if (activeTask && activeTask.id === task.id) setActiveTask(updatedTask);
       await saveTaskToDB(updatedTask);
-
-      alert(`✅ Đã lưu bản tóm tắt vào kho "Tài liệu"!`);
+      showToast(`Đã lưu bản tóm tắt vào kho "Tài liệu"!`);
     } else {
-      // Với Quiz & Flashcard: Đánh dấu đưa sang trang Bài tập
       const updatedTask = { ...task, isSaved: true };
       setTasks((prev) => prev.map((t) => (t.id === task.id ? updatedTask : t)));
       if (activeTask && activeTask.id === task.id) setActiveTask(updatedTask);
       await saveTaskToDB(updatedTask);
-
-      alert(`✅ Đã lưu bài tập vào danh sách "Bài tập & Luyện thi"!`);
+      showToast(`Đã lưu bài tập vào danh sách "Bài tập & Luyện thi"!`);
     }
   };
 
@@ -211,10 +205,11 @@ const handleSaveItem = async (e, task) => {
       setTasks((prev) => prev.filter((t) => t.id !== taskId));
       await deleteTaskFromDB(taskId);
     }
+    showToast("Đã xóa tác vụ khỏi lịch sử!");
   };
 
   const handleClearAllHistory = async () => {
-    if (!window.confirm("Dọn dẹp danh sách lịch sử tác vụ? Các bài tập và tài liệu đã bấm lưu vẫn được giữ nguyên.")) return;
+    if (!window.confirm("Dọn dẹp danh sách lịch sử tác vụ? Các bài tập và tài liệu đã lưu vẫn được giữ nguyên.")) return;
 
     for (const task of tasks) {
       if (task.isSaved || task.isDocSaved) {
@@ -224,12 +219,13 @@ const handleSaveItem = async (e, task) => {
       }
     }
     setTasks((prev) => prev.filter((t) => t.isSaved || t.isDocSaved).map((t) => ({ ...t, hiddenInHistory: true })));
+    showToast("Đã dọn dẹp lịch sử tác vụ!");
   };
 
   const handleStartTask = async (forceRefresh = false, retryFeatureId = null) => {
     const activeDoc = documents.find((d) => d.id === selectedDocId);
     if (!activeDoc) {
-      alert("Vui lòng chọn hoặc tải lên một tài liệu trước!");
+      showToast("Vui lòng chọn hoặc tải lên một tài liệu trước!", "error");
       return;
     }
 
@@ -259,7 +255,6 @@ const handleSaveItem = async (e, task) => {
 
     const contentHash = await computeContentHash(activeDoc.content);
 
-    // KIỂM TRA CACHE TRONG POSTGRESQL (TÓM TẮT DẠNG CHUỖI HOẶC QUIZ DẠNG MẢNG)
     if (!forceRefresh) {
       const cached = await checkPostgresCache(contentHash, featureId, questionCount, difficulty);
       if (cached && cached.data) {
@@ -270,6 +265,7 @@ const handleSaveItem = async (e, task) => {
           const completedTask = { ...newTask, status: "done", resultData: cached.data };
           setTasks((prev) => prev.map((t) => (t.id === taskId ? completedTask : t)));
           await saveTaskToDB(completedTask);
+          showToast("Đã nạp nội dung thành công từ bộ nhớ đệm!");
           return;
         }
       }
@@ -294,6 +290,7 @@ const handleSaveItem = async (e, task) => {
       if (output) {
         await savePostgresCache(contentHash, featureId, output, activeDoc.name, difficulty);
       }
+      showToast("Tác vụ AI đã hoàn tất!");
     } catch (err) {
       const failedTask = {
         ...newTask,
@@ -302,6 +299,7 @@ const handleSaveItem = async (e, task) => {
       };
       setTasks((prev) => prev.map((t) => (t.id === taskId ? failedTask : t)));
       await saveTaskToDB(failedTask);
+      showToast(err.message || "Lỗi xử lý AI!", "error");
     }
   };
 
@@ -370,7 +368,7 @@ const handleSaveItem = async (e, task) => {
   const handleAddMore = async () => {
     const activeDoc = documents.find((d) => d.name === activeTask.docName) || documents[0];
     if (!activeDoc) {
-      alert("Không tìm thấy tài liệu gốc để tạo thêm nội dung!");
+      showToast("Không tìm thấy tài liệu gốc để tạo thêm nội dung!", "error");
       return;
     }
 
@@ -385,6 +383,7 @@ const handleSaveItem = async (e, task) => {
           setActiveTask(updatedTask);
           setTasks((prev) => prev.map((t) => (t.id === activeTask.id ? updatedTask : t)));
           await saveTaskToDB(updatedTask);
+          showToast("Đã bổ sung 3 câu hỏi trắc nghiệm mới!");
         }
       } else if (activeTask.featureId === "flashcard") {
         const newItems = await generateFlashcardsFromDoc(activeDoc.content, 3, activeTask.config?.difficulty || "Căn bản");
@@ -395,10 +394,11 @@ const handleSaveItem = async (e, task) => {
           setActiveTask(updatedTask);
           setTasks((prev) => prev.map((t) => (t.id === activeTask.id ? updatedTask : t)));
           await saveTaskToDB(updatedTask);
+          showToast("Đã bổ sung 3 thẻ flashcard mới!");
         }
       }
     } catch (e) {
-      alert(`Lỗi tạo thêm: ${e.message}`);
+      showToast(`Lỗi tạo thêm: ${e.message}`, "error");
     } finally {
       setIsGeneratingMore(false);
     }
@@ -427,15 +427,14 @@ const handleSaveItem = async (e, task) => {
 
   const answeredCount = Object.keys(selectedAnswers).length;
   const quizScore = getQuizScore();
-  const progressPercent =
-    currentQuestions.length > 0 ? Math.round((answeredCount / currentQuestions.length) * 100) : 0;
+  const progressPercent = currentQuestions.length > 0 ? Math.round((answeredCount / currentQuestions.length) * 100) : 0;
 
   const tools = [
     {
       id: "quiz",
       title: "Tạo trắc nghiệm",
       desc: "Luyện đề thông minh theo cấp độ Dễ / Căn bản / Nâng cao.",
-      gradient: "bg-gradient-to-br from-blue-600 to-indigo-700 text-white shadow-md shadow-blue-500/25",
+      gradient: "bg-gradient-to-br from-[#0045ce] to-indigo-700 text-white shadow-md shadow-blue-500/25",
       badgeColor: "bg-blue-100 text-blue-800 font-extrabold",
       iconClass: "bi bi-journal-check",
     },
@@ -459,122 +458,144 @@ const handleSaveItem = async (e, task) => {
 
   const visibleTasks = tasks.filter((t) => !t.hiddenInHistory);
 
-  // ================= MÀN HÌNH XEM CHI TIẾT TÁC VỤ =================
+  // MÀN HÌNH XEM CHI TIẾT TÁC VỤ
   if (activeTask) {
     const isDocOutput = activeTask.featureId === "summary" || activeTask.featureId === "translate";
-    
-    // Kiểm tra chéo xem tài liệu tóm tắt này thực sự còn tồn tại trong allSavedDocs không
     const isDocActuallyInDB = isDocOutput && allSavedDocs.some(
-      (d) => (d.type === "AI_SUMMARY" || d.name?.startsWith("[Tóm tắt]") || d.name?.startsWith("[Bản dịch]")) &&
-             (d.name?.includes(activeTask.docName) || d.subject?.includes(activeTask.docName))
+      (d) => d.originTaskId === activeTask.id || (d.id === `doc_${activeTask.id}`)
     );
-
-    const isSavedBadge = isDocOutput 
-      ? (activeTask.isDocSaved && isDocActuallyInDB) 
-      : activeTask.isSaved;
+    const isSavedBadge = isDocOutput ? (activeTask.isDocSaved && isDocActuallyInDB) : activeTask.isSaved;
 
     return (
       <div 
-        className="position-absolute top-0 start-0 w-100 h-100 bg-[#F8FAFC] d-flex flex-column"
+        className="position-fixed top-0 start-0 w-100 h-100 bg-[#F8FAFC] d-flex flex-column"
         style={{ zIndex: 1050, overflow: "hidden" }}
         onClick={() => { if (showRestartMenu) setShowRestartMenu(false); }}
       >
-        {/* HEADER CHUẨN MOBILE KHÔNG VỠ TRÀN DÒNG */}
-        <div className="bg-white px-3 py-2 border-b border-slate-200/80 flex items-center justify-between gap-2 shadow-xs shrink-0 z-20">
-          <div className="flex items-center gap-2 min-w-0 flex-1">
+        {/* TOAST NỔI */}
+        {toastMessage && (
+          <div 
+            className="fixed top-24 left-3 right-3 z-50 flex items-center justify-between p-3.5 rounded-2xl shadow-xl border animate-in slide-in-from-top duration-300 backdrop-blur-md"
+            style={{
+              backgroundColor: toastMessage.type === "error" ? "rgba(239, 68, 68, 0.95)" : "rgba(16, 185, 129, 0.95)",
+              color: "white",
+              borderColor: toastMessage.type === "error" ? "#f87171" : "#34d399",
+            }}
+          >
+            <div className="flex items-center gap-2.5 min-w-0 flex-1">
+              <span className="w-7 h-7 rounded-xl bg-white/20 flex items-center justify-center text-sm shrink-0">
+                <i className={`bi ${toastMessage.type === "error" ? "bi-exclamation-triangle-fill" : "bi-check2-circle"} text-base`}></i>
+              </span>
+              <span className="text-xs font-black truncate leading-snug">
+                {toastMessage.message}
+              </span>
+            </div>
             <button
-              onClick={handleExitStudyView}
-              className="w-8 h-8 rounded-full bg-slate-100 hover:bg-rose-50 text-slate-600 hover:text-rose-600 flex items-center justify-center border border-slate-200/80 active:scale-90 transition cursor-pointer shrink-0"
-              title="Rời khỏi"
+              onClick={() => setToastMessage(null)}
+              className="w-6 h-6 rounded-full bg-white/20 text-white flex items-center justify-center border-0 cursor-pointer shrink-0 ml-2"
             >
-              <i className="bi bi-arrow-left font-bold text-sm"></i>
+              ✕
             </button>
+          </div>
+        )}
 
-            <div className="min-w-0 flex-1">
-              <h6 className="m-0 font-black text-slate-900 text-xs truncate leading-snug">
-                {tools.find((t) => t.id === activeTask.featureId)?.title}
-              </h6>
-              <div className="flex items-center gap-1.5 mt-0.5">
-                <span className="text-[10px] font-bold text-slate-400">
-                  Cấp độ: <b className="text-blue-600">{activeTask.config?.difficulty || "Căn bản"}</b>
-                </span>
-                {isSavedBadge && (
-                  <span className="px-1.5 py-0.2 rounded-md bg-emerald-50 text-emerald-700 font-extrabold text-[9px] border border-emerald-200 shrink-0">
-                    ✓ Đã lưu
+        {/* Header né Dynamic Island */}
+        <div className="bg-white border-b border-slate-200/80 shadow-xs shrink-0 z-20" style={{ paddingTop: "max(var(--sat, 0px), 38px)" }}>
+          <div className="px-3.5 py-2 flex items-center justify-between gap-2">
+            <div className="flex items-center gap-2 min-w-0 flex-1">
+              <button
+                onClick={handleExitStudyView}
+                className="w-8 h-8 rounded-full bg-slate-100 hover:bg-slate-200 text-slate-700 flex items-center justify-center border border-slate-200 active:scale-90 transition cursor-pointer shrink-0"
+                title="Rời khỏi"
+              >
+                <i className="bi bi-arrow-left font-bold text-sm"></i>
+              </button>
+
+              <div className="min-w-0 flex-1">
+                <h6 className="m-0 font-black text-slate-900 text-xs truncate leading-snug">
+                  {tools.find((t) => t.id === activeTask.featureId)?.title}
+                </h6>
+                <div className="flex items-center gap-1.5 mt-0.5">
+                  <span className="text-[10px] font-bold text-slate-400">
+                    Cấp độ: <b className="text-[#0045ce]">{activeTask.config?.difficulty || "Căn bản"}</b>
                   </span>
-                )}
+                  {isSavedBadge && (
+                    <span className="px-1.5 py-0.2 rounded-md bg-emerald-50 text-emerald-700 font-extrabold text-[9px] border border-emerald-200 shrink-0">
+                      ✓ Đã lưu
+                    </span>
+                  )}
+                </div>
               </div>
             </div>
-          </div>
 
-          <div className="flex items-center gap-1.5 shrink-0">
-            {!isSavedBadge && (
-              <button
-                onClick={(e) => handleSaveItem(e, activeTask)}
-                className={`px-2.5 py-1 rounded-xl text-[10.5px] font-black border-0 cursor-pointer shadow-xs active:scale-95 transition flex items-center gap-1 ${
-                  isDocOutput 
-                    ? "bg-amber-400 text-slate-950 hover:bg-amber-500" 
-                    : "bg-blue-600 text-white hover:bg-blue-700"
-                }`}
-              >
-                <i className={`bi ${isDocOutput ? "bi-folder-plus" : "bi-bookmark-plus"}`}></i>
-                <span>{isDocOutput ? "Lưu tài liệu" : "Lưu bài"}</span>
-              </button>
-            )}
-
-            {(activeTask.featureId === "quiz" || activeTask.featureId === "flashcard") && (
-              <div className="relative">
+            <div className="flex items-center gap-1.5 shrink-0">
+              {!isSavedBadge && (
                 <button
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    setShowRestartMenu(!showRestartMenu);
-                  }}
-                  className="px-2.5 py-1 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl text-[10.5px] font-black border border-slate-200 flex items-center gap-1 cursor-pointer active:scale-95 transition"
+                  onClick={(e) => handleSaveItem(e, activeTask)}
+                  className={`px-2.5 py-1.5 rounded-xl text-[10.5px] font-black border-0 cursor-pointer shadow-xs active:scale-95 transition flex items-center gap-1 ${
+                    isDocOutput 
+                      ? "bg-amber-400 text-slate-950 hover:bg-amber-500" 
+                      : "bg-[#0045ce] text-white hover:bg-blue-700"
+                  }`}
                 >
-                  <i className="bi bi-arrow-repeat text-blue-600"></i>
-                  <span>Lại</span>
-                  <i className="bi bi-chevron-down text-[8px] text-slate-400"></i>
+                  <i className={`bi ${isDocOutput ? "bi-folder-plus" : "bi-bookmark-plus"}`}></i>
+                  <span>{isDocOutput ? "Lưu tài liệu" : "Lưu bài"}</span>
                 </button>
+              )}
 
-                {showRestartMenu && (
-                  <div
-                    className="absolute right-0 top-full mt-1.5 bg-white shadow-xl rounded-2xl p-1.5 border border-slate-200 z-50 animate-in fade-in zoom-in-95 duration-100"
-                    style={{ minWidth: 155 }}
-                    onClick={(e) => e.stopPropagation()}
+              {(activeTask.featureId === "quiz" || activeTask.featureId === "flashcard") && (
+                <div className="relative">
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setShowRestartMenu(!showRestartMenu);
+                    }}
+                    className="px-2.5 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl text-[10.5px] font-black border border-slate-200 flex items-center gap-1 cursor-pointer active:scale-95 transition"
                   >
-                    <button
-                      onClick={() => handleRestart("default")}
-                      className="w-full text-left py-1.5 px-2.5 rounded-xl text-xs font-bold text-slate-700 hover:bg-slate-50 border-0 bg-transparent flex items-center gap-2 cursor-pointer transition"
+                    <i className="bi bi-arrow-repeat text-[#0045ce]"></i>
+                    <span>Lại</span>
+                    <i className="bi bi-chevron-down text-[8px] text-slate-400"></i>
+                  </button>
+
+                  {showRestartMenu && (
+                    <div
+                      className="absolute right-0 top-full mt-1.5 bg-white shadow-xl rounded-2xl p-1.5 border border-slate-200 z-50 animate-in fade-in zoom-in-95 duration-100"
+                      style={{ minWidth: 155 }}
+                      onClick={(e) => e.stopPropagation()}
                     >
-                      <i className="bi bi-arrow-counterclockwise text-blue-600 text-xs"></i> Mặc định
-                    </button>
-                    <button
-                      onClick={() => handleRestart("shuffle")}
-                      className="w-full text-left py-1.5 px-2.5 rounded-xl text-xs font-bold text-slate-700 hover:bg-slate-50 border-0 bg-transparent flex items-center gap-2 cursor-pointer transition"
-                    >
-                      <i className="bi bi-shuffle text-emerald-600 text-xs"></i> Xáo trộn vị trí
-                    </button>
-                  </div>
-                )}
-              </div>
-            )}
+                      <button
+                        onClick={() => handleRestart("default")}
+                        className="w-full text-left py-1.5 px-2.5 rounded-xl text-xs font-bold text-slate-700 hover:bg-slate-50 border-0 bg-transparent flex items-center gap-2 cursor-pointer transition"
+                      >
+                        <i className="bi bi-arrow-counterclockwise text-[#0045ce] text-xs"></i> Mặc định
+                      </button>
+                      <button
+                        onClick={() => handleRestart("shuffle")}
+                        className="w-full text-left py-1.5 px-2.5 rounded-xl text-xs font-bold text-slate-700 hover:bg-slate-50 border-0 bg-transparent flex items-center gap-2 cursor-pointer transition"
+                      >
+                        <i className="bi bi-shuffle text-emerald-600 text-xs"></i> Xáo trộn vị trí
+                      </button>
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
           </div>
         </div>
 
-        <div className="flex-grow-1 overflow-y-auto p-3 w-100" style={{ paddingBottom: 100 }}>
-          {/* GIAO DIỆN TRẮC NGHIỆM */}
+        <div className="flex-1 overflow-y-auto p-3.5 w-full" style={{ paddingBottom: "calc(var(--sab, 0px) + 36px)" }}>
           {activeTask.featureId === "quiz" && Array.isArray(currentQuestions) && (
             <div className="d-flex flex-column gap-3">
-              <div className="card border-0 shadow-md rounded-4 p-3 bg-white border border-blue-100">
+              <div className="card border-0 shadow-xs rounded-4 p-3 bg-white border border-blue-100">
                 <div className="d-flex justify-content-between small fw-bold mb-2">
                   <span className="text-slate-600 font-bold" style={{ fontSize: "11px" }}>
                     Tiến độ: {answeredCount}/{currentQuestions.length} câu
                   </span>
-                  <span className="text-blue-600 fw-black">{progressPercent}%</span>
+                  <span className="text-[#0045ce] fw-black">{progressPercent}%</span>
                 </div>
                 <div className="progress rounded-pill bg-slate-100 p-0.5" style={{ height: 8 }}>
                   <div
-                    className="progress-bar bg-gradient-to-r from-blue-600 to-indigo-600 rounded-pill"
+                    className="progress-bar bg-[#0045ce] rounded-pill"
                     role="progressbar"
                     style={{ width: `${progressPercent}%` }}
                   ></div>
@@ -582,7 +603,7 @@ const handleSaveItem = async (e, task) => {
               </div>
 
               {answeredCount === currentQuestions.length && currentQuestions.length > 0 && (
-                <div className="card border-0 rounded-4 p-4 text-center text-white bg-gradient-to-r from-blue-600 to-indigo-700 shadow-lg">
+                <div className="card border-0 rounded-4 p-4 text-center text-white bg-gradient-to-r from-[#0045ce] to-indigo-700 shadow-lg">
                   <p className="small text-uppercase fw-extrabold mb-1 tracking-wider text-blue-100" style={{ fontSize: "10.5px" }}>Kết quả ôn tập</p>
                   <h3 className="fw-black mb-1 text-3xl">
                     {quizScore.correct}/{quizScore.total} ({quizScore.percent}%)
@@ -601,9 +622,9 @@ const handleSaveItem = async (e, task) => {
                 const correctLetter = (q.answer || "").trim().charAt(0).toUpperCase();
 
                 return (
-                  <div key={idx} className="card border-0 shadow-sm rounded-4 p-3 mb-1 bg-white border border-slate-100">
+                  <div key={idx} className="card border-0 shadow-xs rounded-4 p-3 mb-1 bg-white border border-slate-100">
                     <div className="d-flex align-items-start gap-2 mb-2.5">
-                      <span className="badge bg-blue-600 text-white rounded-pill px-2.5 py-1 fw-black shadow-xs" style={{ fontSize: "10.5px" }}>
+                      <span className="badge bg-[#0045ce] text-white rounded-pill px-2.5 py-1 fw-black shadow-xs" style={{ fontSize: "10.5px" }}>
                         Câu {idx + 1}
                       </span>
                       <p className="fw-black text-slate-900 small mb-0 flex-grow-1 leading-snug">
@@ -617,7 +638,7 @@ const handleSaveItem = async (e, task) => {
                         const isThisSelected = userChoice === optLetter;
                         const isThisCorrect = correctLetter === optLetter;
 
-                        let btnStyle = "bg-white text-[#0F172A] border-slate-200 hover:bg-blue-50/50 hover:border-blue-300";
+                        let btnStyle = "bg-white text-slate-800 border-slate-200 hover:bg-slate-50";
 
                         if (hasAnswered) {
                           if (isThisCorrect) {
@@ -635,7 +656,7 @@ const handleSaveItem = async (e, task) => {
                             disabled={hasAnswered}
                             onClick={() => setSelectedAnswers((prev) => ({ ...prev, [idx]: optLetter }))}
                             className={`w-100 text-start rounded-3 p-2.5 small font-bold transition border ${btnStyle}`}
-                            style={{ fontSize: "12px", color: hasAnswered ? (isThisCorrect || isThisSelected ? "#FFF" : "#94A3B8") : "#0F172A" }}
+                            style={{ fontSize: "12px" }}
                           >
                             {opt}
                           </button>
@@ -656,8 +677,7 @@ const handleSaveItem = async (e, task) => {
                 <button
                   disabled={isGeneratingMore}
                   onClick={handleAddMore}
-                  className="btn btn-primary rounded-pill px-4 py-2 fw-black shadow-md d-inline-flex align-items-center gap-1.5"
-                  style={{ fontSize: "12px" }}
+                  className="px-4 py-2 bg-[#0045ce] hover:bg-blue-700 text-white rounded-full font-black text-xs border-0 shadow-md flex items-center gap-1.5 mx-auto active:scale-95 transition cursor-pointer"
                 >
                   {isGeneratingMore ? (
                     <>
@@ -675,10 +695,9 @@ const handleSaveItem = async (e, task) => {
             </div>
           )}
 
-          {/* GIAO DIỆN FLASHCARD 3D CHUYÊN NGHIỆP */}
           {activeTask.featureId === "flashcard" && Array.isArray(currentCards) && currentCards.length > 0 && (
             <div className="d-flex flex-column gap-3.5 pt-1 select-none">
-              <div className="card border-0 shadow-md rounded-4 p-3 bg-white border border-emerald-100">
+              <div className="card border-0 shadow-xs rounded-4 p-3 bg-white border border-emerald-100">
                 <div className="d-flex justify-content-between align-items-center mb-2">
                   <span className="small text-slate-700 fw-bold" style={{ fontSize: "11px" }}>
                     Tiến trình: <b className="text-emerald-700 font-black">{activeCardIndex + 1}</b> / {currentCards.length} thẻ
@@ -710,18 +729,15 @@ const handleSaveItem = async (e, task) => {
                     transform: isFlipped ? "rotateY(180deg)" : "rotateY(0deg)",
                   }}
                 >
-                  {/* MẶT TRƯỚC (THUẬT NGỮ) */}
                   <div
                     className="absolute inset-0 w-full h-full rounded-[28px] p-5 flex flex-col justify-between text-white overflow-hidden shadow-xl"
                     style={{
                       backfaceVisibility: "hidden",
                       WebkitBackfaceVisibility: "hidden",
-                      background: "linear-gradient(135deg, #1D4ED8 0%, #2563EB 50%, #3B82F6 100%)",
-                      boxShadow: "0 14px 28px -6px rgba(37, 99, 235, 0.35)",
+                      background: "linear-gradient(135deg, #0045ce 0%, #2563EB 100%)",
+                      boxShadow: "0 14px 28px -6px rgba(0, 69, 206, 0.35)",
                     }}
                   >
-                    <div className="absolute -top-12 -right-12 w-32 h-32 bg-white/10 rounded-full blur-2xl pointer-events-none"></div>
-
                     <div className="flex items-center justify-between relative z-10">
                       <span className="px-3 py-1 rounded-full bg-white/20 backdrop-blur-md text-[10.5px] font-black flex items-center gap-1.5 border border-white/20 tracking-wide">
                         📌 Thuật ngữ
@@ -745,7 +761,6 @@ const handleSaveItem = async (e, task) => {
                     </div>
                   </div>
 
-                  {/* MẶT SAU (GIẢI NGHĨA) */}
                   <div
                     className="absolute inset-0 w-full h-full rounded-[28px] p-5 flex flex-col justify-between text-white overflow-hidden shadow-xl"
                     style={{
@@ -756,8 +771,6 @@ const handleSaveItem = async (e, task) => {
                       boxShadow: "0 14px 28px -6px rgba(5, 150, 105, 0.35)",
                     }}
                   >
-                    <div className="absolute -bottom-12 -left-12 w-32 h-32 bg-white/10 rounded-full blur-2xl pointer-events-none"></div>
-
                     <div className="flex items-center justify-between relative z-10">
                       <span className="px-3 py-1 rounded-full bg-white/20 backdrop-blur-md text-[10.5px] font-black flex items-center gap-1.5 border border-white/20 tracking-wide text-amber-200">
                         💡 Giải nghĩa chi tiết
@@ -779,7 +792,6 @@ const handleSaveItem = async (e, task) => {
                 </div>
               </div>
 
-              {/* Phím tương tác Đã thuộc / Chưa thuộc */}
               <div className="grid grid-cols-2 gap-2.5 pt-1">
                 <button
                   type="button"
@@ -800,7 +812,6 @@ const handleSaveItem = async (e, task) => {
                 </button>
               </div>
 
-              {/* Điều hướng Trước / Sau & Tạo thêm */}
               <div className="flex justify-between items-center pt-1.5 px-1">
                 <button
                   type="button"
@@ -818,7 +829,7 @@ const handleSaveItem = async (e, task) => {
                   type="button"
                   disabled={isGeneratingMore}
                   onClick={handleAddMore}
-                  className="px-3.5 py-1.5 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-[11px] font-black border-0 shadow-xs cursor-pointer active:scale-95 transition flex items-center gap-1"
+                  className="px-3.5 py-1.5 bg-[#0045ce] hover:bg-blue-700 text-white rounded-xl text-[11px] font-black border-0 shadow-xs cursor-pointer active:scale-95 transition flex items-center gap-1"
                 >
                   {isGeneratingMore ? (
                     <>
@@ -847,9 +858,8 @@ const handleSaveItem = async (e, task) => {
             </div>
           )}
 
-          {/* GIAO DIỆN XEM TÓM TẮT VĂN BẢN / DỊCH THUẬT */}
           {isDocOutput && (
-            <div className="card border-0 shadow-md rounded-4 p-4 text-slate-800 small leading-relaxed bg-white border border-slate-100" style={{ whiteSpace: "pre-wrap", fontSize: "12px" }}>
+            <div className="card border-0 shadow-sm rounded-4 p-4 text-slate-800 small leading-relaxed bg-white border border-slate-100" style={{ whiteSpace: "pre-wrap", fontSize: "12px" }}>
               {activeTask.resultData}
             </div>
           )}
@@ -860,244 +870,262 @@ const handleSaveItem = async (e, task) => {
 
   // ================= GIAO DIỆN CHÍNH AI HUB =================
   return (
-    <div className="container-fluid px-2 pb-5 position-relative overflow-hidden" style={{ minHeight: "100vh" }}>
-      <div className="d-flex flex-column gap-3.5">
-{/* Nguồn tài liệu học tập - Đã tinh chỉnh chống rớt dòng chữ */}
-<div className="card border-0 shadow-md rounded-4 p-3 bg-white border border-slate-100">
-  <div className="flex items-center justify-between gap-2 mb-2.5">
-    <div className="flex items-center gap-2 min-w-0 flex-1">
-      <span className="w-7 h-7 rounded-xl bg-blue-100 text-blue-700 flex items-center justify-center font-bold text-sm shrink-0">
-        <i className="bi bi-folder2-open"></i>
-      </span>
-      <h6 className="font-black text-slate-900 m-0 text-xs sm:text-sm truncate">
-        Nguồn tài liệu học tập
-      </h6>
-    </div>
-
-    <label 
-      className="px-2.5 py-1.5 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-[11px] font-black border-0 cursor-pointer shadow-xs active:scale-95 transition flex items-center gap-1 shrink-0 m-0"
-    >
-      <i className="bi bi-plus-lg text-[10px]"></i>
-      <span>Tải tệp</span>
-      <input type="file" accept=".txt,.doc,.docx,.pdf" onChange={handleFileUpload} className="d-none" />
-    </label>
-  </div>
-
-          {documents.length === 0 ? (
-            <div className="text-center py-4 border-2 border-dashed border-slate-200 rounded-3 bg-slate-50/60">
-              <i className="bi bi-cloud-arrow-up-fill display-6 text-blue-500"></i>
-              <p className="small fw-bold text-slate-700 mt-2 mb-0">Chưa có tài liệu trong CSDL</p>
-              <p className="text-slate-400 small mb-0" style={{ fontSize: "11px" }}>Nhấn nút <b>Tải tệp +</b> để chọn tài liệu ôn tập</p>
-            </div>
-          ) : (
-            <div className="d-flex flex-column gap-2 overflow-y-auto pr-0.5" style={{ maxHeight: 220 }}>
-              {documents.map((doc) => {
-                const isSelected = selectedDocId === doc.id;
-
-                return (
-                  <div
-                    key={doc.id}
-                    onClick={() => setSelectedDocId(doc.id)}
-                    className={`d-flex align-items-center justify-content-between p-3 rounded-3 border transition-all ${
-                      isSelected
-                        ? "bg-blue-50/90 border-blue-500 shadow-sm scale-[1.01]"
-                        : "bg-slate-50 border-slate-200 hover:bg-slate-100"
-                    }`}
-                    style={{ cursor: "pointer" }}
-                  >
-                    <div className="d-flex align-items-center gap-2.5 overflow-hidden flex-grow-1 me-2">
-                      <div className="text-blue-600 fs-5">
-                        {isSelected ? (
-                          <i className="bi bi-check-circle-fill"></i>
-                        ) : (
-                          <i className="bi bi-circle text-slate-400"></i>
-                        )}
-                      </div>
-                      <div className="text-truncate">
-                        <div className={`small fw-black text-truncate ${isSelected ? "text-blue-700" : "text-slate-900"}`}>
-                          {doc.name}
-                        </div>
-                        <div className="text-slate-500 font-medium" style={{ fontSize: "11px" }}>
-                          {doc.size} • {doc.date || "Vừa cập nhật"}
-                        </div>
-                      </div>
-                    </div>
-                    <button
-                      onClick={(e) => handleDeleteDoc(e, doc.id)}
-                      className="btn btn-sm text-slate-400 hover-text-danger p-1 border-0"
-                    >
-                      <i className="bi bi-x-lg"></i>
-                    </button>
-                  </div>
-                );
-              })}
-            </div>
-          )}
-        </div>
-
-        {/* Khối chức năng tác vụ AI */}
-        <div>
-          <h6 className="fw-black text-slate-900 px-1 mb-2.5 d-flex align-items-center gap-2">
-            <span className="w-2 h-2 rounded-full bg-blue-600 animate-pulse"></span>
-            Chọn tác vụ xử lý AI
-          </h6>
-          <div className="d-flex flex-column gap-2.5">
-            {tools.map((tool) => (
-              <div
-                key={tool.id}
-                onClick={() => {
-                  if (!selectedDocId) return alert("Vui lòng tải lên và chọn tài liệu!");
-                  setConfigModal(tool.id);
-                }}
-                className="card border-0 shadow-sm rounded-4 p-3.5 d-flex flex-row align-items-center justify-content-between transition-all cursor-pointer bg-white border border-slate-100 hover:border-blue-300 active:scale-[0.98]"
-                style={{ cursor: "pointer" }}
-              >
-                <div className="d-flex align-items-center gap-3">
-                  <div
-                    className={`rounded-2xl d-flex align-items-center justify-content-center p-2.5 ${tool.gradient}`}
-                    style={{ width: 46, height: 46, fontSize: "1.35rem" }}
-                  >
-                    <i className={tool.iconClass}></i>
-                  </div>
-                  <div>
-                    <h6 className="fw-black text-slate-900 mb-0.5 small">{tool.title}</h6>
-                    <p className="text-slate-500 font-medium mb-0" style={{ fontSize: "10.5px" }}>{tool.desc}</p>
-                  </div>
-                </div>
-                <i className="bi bi-chevron-right text-slate-400 font-bold small"></i>
-              </div>
-            ))}
+    <div className="flex flex-col gap-3.5 pb-24 px-1 w-full max-w-full relative">
+      {/* TOAST NỔI */}
+      {toastMessage && (
+        <div 
+          className="fixed top-24 left-3 right-3 z-50 flex items-center justify-between p-3.5 rounded-2xl shadow-xl border animate-in slide-in-from-top duration-300 backdrop-blur-md"
+          style={{
+            backgroundColor: toastMessage.type === "error" ? "rgba(239, 68, 68, 0.95)" : "rgba(16, 185, 129, 0.95)",
+            color: "white",
+            borderColor: toastMessage.type === "error" ? "#f87171" : "#34d399",
+          }}
+        >
+          <div className="flex items-center gap-2.5 min-w-0 flex-1">
+            <span className="w-7 h-7 rounded-xl bg-white/20 flex items-center justify-center text-sm shrink-0">
+              <i className={`bi ${toastMessage.type === "error" ? "bi-exclamation-triangle-fill" : "bi-check2-circle"} text-base`}></i>
+            </span>
+            <span className="text-xs font-black truncate leading-snug">
+              {toastMessage.message}
+            </span>
           </div>
+          <button
+            onClick={() => setToastMessage(null)}
+            className="w-6 h-6 rounded-full bg-white/20 text-white flex items-center justify-center border-0 cursor-pointer shrink-0 ml-2"
+          >
+            ✕
+          </button>
+        </div>
+      )}
+
+      {/* Nguồn tài liệu học tập */}
+      <div className="card border-0 shadow-sm rounded-4 p-3 bg-white border border-slate-100">
+        <div className="flex items-center justify-between gap-2 mb-2.5">
+          <div className="flex items-center gap-2 min-w-0 flex-1">
+            <span className="w-7 h-7 rounded-xl bg-blue-100 text-[#0045ce] flex items-center justify-center font-bold text-sm shrink-0">
+              <i className="bi bi-folder2-open"></i>
+            </span>
+            <h6 className="font-black text-slate-900 m-0 text-xs sm:text-sm truncate">
+              Nguồn tài liệu học tập
+            </h6>
+          </div>
+
+          <label 
+            className="px-3 py-1.5 bg-[#0045ce] hover:bg-blue-700 text-white rounded-xl text-[11px] font-black border-0 cursor-pointer shadow-xs active:scale-95 transition flex items-center gap-1 shrink-0 m-0"
+          >
+            <i className="bi bi-plus-lg text-[10px]"></i>
+            <span>Tải tệp</span>
+            <input type="file" accept=".txt,.doc,.docx,.pdf" onChange={handleFileUpload} className="d-none" />
+          </label>
         </div>
 
-        {/* Lịch sử tác vụ AI */}
-        {visibleTasks.length > 0 && (
-          <div>
-            <div className="d-flex align-items-center justify-content-between mb-2.5 px-1">
-              <h6 className="fw-black text-slate-900 mb-0 d-flex align-items-center gap-2">
-                <i className="bi bi-clock-history text-blue-600"></i> Lịch sử tác vụ ({visibleTasks.length})
-              </h6>
-              <button
-                onClick={handleClearAllHistory}
-                className="btn btn-sm btn-outline-danger rounded-pill px-2.5 py-0.5 fw-bold"
-                style={{ fontSize: "11px" }}
-              >
-                Dọn dẹp lịch sử
-              </button>
-            </div>
-            <div className="d-flex flex-column gap-2">
-{visibleTasks.map((task) => {
-  const isDocType = task.featureId === "summary" || task.featureId === "translate";
+        {documents.length === 0 ? (
+          <div className="text-center py-4 border-2 border-dashed border-slate-200 rounded-3 bg-slate-50/60">
+            <i className="bi bi-cloud-arrow-up-fill text-2xl text-blue-500"></i>
+            <p className="small fw-bold text-slate-700 mt-1 mb-0">Chưa có tài liệu trong CSDL</p>
+            <p className="text-slate-400 small mb-0" style={{ fontSize: "10.5px" }}>Nhấn nút <b>Tải tệp</b> để chọn tài liệu ôn tập</p>
+          </div>
+        ) : (
+          <div className="d-flex flex-column gap-2 overflow-y-auto pr-0.5" style={{ maxHeight: 200 }}>
+            {documents.map((doc) => {
+              const isSelected = selectedDocId === doc.id;
 
-  // 👉 So sánh chính xác theo originTaskId hoặc ID doc riêng biệt
-  const isDocActuallyInDB = isDocType && allSavedDocs.some(
-    (d) => d.originTaskId === task.id || (d.id === `doc_${task.id}`)
-  );
-
-  // Chỉ hiện đã lưu nếu đúng task đó đã được lưu và file vẫn còn tồn tại
-  const isSavedBadge = isDocType 
-    ? (task.isDocSaved && isDocActuallyInDB) 
-    : task.isSaved;
-
-                return (
-                  <div
-                    key={task.id}
-                    onClick={() => openStudyView(task)}
-                    className={`card border shadow-sm rounded-4 p-3 d-flex flex-row align-items-center justify-content-between bg-white ${
-                      task.status === "done"
-                        ? "border-emerald-300 cursor-pointer"
-                        : task.status === "error"
-                        ? "border-rose-300"
-                        : "border-blue-300"
-                    }`}
-                    style={{ cursor: task.status === "done" ? "pointer" : "default" }}
-                  >
-                    <div className="d-flex align-items-center gap-3 overflow-hidden flex-grow-1 me-2">
-                      <div
-                        className="rounded-2xl d-flex align-items-center justify-content-center bg-slate-100"
-                        style={{ width: 38, height: 38 }}
-                      >
-                        {task.status === "loading" ? (
-                          <div className="spinner-border spinner-border-sm text-blue-600" role="status"></div>
-                        ) : task.status === "done" ? (
-                          <i className="bi bi-check-circle-fill text-emerald-600 fs-5"></i>
-                        ) : (
-                          <i className="bi bi-exclamation-circle-fill text-rose-600 fs-5"></i>
-                        )}
-                      </div>
-                      <div className="text-truncate">
-                        <p className="fw-black text-slate-900 mb-0 small text-truncate">
-                          {tools.find((t) => t.id === task.featureId)?.title}
-                        </p>
-                        <p className="text-slate-500 font-medium mb-0 text-truncate" style={{ fontSize: "11px" }}>
-                          {task.status === "loading"
-                            ? "Đang xử lý nội dung..."
-                            : task.status === "done"
-                            ? `Tạo lúc ${task.time} • ${
-                                isSavedBadge 
-                                  ? (isDocType ? "Đã lưu vào Tài liệu" : "Đã lưu vào Bài tập") 
-                                  : "Chưa lưu"
-                              }`
-                            : `Lỗi: ${task.errorMessage}`}
-                        </p>
-                      </div>
-                    </div>
-
-                    <div className="d-flex align-items-center gap-1.5" onClick={(e) => e.stopPropagation()}>
-                      {task.status === "done" && (
-                        <>
-                          {!isSavedBadge ? (
-                            <button
-                              onClick={(e) => handleSaveItem(e, task)}
-                              className={`btn btn-sm rounded-pill px-2.5 py-1 fw-bold text-nowrap d-flex align-items-center gap-1 shadow-xs border-0 ${
-                                isDocType ? "btn-warning text-slate-900 bg-amber-400 hover:bg-amber-500" : "btn-primary"
-                              }`}
-                              style={{ fontSize: "10.5px" }}
-                              title={isDocType ? "Lưu vào kho Tài liệu" : "Lưu vào kho Bài tập"}
-                            >
-                              <i className={`bi ${isDocType ? "bi-folder-plus" : "bi-bookmark-plus"}`}></i>
-                              <span>{isDocType ? "Lưu tài liệu" : "Lưu bài"}</span>
-                            </button>
-                          ) : (
-                            <span className="badge bg-success-subtle text-success border border-success-subtle rounded-pill px-2.5 py-1 fw-bold text-nowrap" style={{ fontSize: "10px" }}>
-                              ✓ Đã lưu
-                            </span>
-                          )}
-
-                          <span
-                            onClick={() => openStudyView(task)}
-                            className="badge bg-emerald-600 text-white rounded-pill px-2.5 py-1.5 fw-bold shadow-xs cursor-pointer text-nowrap"
-                            style={{ fontSize: "10.5px" }}
-                          >
-                            {isDocType ? "Xem nội dung →" : "Làm bài →"}
-                          </span>
-                        </>
+              return (
+                <div
+                  key={doc.id}
+                  onClick={() => setSelectedDocId(doc.id)}
+                  className={`d-flex align-items-center justify-content-between p-2.5 rounded-3 border transition-all ${
+                    isSelected
+                      ? "bg-blue-50/90 border-[#0045ce] shadow-xs"
+                      : "bg-slate-50 border-slate-200 hover:bg-slate-100"
+                  }`}
+                  style={{ cursor: "pointer" }}
+                >
+                  <div className="d-flex align-items-center gap-2 overflow-hidden flex-grow-1 me-2">
+                    <div className="text-[#0045ce] fs-5">
+                      {isSelected ? (
+                        <i className="bi bi-check-circle-fill"></i>
+                      ) : (
+                        <i className="bi bi-circle text-slate-400"></i>
                       )}
-                      <button
-                        onClick={(e) => handleDeleteTaskFromHistory(e, task.id)}
-                        className="btn btn-sm btn-link text-slate-400 hover-text-danger p-1 border-0"
-                        title="Xóa khỏi lịch sử tác vụ"
-                      >
-                        <i className="bi bi-x-lg"></i>
-                      </button>
+                    </div>
+                    <div className="text-truncate">
+                      <div className={`small fw-black text-truncate ${isSelected ? "text-[#0045ce]" : "text-slate-900"}`}>
+                        {doc.name}
+                      </div>
+                      <div className="text-slate-500 font-medium" style={{ fontSize: "10.5px" }}>
+                        {doc.size} • {doc.date || "Vừa cập nhật"}
+                      </div>
                     </div>
                   </div>
-                );
-              })}
-            </div>
+                  <button
+                    onClick={(e) => handleDeleteDoc(e, doc.id)}
+                    className="btn btn-sm text-slate-400 hover-text-danger p-1 border-0"
+                  >
+                    <i className="bi bi-x-lg"></i>
+                  </button>
+                </div>
+              );
+            })}
           </div>
         )}
       </div>
 
-      {/* MODAL TÙY CHỈNH TÁC VỤ AI (CHỐNG TRÀN FORM MOBILE) */}
+      {/* Khối chức năng tác vụ AI */}
+      <div>
+        <h6 className="fw-black text-slate-900 px-1 mb-2.5 d-flex align-items-center gap-2">
+          <span className="w-2 h-2 rounded-full bg-[#0045ce] animate-pulse"></span>
+          Chọn tác vụ xử lý AI
+        </h6>
+        <div className="d-flex flex-column gap-2">
+          {tools.map((tool) => (
+            <div
+              key={tool.id}
+              onClick={() => {
+                if (!selectedDocId) return showToast("Vui lòng tải lên và chọn tài liệu!", "error");
+                setConfigModal(tool.id);
+              }}
+              className="card border-0 shadow-xs rounded-4 p-3 d-flex flex-row align-items-center justify-content-between transition-all cursor-pointer bg-white border border-slate-100 hover:border-blue-300 active:scale-[0.99]"
+              style={{ cursor: "pointer" }}
+            >
+              <div className="d-flex align-items-center gap-3">
+                <div
+                  className={`rounded-2xl d-flex align-items-center justify-content-center p-2.5 ${tool.gradient}`}
+                  style={{ width: 44, height: 44, fontSize: "1.3rem" }}
+                >
+                  <i className={tool.iconClass}></i>
+                </div>
+                <div>
+                  <h6 className="fw-black text-slate-900 mb-0.5 small">{tool.title}</h6>
+                  <p className="text-slate-500 font-medium mb-0" style={{ fontSize: "10.5px" }}>{tool.desc}</p>
+                </div>
+              </div>
+              <i className="bi bi-chevron-right text-slate-400 font-bold small"></i>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {/* Lịch sử tác vụ AI */}
+      {visibleTasks.length > 0 && (
+        <div>
+          <div className="d-flex align-items-center justify-content-between mb-2 px-1">
+            <h6 className="fw-black text-slate-900 mb-0 d-flex align-items-center gap-1.5 text-xs">
+              <i className="bi bi-clock-history text-[#0045ce]"></i> Lịch sử tác vụ ({visibleTasks.length})
+            </h6>
+            <button
+              onClick={handleClearAllHistory}
+              className="btn btn-sm btn-outline-danger rounded-pill px-2.5 py-0.5 fw-bold"
+              style={{ fontSize: "10.5px" }}
+            >
+              Dọn dẹp lịch sử
+            </button>
+          </div>
+          <div className="d-flex flex-column gap-2">
+            {visibleTasks.map((task) => {
+              const isDocType = task.featureId === "summary" || task.featureId === "translate";
+              const isDocActuallyInDB = isDocType && allSavedDocs.some(
+                (d) => d.originTaskId === task.id || (d.id === `doc_${task.id}`)
+              );
+              const isSavedBadge = isDocType ? (task.isDocSaved && isDocActuallyInDB) : task.isSaved;
+
+              return (
+                <div
+                  key={task.id}
+                  onClick={() => openStudyView(task)}
+                  className={`card border shadow-xs rounded-4 p-2.5 d-flex flex-row align-items-center justify-content-between bg-white ${
+                    task.status === "done"
+                      ? "border-emerald-300 cursor-pointer"
+                      : task.status === "error"
+                      ? "border-rose-300"
+                      : "border-blue-300"
+                  }`}
+                  style={{ cursor: task.status === "done" ? "pointer" : "default" }}
+                >
+                  <div className="d-flex align-items-center gap-2.5 overflow-hidden flex-grow-1 me-2">
+                    <div
+                      className="rounded-xl d-flex align-items-center justify-content-center bg-slate-100"
+                      style={{ width: 36, height: 36 }}
+                    >
+                      {task.status === "loading" ? (
+                        <div className="spinner-border spinner-border-sm text-[#0045ce]" role="status"></div>
+                      ) : task.status === "done" ? (
+                        <i className="bi bi-check-circle-fill text-emerald-600 fs-5"></i>
+                      ) : (
+                        <i className="bi bi-exclamation-circle-fill text-rose-600 fs-5"></i>
+                      )}
+                    </div>
+                    <div className="text-truncate">
+                      <p className="fw-black text-slate-900 mb-0 small text-truncate">
+                        {tools.find((t) => t.id === task.featureId)?.title}
+                      </p>
+                      <p className="text-slate-500 font-medium mb-0 text-truncate" style={{ fontSize: "10.5px" }}>
+                        {task.status === "loading"
+                          ? "Đang xử lý nội dung..."
+                          : task.status === "done"
+                          ? `Tạo lúc ${task.time} • ${
+                              isSavedBadge 
+                                ? (isDocType ? "Đã lưu vào Tài liệu" : "Đã lưu vào Bài tập") 
+                                : "Chưa lưu"
+                            }`
+                          : `Lỗi: ${task.errorMessage}`}
+                      </p>
+                    </div>
+                  </div>
+
+                  <div className="d-flex align-items-center gap-1.5" onClick={(e) => e.stopPropagation()}>
+                    {task.status === "done" && (
+                      <>
+                        {!isSavedBadge ? (
+                          <button
+                            onClick={(e) => handleSaveItem(e, task)}
+                            className={`btn btn-sm rounded-pill px-2.5 py-1 fw-bold text-nowrap d-flex align-items-center gap-1 shadow-xs border-0 ${
+                              isDocType ? "btn-warning text-slate-900 bg-amber-400 hover:bg-amber-500" : "btn-primary bg-[#0045ce]"
+                            }`}
+                            style={{ fontSize: "10.5px" }}
+                          >
+                            <i className={`bi ${isDocType ? "bi-folder-plus" : "bi-bookmark-plus"}`}></i>
+                            <span>{isDocType ? "Lưu tài liệu" : "Lưu bài"}</span>
+                          </button>
+                        ) : (
+                          <span className="badge bg-success-subtle text-success border border-success-subtle rounded-pill px-2.5 py-1 fw-bold text-nowrap" style={{ fontSize: "10px" }}>
+                            ✓ Đã lưu
+                          </span>
+                        )}
+
+                        <span
+                          onClick={() => openStudyView(task)}
+                          className="badge bg-[#0045ce] text-white rounded-pill px-2.5 py-1.5 fw-bold shadow-xs cursor-pointer text-nowrap"
+                          style={{ fontSize: "10.5px" }}
+                        >
+                          {isDocType ? "Xem nội dung →" : "Làm bài →"}
+                        </span>
+                      </>
+                    )}
+                    <button
+                      onClick={(e) => handleDeleteTaskFromHistory(e, task.id)}
+                      className="btn btn-sm btn-link text-slate-400 hover-text-danger p-1 border-0"
+                      title="Xóa khỏi lịch sử"
+                    >
+                      <i className="bi bi-x-lg"></i>
+                    </button>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      {/* MODAL CẤU HÌNH TÁC VỤ AI */}
       {configModal && (
         <div
           className="fixed inset-0 bg-slate-900/60 backdrop-blur-xs flex items-end justify-center z-50 p-0"
           onClick={() => setConfigModal(null)}
         >
           <div
-            className="bg-white w-full max-w-[430px] rounded-t-[32px] p-4 shadow-2xl overflow-y-auto animate-in slide-in-from-bottom duration-200"
-            style={{ maxHeight: "85vh", paddingBottom: "30px" }}
+            className="bg-white w-full rounded-t-[32px] p-4 shadow-2xl overflow-y-auto animate-in slide-in-from-bottom duration-200"
+            style={{ maxHeight: "85vh", paddingBottom: "max(var(--sab, 0px), 28px)" }}
             onClick={(e) => e.stopPropagation()}
           >
             <div className="w-10 h-1 bg-slate-300 rounded-full mx-auto mb-3"></div>
@@ -1129,7 +1157,7 @@ const handleSaveItem = async (e, task) => {
                           onClick={() => setQuestionCount(num)}
                           className={`py-2 rounded-xl font-black text-xs border transition cursor-pointer ${
                             questionCount === num
-                              ? "bg-blue-600 text-white border-blue-600 shadow-sm"
+                              ? "bg-[#0045ce] text-white border-[#0045ce] shadow-sm"
                               : "bg-slate-50 text-slate-700 border-slate-200 hover:bg-slate-100"
                           }`}
                         >
@@ -1155,7 +1183,7 @@ const handleSaveItem = async (e, task) => {
                           onClick={() => setDifficulty(lvl.id)}
                           className={`py-2 px-1 rounded-xl border text-center transition cursor-pointer ${
                             difficulty === lvl.id
-                              ? "bg-blue-600 text-white border-blue-600 shadow-sm"
+                              ? "bg-[#0045ce] text-white border-[#0045ce] shadow-sm"
                               : "bg-slate-50 text-slate-700 border-slate-200 hover:bg-slate-100"
                           }`}
                         >
@@ -1184,7 +1212,7 @@ const handleSaveItem = async (e, task) => {
               <button
                 type="button"
                 onClick={() => handleStartTask(false)}
-                className="w-full py-3 bg-blue-600 hover:bg-blue-700 text-white font-black text-xs rounded-2xl shadow-md shadow-blue-500/25 mt-2 flex items-center justify-center gap-1.5 border-0 cursor-pointer active:scale-95 transition"
+                className="w-full py-3 bg-[#0045ce] hover:bg-blue-700 text-white font-black text-xs rounded-2xl shadow-md shadow-blue-500/25 mt-2 flex items-center justify-center gap-1.5 border-0 cursor-pointer active:scale-95 transition"
               >
                 <i className="bi bi-stars"></i>
                 <span>Chạy ngầm & Bắt đầu</span>

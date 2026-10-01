@@ -1,3 +1,4 @@
+// src/components/BottomBar.jsx
 import React from "react";
 
 export const BottomBar = ({ activeTab, setActiveTab }) => {
@@ -51,7 +52,10 @@ export const BottomBar = ({ activeTab, setActiveTab }) => {
   ];
 
   return (
-    <nav className="fixed bottom-0 left-0 right-0 max-w-[420px] mx-auto bg-white/95 backdrop-blur-xl border-t border-slate-200/80 px-2 py-2 flex justify-between items-center z-40 select-none shadow-[0_-8px_25px_rgba(0,82,255,0.07)]">
+    <nav 
+      className="fixed bottom-0 left-0 right-0 w-full bg-white/95 backdrop-blur-xl border-t border-slate-200/80 px-2 pt-1.5 flex justify-between items-center z-40 select-none shadow-[0_-8px_25px_rgba(0,69,206,0.07)]"
+      style={{ paddingBottom: "max(var(--sab, 0px), 8px)" }}
+    >
       {tabs.map((tab) => {
         const isActive = activeTab === tab.id;
         return (
@@ -63,8 +67,8 @@ export const BottomBar = ({ activeTab, setActiveTab }) => {
             <div
               className={`flex flex-col items-center justify-center py-1.5 px-3 rounded-2xl transition-all duration-200 ease-out ${
                 isActive
-                  ? "bg-gradient-to-r from-[#0052FF] to-[#2563EB] text-white font-extrabold shadow-md shadow-blue-500/30 scale-105"
-                  : "text-slate-500 font-semibold hover:text-[#0052FF]"
+                  ? "bg-[#0045ce] text-white font-extrabold shadow-md shadow-blue-600/30 scale-105"
+                  : "text-slate-500 font-semibold hover:text-[#0045ce]"
               }`}
             >
               <span className={`transition-transform duration-200 ${isActive ? "scale-110 drop-shadow-xs" : "scale-100"}`}>

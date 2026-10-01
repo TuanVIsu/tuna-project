@@ -20,6 +20,15 @@ export const TimelinePage = ({ onBack, onNavigateToTasks, onNavigateToDocs, onOp
   const [isWrrGenerating, setIsWrrGenerating] = useState(false);
   const [calculatedWeights, setCalculatedWeights] = useState([]);
 
+  // Toast Notification hiện đại thay thế cho alert()
+  const [toastMessage, setToastMessage] = useState(null);
+  const showToast = (message, type = "success") => {
+    setToastMessage({ message, type });
+    setTimeout(() => {
+      setToastMessage(null);
+    }, 3200);
+  };
+
   const [showItemModal, setShowItemModal] = useState(false);
   const [editingItem, setEditingItem] = useState(null);
   const [formData, setFormData] = useState({
@@ -106,14 +115,14 @@ export const TimelinePage = ({ onBack, onNavigateToTasks, onNavigateToDocs, onOp
       if (data.success) {
         setCalculatedWeights(data.weights || []);
         if (!isAuto) {
-          alert("✅ Đã tối ưu lịch tự động theo thuật toán Vòng tròn trọng số (WRR)!");
+          showToast("Đã tối ưu hóa lịch tự học theo thuật toán WRR!", "success");
         }
         fetchTimelines();
       } else if (!isAuto) {
-        alert("Lỗi: " + (data.error || "Không thể tạo lịch"));
+        showToast(data.error || "Không thể tạo lịch trình", "error");
       }
     } catch (e) {
-      if (!isAuto) alert("Không thể kết nối máy chủ để chạy thuật toán!");
+      if (!isAuto) showToast("Không thể kết nối máy chủ để chạy thuật toán!", "error");
     } finally {
       setIsWrrGenerating(false);
     }
@@ -159,6 +168,7 @@ export const TimelinePage = ({ onBack, onNavigateToTasks, onNavigateToDocs, onOp
         const data = await res.json();
         if (data.success) {
           setDbTimelines((prev) => prev.map((item) => (item.id === editingItem.id ? data.data : item)));
+          showToast("Cập nhật mục lịch trình thành công!");
         }
       } else {
         const res = await fetch(`${API_BASE}/timelines`, {
@@ -175,12 +185,13 @@ export const TimelinePage = ({ onBack, onNavigateToTasks, onNavigateToDocs, onOp
         const data = await res.json();
         if (data.success) {
           setDbTimelines((prev) => [...prev, data.data]);
+          showToast("Thêm mục lịch trình mới thành công!");
         }
       }
       setShowItemModal(false);
       setEditingItem(null);
     } catch (err) {
-      alert("Lỗi khi lưu lịch trình!");
+      showToast("Lỗi khi lưu lịch trình!", "error");
     }
   };
 
@@ -193,9 +204,10 @@ export const TimelinePage = ({ onBack, onNavigateToTasks, onNavigateToDocs, onOp
       const data = await res.json();
       if (data.success) {
         setDbTimelines((prev) => prev.filter((item) => item.id !== id));
+        showToast("Đã xóa mục khỏi lịch trình!");
       }
     } catch (err) {
-      alert("Lỗi khi xóa mục lịch trình!");
+      showToast("Lỗi khi xóa mục lịch trình!", "error");
     }
   };
 
@@ -265,9 +277,40 @@ export const TimelinePage = ({ onBack, onNavigateToTasks, onNavigateToDocs, onOp
     : "Khá / Giỏi (GPA 3.2+)";
 
   return (
-    <div className="flex flex-col min-h-screen bg-[#F8FAFC] pb-24 text-slate-800 antialiased">
-      {/* 1. Header Hero */}
-      <div className="bg-gradient-to-br from-blue-700 via-indigo-700 to-slate-900 text-white p-4 pt-3 pb-7 rounded-b-[36px] shadow-lg relative overflow-hidden">
+    <div className="flex flex-col min-h-screen bg-[#F8FAFC] pb-24 text-slate-800 antialiased w-full relative">
+      {/* TOAST THÔNG BÁO HIỆN ĐẠI (TỰ BIẾN MẤT - KHÔNG CHẶN MÀN HÌNH) */}
+      {toastMessage && (
+        <div 
+          className="fixed top-24 left-3 right-3 z-50 flex items-center justify-between p-3.5 rounded-2xl shadow-xl border animate-in slide-in-from-top duration-300 backdrop-blur-md"
+          style={{
+            backgroundColor: toastMessage.type === "error" ? "rgba(239, 68, 68, 0.95)" : "rgba(16, 185, 129, 0.95)",
+            color: "white",
+            borderColor: toastMessage.type === "error" ? "#f87171" : "#34d399",
+          }}
+        >
+          <div className="flex items-center gap-2.5 min-w-0 flex-1">
+            <span className="w-7 h-7 rounded-xl bg-white/20 flex items-center justify-center text-sm shrink-0">
+              <i className={`bi ${toastMessage.type === "error" ? "bi-exclamation-triangle-fill" : "bi-check2-circle"} text-base`}></i>
+            </span>
+            <span className="text-xs font-black truncate leading-snug">
+              {toastMessage.message}
+            </span>
+          </div>
+
+          <button
+            onClick={() => setToastMessage(null)}
+            className="w-6 h-6 rounded-full bg-white/20 text-white flex items-center justify-center border-0 cursor-pointer shrink-0 ml-2"
+          >
+            ✕
+          </button>
+        </div>
+      )}
+
+      {/* 1. Header Hero (Đã căn đệm an toàn né tai thỏ / Dynamic Island) */}
+      <div 
+        className="bg-gradient-to-br from-[#0045ce] via-blue-700 to-slate-900 text-white p-4 pb-7 rounded-b-[36px] shadow-lg relative overflow-hidden"
+        style={{ paddingTop: "max(var(--sat, 0px), 16px)" }}
+      >
         <div className="absolute -top-16 -right-16 w-48 h-48 bg-blue-400/15 rounded-full blur-3xl pointer-events-none"></div>
 
         <div className="flex items-center justify-between relative z-10 mb-3.5">
@@ -281,16 +324,16 @@ export const TimelinePage = ({ onBack, onNavigateToTasks, onNavigateToDocs, onOp
           <div className="flex items-center gap-1.5">
             <button
               onClick={handleOpenAdd}
-              className="px-3 py-1.5 bg-white text-blue-800 rounded-xl text-[11px] font-black shadow-sm active:scale-95 transition border-0 cursor-pointer flex items-center gap-1 hover:bg-blue-50"
+              className="px-3 py-1.5 bg-white text-blue-900 rounded-xl text-[11px] font-black shadow-xs active:scale-95 transition border-0 cursor-pointer flex items-center gap-1 hover:bg-blue-50"
             >
-              <i className="bi bi-plus-circle-fill text-blue-600 text-xs"></i>
+              <i className="bi bi-plus-circle-fill text-[#0045ce] text-xs"></i>
               <span>Thêm lịch</span>
             </button>
 
             <button
               onClick={() => handleTriggerWRRPlan(false)}
               disabled={isWrrGenerating}
-              className="px-3.5 py-1.5 bg-emerald-500 hover:bg-emerald-600 text-white rounded-xl text-[11px] font-black shadow-sm active:scale-95 transition border-0 cursor-pointer flex items-center gap-1"
+              className="px-3.5 py-1.5 bg-emerald-500 hover:bg-emerald-600 text-white rounded-xl text-[11px] font-black shadow-xs active:scale-95 transition border-0 cursor-pointer flex items-center gap-1"
             >
               {isWrrGenerating ? (
                 <span className="spinner-border spinner-border-sm text-[10px]"></span>
@@ -333,7 +376,7 @@ export const TimelinePage = ({ onBack, onNavigateToTasks, onNavigateToDocs, onOp
             >
               <i className="bi bi-chevron-left text-[11px]"></i>
             </button>
-            <span className="flex items-center gap-1.5 bg-blue-50 text-blue-800 font-extrabold px-3 py-0.5 rounded-full text-[10.5px]">
+            <span className="flex items-center gap-1.5 bg-blue-50 text-[#0045ce] font-extrabold px-3 py-0.5 rounded-full text-[10.5px]">
               <i className="bi bi-calendar-range text-[10px]"></i>
               {startDateStr.split("-").reverse().slice(0, 2).join("/")} – {endDateStr.split("-").reverse().slice(0, 2).join("/")}
             </span>
@@ -358,9 +401,9 @@ export const TimelinePage = ({ onBack, onNavigateToTasks, onNavigateToDocs, onOp
                   onClick={() => setSelectedDayKey(dKey)}
                   className={`py-2 rounded-2xl transition-all cursor-pointer flex flex-col items-center justify-center ${
                     isSelected
-                      ? "bg-blue-600 text-white shadow-md shadow-blue-500/25"
+                      ? "bg-[#0045ce] text-white shadow-md shadow-blue-500/25"
                       : isToday
-                      ? "bg-blue-50 text-blue-700 border border-blue-200"
+                      ? "bg-blue-50 text-[#0045ce] border border-blue-200"
                       : "hover:bg-slate-100 text-slate-700"
                   }`}
                 >
@@ -369,7 +412,7 @@ export const TimelinePage = ({ onBack, onNavigateToTasks, onNavigateToDocs, onOp
                   </span>
                   <span className="text-[13px] font-black leading-none">{d.getDate()}</span>
                   {isToday && !isSelected && (
-                    <span className="w-1 h-1 rounded-full bg-blue-600 mt-1"></span>
+                    <span className="w-1 h-1 rounded-full bg-[#0045ce] mt-1"></span>
                   )}
                 </div>
               );
@@ -377,7 +420,7 @@ export const TimelinePage = ({ onBack, onNavigateToTasks, onNavigateToDocs, onOp
           </div>
         </div>
 
-        {/* Trọng số WRR rút gọn */}
+        {/* Trọng số WRR */}
         {calculatedWeights.length > 0 && (
           <div className="bg-white rounded-2xl p-2.5 border border-slate-200/80 shadow-2xs">
             <span className="text-[10px] font-black text-slate-600 flex items-center gap-1 mb-1.5 px-0.5">
@@ -420,7 +463,7 @@ export const TimelinePage = ({ onBack, onNavigateToTasks, onNavigateToDocs, onOp
 
         {loading ? (
           <div className="py-12 text-center text-xs font-bold text-slate-400">
-            <span className="spinner-border spinner-border-sm text-blue-600 me-2"></span>
+            <span className="spinner-border spinner-border-sm text-[#0045ce] me-2"></span>
             Đang tải lịch trình...
           </div>
         ) : dayScheduleData.totalCount === 0 ? (
@@ -443,7 +486,7 @@ export const TimelinePage = ({ onBack, onNavigateToTasks, onNavigateToDocs, onOp
           </div>
         ) : (
           <div className="space-y-3.5">
-            {/* 3.1 Lớp học chính khóa */}
+            {/* Lớp chính khóa */}
             {dayScheduleData.classes.length > 0 && (
               <div className="space-y-2">
                 <span className="text-[10px] font-black text-blue-700 tracking-wider uppercase px-1 flex items-center gap-1">
@@ -454,11 +497,11 @@ export const TimelinePage = ({ onBack, onNavigateToTasks, onNavigateToDocs, onOp
                   <div
                     key={item.id}
                     onClick={onOpenScheduleModal}
-                    className="bg-white rounded-2xl p-3.5 shadow-xs border border-slate-200/80 border-l-[4px] border-l-blue-600 hover:border-blue-300 transition cursor-pointer flex items-center justify-between"
+                    className="bg-white rounded-2xl p-3.5 shadow-xs border border-slate-200/80 border-l-[4px] border-l-[#0045ce] hover:border-blue-300 transition cursor-pointer flex items-center justify-between"
                   >
                     <div className="space-y-1">
                       <div className="flex items-center gap-2">
-                        <span className="px-2 py-0.5 bg-blue-50 text-blue-700 font-extrabold text-[9.5px] rounded-md border border-blue-200/60">
+                        <span className="px-2 py-0.5 bg-blue-50 text-[#0045ce] font-extrabold text-[9.5px] rounded-md border border-blue-200/60">
                           {item.category === "exam" ? "Lịch thi" : "Chính khóa"}
                         </span>
                         <span className="text-[11px] font-bold text-slate-500">
@@ -478,7 +521,7 @@ export const TimelinePage = ({ onBack, onNavigateToTasks, onNavigateToDocs, onOp
               </div>
             )}
 
-            {/* 3.2 Ca tự học WRR */}
+            {/* Ca tự học WRR */}
             {dayScheduleData.tasks.length > 0 && (
               <div className="space-y-2">
                 <span className="text-[10px] font-black text-indigo-700 tracking-wider uppercase px-1 flex items-center gap-1">
@@ -497,7 +540,6 @@ export const TimelinePage = ({ onBack, onNavigateToTasks, onNavigateToDocs, onOp
                         isDone ? "border-l-emerald-500" : isDoc ? "border-l-amber-500" : "border-l-indigo-600"
                       } hover:border-indigo-300 transition cursor-pointer flex flex-col gap-2.5`}
                     >
-                      {/* Dòng 1: Badge loại bài tập + Thời gian */}
                       <div className="flex items-center gap-2 flex-wrap">
                         <span
                           className={`px-2 py-0.5 font-black text-[10px] rounded-md border whitespace-nowrap inline-flex items-center shrink-0 leading-none ${
@@ -524,7 +566,6 @@ export const TimelinePage = ({ onBack, onNavigateToTasks, onNavigateToDocs, onOp
                         </span>
                       </div>
 
-                      {/* Dòng 2: Tiêu đề và Mô tả */}
                       <div>
                         <h5 className="font-black text-[13.5px] text-slate-900 m-0 leading-snug">
                           {task.title}
@@ -534,7 +575,6 @@ export const TimelinePage = ({ onBack, onNavigateToTasks, onNavigateToDocs, onOp
                         </p>
                       </div>
 
-                      {/* Dòng 3: Footer chứa nút Thao tác */}
                       <div className="flex items-center justify-between pt-2 border-t border-slate-100" onClick={(e) => e.stopPropagation()}>
                         <span className="text-[10px] font-bold text-slate-400 truncate max-w-[170px]">
                           {task.subject}
@@ -543,7 +583,7 @@ export const TimelinePage = ({ onBack, onNavigateToTasks, onNavigateToDocs, onOp
                         <div className="flex items-center gap-1.5 shrink-0">
                           <button
                             onClick={(e) => handleOpenEdit(e, task)}
-                            className="w-7 h-7 rounded-lg bg-slate-100 hover:bg-blue-50 text-slate-500 hover:text-blue-600 flex items-center justify-center text-xs transition border-0 cursor-pointer"
+                            className="w-7 h-7 rounded-lg bg-slate-100 hover:bg-blue-50 text-slate-500 hover:text-[#0045ce] flex items-center justify-center text-xs transition border-0 cursor-pointer"
                             title="Sửa"
                           >
                             <i className="bi bi-pencil-square"></i>
@@ -580,10 +620,10 @@ export const TimelinePage = ({ onBack, onNavigateToTasks, onNavigateToDocs, onOp
         )}
       </div>
 
-      {/* MODAL THÊM / SỬA */}
+      {/* MODAL THÊM / SỬA LỊCH TRÌNH */}
       {showItemModal && (
-        <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-xs flex items-center justify-center z-50 p-4">
-          <div className="bg-white rounded-3xl p-5 w-full max-w-sm shadow-2xl border border-slate-100">
+        <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-xs flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-3xl p-5 w-full max-w-sm shadow-2xl border border-slate-100 animate-in zoom-in-95 duration-150">
             <div className="flex items-center justify-between mb-3 border-b pb-2">
               <h4 className="font-black text-sm text-slate-900 m-0">
                 {editingItem ? "Chỉnh Sửa Lịch Trình" : "Thêm Lịch Trình Mới"}
@@ -605,7 +645,7 @@ export const TimelinePage = ({ onBack, onNavigateToTasks, onNavigateToDocs, onOp
                   value={formData.title}
                   onChange={(e) => setFormData({ ...formData, title: e.target.value })}
                   placeholder="Ví dụ: Ôn tập 5 câu trắc nghiệm..."
-                  className="w-full px-3 py-2 rounded-xl border border-slate-200 focus:outline-blue-600 text-xs"
+                  className="w-full px-3 py-2 rounded-xl border border-slate-200 focus:outline-[#0045ce] text-xs font-semibold"
                 />
               </div>
 
@@ -617,7 +657,7 @@ export const TimelinePage = ({ onBack, onNavigateToTasks, onNavigateToDocs, onOp
                     value={formData.timeSlot}
                     onChange={(e) => setFormData({ ...formData, timeSlot: e.target.value })}
                     placeholder="19:30 - 20:15"
-                    className="w-full px-3 py-2 rounded-xl border border-slate-200 focus:outline-blue-600 text-xs"
+                    className="w-full px-3 py-2 rounded-xl border border-slate-200 focus:outline-[#0045ce] text-xs font-semibold"
                   />
                 </div>
                 <div>
@@ -626,7 +666,7 @@ export const TimelinePage = ({ onBack, onNavigateToTasks, onNavigateToDocs, onOp
                     type="number"
                     value={formData.durationMinutes}
                     onChange={(e) => setFormData({ ...formData, durationMinutes: e.target.value })}
-                    className="w-full px-3 py-2 rounded-xl border border-slate-200 focus:outline-blue-600 text-xs"
+                    className="w-full px-3 py-2 rounded-xl border border-slate-200 focus:outline-[#0045ce] text-xs font-semibold"
                   />
                 </div>
               </div>
@@ -636,7 +676,7 @@ export const TimelinePage = ({ onBack, onNavigateToTasks, onNavigateToDocs, onOp
                 <select
                   value={formData.taskType}
                   onChange={(e) => setFormData({ ...formData, taskType: e.target.value })}
-                  className="w-full px-3 py-2 rounded-xl border border-slate-200 focus:outline-blue-600 text-xs bg-white"
+                  className="w-full px-3 py-2 rounded-xl border border-slate-200 focus:outline-[#0045ce] text-xs bg-white font-semibold"
                 >
                   <option value="quiz">Trắc nghiệm (Quiz)</option>
                   <option value="flashcard">Thẻ ghi nhớ (Flashcard)</option>
@@ -651,7 +691,7 @@ export const TimelinePage = ({ onBack, onNavigateToTasks, onNavigateToDocs, onOp
                   value={formData.description}
                   onChange={(e) => setFormData({ ...formData, description: e.target.value })}
                   placeholder="Ghi chú kiến thức hoặc mục tiêu..."
-                  className="w-full px-3 py-2 rounded-xl border border-slate-200 focus:outline-blue-600 text-xs"
+                  className="w-full px-3 py-2 rounded-xl border border-slate-200 focus:outline-[#0045ce] text-xs font-semibold"
                 />
               </div>
 
@@ -659,13 +699,13 @@ export const TimelinePage = ({ onBack, onNavigateToTasks, onNavigateToDocs, onOp
                 <button
                   type="button"
                   onClick={() => setShowItemModal(false)}
-                  className="flex-1 py-2 rounded-xl bg-slate-100 text-slate-600 font-bold border-0 cursor-pointer"
+                  className="flex-1 py-2.5 rounded-xl bg-slate-100 text-slate-600 font-bold border-0 cursor-pointer"
                 >
                   Hủy
                 </button>
                 <button
                   type="submit"
-                  className="flex-1 py-2 rounded-xl bg-blue-600 text-white font-bold border-0 cursor-pointer shadow-sm active:scale-95 transition"
+                  className="flex-1 py-2.5 rounded-xl bg-[#0045ce] text-white font-bold border-0 cursor-pointer shadow-xs active:scale-95 transition"
                 >
                   {editingItem ? "Lưu thay đổi" : "Thêm ngay"}
                 </button>

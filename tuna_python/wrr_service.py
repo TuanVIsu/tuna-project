@@ -5,6 +5,21 @@ from flask_cors import CORS
 app = Flask(__name__)
 CORS(app)
 
+# 1. Route kiểm tra trạng thái dịch vụ (Dùng cho Uptime Monitor chống ngủ)
+@app.route("/", methods=["GET"])
+def root_endpoint():
+    return jsonify({
+        "status": "online",
+        "service": "TUNA WRR Python Microservice"
+    }), 200
+
+@app.route("/health", methods=["GET"])
+def health_check():
+    return jsonify({
+        "status": "healthy",
+        "service": "wrr_service"
+    }), 200
+
 def smooth_weighted_round_robin(items, total_slots=28):
     if not items:
         return []
