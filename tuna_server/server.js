@@ -83,10 +83,19 @@ app.get('/', (req, res) => {
 </html>`);
 });
 
-// Giữ lại route xác thực file tĩnh dự phòng
+// Route xác thực file tĩnh dự phòng cho Zalo
 app.get('/zalo_verifierP-IV4eNt3abC-gXHi-qJRsJ-jbY8Y6m1E34s.html', (req, res) => {
   res.setHeader('Content-Type', 'text/html; charset=utf-8');
   res.send('zalo-platform-site-verification: P-IV4eNt3abC-gXHi-qJRsJ-jbY8Y6m1E34s.html');
+});
+
+// Route tiếp nhận Webhook từ Zalo Mini App / Open API
+app.post('/api/webhook/zalo', (req, res) => {
+  const eventData = req.body;
+  console.log('📬 Nhận sự kiện Webhook từ Zalo:', JSON.stringify(eventData, null, 2));
+  
+  // Trả về HTTP 200 để xác nhận Webhook URL hoạt động tốt
+  res.status(200).json({ success: true, message: 'Webhook received' });
 });
 
 // Tạo và phục vụ thư mục uploads tĩnh
