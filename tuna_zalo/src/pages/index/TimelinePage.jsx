@@ -1,7 +1,7 @@
 // tuna_zalo/src/pages/index/TimelinePage.jsx
 import React, { useState, useEffect, useMemo, useCallback } from "react";
 
-const API_BASE = "http://localhost:5000/api";
+const API_BASE = "https://tuna-project.onrender.com/api";
 
 export const TimelinePage = ({ onBack, onNavigateToTasks, onNavigateToDocs, onOpenScheduleModal }) => {
   const getLocalDateString = (d = new Date()) => {

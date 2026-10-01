@@ -1,7 +1,7 @@
 // src/components/NotificationModal.jsx
 import React, { useState, useEffect, useMemo, useCallback } from "react";
 
-const API_BASE = "http://localhost:5000/api";
+const API_BASE = "https://tuna-project.onrender.com/api";
 
 export const NotificationModal = ({ isOpen, onClose, onNavigate }) => {
   const [notifications, setNotifications] = useState([]);

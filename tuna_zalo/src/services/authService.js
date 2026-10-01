@@ -1,95 +1,95 @@
 // tuna_zalo/src/services/authService.js
 import * as zmp from "zmp-sdk";
 
-const isLocalhost =
-  typeof window !== "undefined" &&
-  (window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1");
+const API_BASE = "https://tuna-project.onrender.com/api";
 
-const API_BASE = isLocalhost
-  ? "http://localhost:5000/api"
-  : "https://clean-places-taste.loca.lt/api";
+// Hàm lấy user hiện tại đã lưu hoặc dữ liệu mặc định ban đầu
+export const getInitialUser = () => {
+  try {
+    const saved = localStorage.getItem("tuna_current_user") || localStorage.getItem("user_info");
+    if (saved) return JSON.parse(saved);
+  } catch (e) {
+    console.warn("Không đọc được cache user:", e);
+  }
 
+  return {
+    id: 1,
+    zalo_id: "zalo_dev_2311052",
+    name: "Minh",
+    avatar: "https://ui-avatars.com/api/?name=Nguyen+Minh+Tuan&background=0052FF&color=fff",
+    student_code: "B2300001",
+    class_name: "HTTT2311",
+    role: "student",
+  };
+};
+
+// Hàm đăng nhập thực thụ (gắn vào sự kiện Click của người dùng)
 export const handleZaloLogin = async () => {
+  const sdk = zmp.default || zmp;
   let zaloId = "zalo_dev_2311052";
-  let name = "Nguyễn Minh Tuấn";
+  let name = "Minh";
   let avatar = "https://ui-avatars.com/api/?name=Nguyen+Minh+Tuan&background=0052FF&color=fff";
   let accessToken = "dev_mock_access_token";
 
-  // 1. Thử gọi SDK Zalo an toàn (bắt mọi lỗi crash của getInstance)
-  try {
-    const sdk = zmp.default || zmp;
-    if (sdk && typeof sdk.getAccessToken === "function") {
-      try {
-        if (typeof sdk.authorize === "function") {
-          await sdk.authorize({ scopes: ["scope.userInfo"] });
+  if (sdk) {
+    try {
+      // 1. Cấp quyền
+      if (typeof sdk.authorize === "function") {
+        await sdk.authorize({ scopes: ["scope.userInfo"] });
+      }
+
+      // 2. Lấy UserInfo
+      if (typeof sdk.getUserInfo === "function") {
+        const resInfo = await sdk.getUserInfo({ avatarType: "normal" });
+        if (resInfo?.userInfo) {
+          zaloId = resInfo.userInfo.id || zaloId;
+          name = resInfo.userInfo.name || name;
+          avatar = resInfo.userInfo.avatar || avatar;
         }
+      }
+
+      // 3. Lấy AccessToken
+      if (typeof sdk.getAccessToken === "function") {
         const token = await sdk.getAccessToken();
         if (token) accessToken = token;
-
-        if (typeof sdk.getUserInfo === "function") {
-          const resInfo = await sdk.getUserInfo({ avatarType: "normal" });
-          if (resInfo && resInfo.userInfo) {
-            zaloId = resInfo.userInfo.id;
-            name = resInfo.userInfo.name;
-            avatar = resInfo.userInfo.avatar;
-          }
-        }
-      } catch (innerSdkErr) {
-        console.warn("⚠️ Môi trường Web không hỗ trợ Zalo SDK native (-2001), chuyển sang tài khoản Dev:", innerSdkErr.message);
       }
+    } catch (err) {
+      console.warn("Người dùng hủy hoặc Zalo SDK từ chối:", err.message);
     }
-  } catch (e) {
-    console.warn("Bỏ qua SDK Zalo trên Web Dev.");
   }
 
-  // 2. Gửi thông tin về Backend xác thực
+  // Gửi về backend Render
   try {
     const res = await fetch(`${API_BASE}/auth/zalo-login`, {
       method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "bypass-tunnel-reminder": "true",
-      },
+      headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ accessToken, zaloId, name, avatar }),
     });
 
     if (res.ok) {
       const data = await res.json();
       if (data.success && data.user) {
-        localStorage.setItem("user_token", data.token);
-        localStorage.setItem("user_role", data.user.role || "student");
-        localStorage.setItem("user_info", JSON.stringify(data.user));
-        localStorage.setItem("user", JSON.stringify(data.user));
+        localStorage.setItem("user_token", data.token || "mock_token");
+        localStorage.setItem("tuna_current_user", JSON.stringify(data.user));
         return data.user;
       }
     }
-  } catch (fetchErr) {
-    console.warn("Không kết nối được API auth backend, sử dụng mock cục bộ:", fetchErr.message);
+  } catch (apiErr) {
+    console.warn("Backend Render chưa phản hồi, giữ dữ liệu hiện tại:", apiErr.message);
   }
 
-  // 3. Fallback cục bộ đảm bảo không bao giờ bị đứng xoay loading trên trình duyệt
-  const fallbackUser = {
+  const finalUser = {
     id: 1,
     zalo_id: zaloId,
     name: name,
     avatar: avatar,
     student_code: "B2300001",
     class_name: "HTTT2311",
-    faculty: "Hệ Thống Thông Tin",
     role: "student",
   };
-  localStorage.setItem("user_token", "dev_mock_token");
-  localStorage.setItem("user_role", "student");
-  localStorage.setItem("user_info", JSON.stringify(fallbackUser));
-  localStorage.setItem("user", JSON.stringify(fallbackUser));
-  return fallbackUser;
+
+  localStorage.setItem("tuna_current_user", JSON.stringify(finalUser));
+  return finalUser;
 };
 
-export const getCurrentUser = () => {
-  try {
-    const local = localStorage.getItem("user_info") || localStorage.getItem("user");
-    return local ? JSON.parse(local) : null;
-  } catch (e) {
-    return null;
-  }
-};
+export const getCurrentUser = () => getInitialUser();

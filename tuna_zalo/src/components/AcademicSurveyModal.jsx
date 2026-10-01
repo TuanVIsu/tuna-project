@@ -6,7 +6,7 @@ const isLocalhost =
   (window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1");
 
 const API_BASE = isLocalhost
-  ? "http://localhost:5000/api"
+  ? "https://tuna-project.onrender.com/api"
   : "https://clean-places-taste.loca.lt/api";
 
 export const AcademicSurveyModal = ({ isOpen, onSave, onDismiss }) => {

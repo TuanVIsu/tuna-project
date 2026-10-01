@@ -2,7 +2,7 @@
 import React, { useState, useEffect, useMemo, useCallback } from "react";
 import { fetchTasksFromDB, saveTaskToDB } from "../../services/aiService";
 
-const API_BASE = "http://localhost:5000/api";
+const API_BASE = "https://tuna-project.onrender.com/api";
 const ITEMS_PER_PAGE = 5;
 
 const shuffleQuizCompletely = (questions) => {

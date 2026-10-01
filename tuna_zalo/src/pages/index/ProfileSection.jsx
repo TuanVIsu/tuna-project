@@ -2,7 +2,7 @@
 import React, { useState, useEffect, useMemo, useCallback } from "react";
 import { handleZaloLogin, getCurrentUser } from "../../services/authService";
 
-const API_BASE = "http://localhost:5000/api";
+const API_BASE = "https://tuna-project.onrender.com/api";
 
 export const ProfileSection = ({ currentUser: initialUser }) => {
   const [user, setUser] = useState(initialUser || getCurrentUser());

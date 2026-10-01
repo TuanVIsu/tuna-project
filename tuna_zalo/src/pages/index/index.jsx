@@ -11,30 +11,20 @@ import { ProfileSection } from "./ProfileSection";
 import { StreakLeaderboardSection } from "./StreakLeaderboardSection";
 import { ScheduleModal } from "../../components/ScheduleModal";
 import { LibraryModal } from "../../components/LibraryModal";
-import { handleZaloLogin } from "../../services/authService";
+import { getInitialUser } from "../../services/authService";
 
 export default function IndexPage() {
   const [activeTab, setActiveTab] = useState("home");
-  const [currentUser, setCurrentUser] = useState(null);
+  const [currentUser, setCurrentUser] = useState(() => getInitialUser());
   const [showSchedule, setShowSchedule] = useState(false);
   const [showLibrary, setShowLibrary] = useState(false);
   const [academicProfile, setAcademicProfile] = useState(null);
 
   useEffect(() => {
-    const initAuth = async () => {
-      try {
-        const user = await handleZaloLogin();
-        if (user) setCurrentUser(user);
-      } catch (err) {
-        console.error("Lỗi đăng nhập:", err);
-      }
-    };
-    initAuth();
-
     try {
-      const saved = localStorage.getItem("user_academic_profile");
-      if (saved && saved !== "undefined") {
-        setAcademicProfile(JSON.parse(saved));
+      const savedProfile = localStorage.getItem("user_academic_profile");
+      if (savedProfile && savedProfile !== "undefined") {
+        setAcademicProfile(JSON.parse(savedProfile));
       }
     } catch (e) {
       console.error("Lỗi đọc dữ liệu học tập:", e);
@@ -58,12 +48,7 @@ export default function IndexPage() {
   const renderContent = () => {
     switch (activeTab) {
       case "home":
-        return (
-          <HomeSection
-            currentUser={currentUser}
-            onNavigate={handleNavigate}
-          />
-        );
+        return <HomeSection currentUser={currentUser} onNavigate={handleNavigate} />;
       case "streak":
         return (
           <StreakLeaderboardSection
@@ -91,12 +76,7 @@ export default function IndexPage() {
       case "profile":
         return <ProfileSection currentUser={currentUser} />;
       default:
-        return (
-          <HomeSection
-            currentUser={currentUser}
-            onNavigate={handleNavigate}
-          />
-        );
+        return <HomeSection currentUser={currentUser} onNavigate={handleNavigate} />;
     }
   };
 
@@ -106,13 +86,11 @@ export default function IndexPage() {
         {renderContent()}
       </div>
 
-      {/* Modal Lịch học */}
       <ScheduleModal
         isOpen={showSchedule}
         onClose={() => setShowSchedule(false)}
       />
 
-      {/* Modal Thư viện Admin & Video */}
       <LibraryModal
         isOpen={showLibrary}
         onClose={() => setShowLibrary(false)}

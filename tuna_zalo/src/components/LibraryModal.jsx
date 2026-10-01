@@ -2,7 +2,7 @@
 import React, { useState, useEffect, useMemo } from "react";
 import { saveDocumentToDB } from "../services/aiService";
 
-const API_BASE = "http://localhost:5000/api";
+const API_BASE = "https://tuna-project.onrender.com/api";
 const ITEMS_PER_PAGE = 10;
 
 // Danh mục nhãn phân loại đồng bộ với Admin ManageLibrary

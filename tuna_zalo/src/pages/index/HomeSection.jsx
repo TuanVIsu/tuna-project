@@ -4,7 +4,7 @@ import { AcademicSurveyModal } from "../../components/AcademicSurveyModal";
 import { ScheduleModal } from "../../components/ScheduleModal";
 import { LibraryModal } from "../../components/LibraryModal";
 
-const API_BASE = "http://localhost:5000/api";
+const API_BASE = "https://tuna-project.onrender.com/api";
 
 export const HomeSection = ({ currentUser, onNavigate }) => {
   const [academicProfile, setAcademicProfile] = useState(null);

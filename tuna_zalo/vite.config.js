@@ -3,11 +3,17 @@ import zaloMiniApp from "zmp-vite-plugin";
 import react from "@vitejs/plugin-react";
 
 export default defineConfig({
-  plugins: [react()],
+  plugins: [
+    react(),
+    zaloMiniApp(), // Kích hoạt plugin Zalo Mini App
+  ],
+  build: {
+    outDir: "www", // Xuất kết quả biên dịch ra thư mục 'www' cho ZMP CLI
+  },
   css: {
     preprocessorOptions: {
       scss: {
-        api: "modern-compiler", 
+        api: "modern-compiler",
       },
     },
   },

@@ -1,4 +1,7 @@
-// tuna_server/server.js
+app.use(cors());
+
+
+
 require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
@@ -9,20 +12,37 @@ const { Server } = require('socket.io');
 
 const app = express();
 const server = http.createServer(app);
+
+// 1. Cấu hình Socket.IO với CORS mở
 const io = new Server(server, {
   cors: {
     origin: '*',
-    methods: ['GET', 'POST', 'PUT', 'DELETE'],
+    methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
+    credentials: true,
   },
 });
 
 // Chia sẻ instance io cho toàn bộ Express router sử dụng req.app.get('io')
 app.set('io', io);
 
-// Middleware xử lý request
-app.use(cors());
+// 2. Cấu hình CORS chi tiết cho Express (Hỗ trợ Zalo Mini App WebView & Preflight)
+const corsOptions = {
+  origin: '*',
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'bypass-tunnel-reminder', 'x-requested-with'],
+  credentials: true,
+};
+
+app.use(cors(corsOptions));
+app.options('*', cors(corsOptions)); // Xử lý toàn bộ preflight request
+
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ extended: true, limit: '50mb' }));
+
+// Route kiểm tra máy chủ hoạt động
+app.get('/', (req, res) => {
+  res.json({ success: true, message: '🚀 TUNA Backend is running smoothly on Render!' });
+});
 
 // Tạo và phục vụ thư mục uploads tĩnh
 const uploadDir = path.join(__dirname, 'uploads');
@@ -71,5 +91,5 @@ app.use('/api', aiRouter);
 // Khởi động HTTP & Socket Server
 const PORT = process.env.PORT || 5000;
 server.listen(PORT, () => {
-  console.log(`🚀 Tuna Server đang chạy mượt mà tại http://localhost:${PORT}`);
+  console.log(`🚀 Tuna Server đang chạy mượt mà tại port ${PORT}`);
 });

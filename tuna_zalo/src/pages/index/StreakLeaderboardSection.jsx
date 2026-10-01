@@ -1,7 +1,7 @@
 // src/pages/index/StreakLeaderboardSection.jsx
 import React, { useState, useEffect, useMemo, useCallback } from "react";
 
-const API_BASE = "http://localhost:5000/api";
+const API_BASE = "https://tuna-project.onrender.com/api";
 
 export const StreakLeaderboardSection = ({ onBack, currentUser }) => {
   const [activeTab, setActiveTab] = useState("streak");

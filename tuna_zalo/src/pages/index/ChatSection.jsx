@@ -2,7 +2,7 @@
 import React, { useState, useEffect, useRef, useMemo } from "react";
 import { io } from "socket.io-client";
 
-const SOCKET_SERVER = "http://localhost:5000";
+const SOCKET_SERVER = "https://tuna-project.onrender.com";
 
 const ANIMATION_STYLES = `
 @keyframes slideUpFade {

@@ -1,7 +1,7 @@
 // src/components/ScheduleModal.jsx
 import React, { useState, useEffect, useMemo } from "react";
 
-const API_BASE = "http://localhost:5000/api";
+const API_BASE = "https://tuna-project.onrender.com/api";
 
 export const ScheduleModal = ({ isOpen, onClose }) => {
   const [viewMode, setViewMode] = useState("all"); // 'all' | 'day' | 'week' | 'month'
