@@ -1,13 +1,7 @@
 // src/components/AcademicSurveyModal.jsx
 import React, { useState, useEffect, useCallback } from "react";
 
-const isLocalhost =
-  typeof window !== "undefined" &&
-  (window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1");
-
-const API_BASE = isLocalhost
-  ? "https://tuna-project.onrender.com/api"
-  : "https://clean-places-taste.loca.lt/api";
+const API_BASE = "https://tuna-project.onrender.com/api";
 
 export const AcademicSurveyModal = ({ isOpen, onSave, onDismiss }) => {
   const [major, setMajor] = useState("Hệ Thống Thông Tin");
@@ -25,7 +19,6 @@ export const AcademicSurveyModal = ({ isOpen, onSave, onDismiss }) => {
 
   const majors = ["Hệ Thống Thông Tin", "Công Nghệ Thông Tin", "Kỹ Thuật Phần Mềm", "An Ninh Mạng"];
 
-  // Tải danh sách môn từ CSDL (Xử lý an toàn cả subject_name lẫn subjectName)
   const fetchSubjectsFromDB = useCallback(async (selectedMajor, selectedYear, selectedSem) => {
     setIsLoadingSubjects(true);
     try {
@@ -40,7 +33,6 @@ export const AcademicSurveyModal = ({ isOpen, onSave, onDismiss }) => {
       );
       const json = await res.json();
       if (json.success && Array.isArray(json.data)) {
-        // Chuẩn hóa tên trường môn học từ CSDL
         const normalized = json.data.map((item) => ({
           subjectName: item.subject_name || item.subjectName || item.title || "Môn học đại cương",
           credits: item.credits || 3,
@@ -89,7 +81,6 @@ export const AcademicSurveyModal = ({ isOpen, onSave, onDismiss }) => {
 
         fetchSubjectsFromDB(parsed.major || initMajor, parsed.year || year, parsed.semester || semester).then(() => {
           if (parsed.subjectLevels) {
-            // Lọc bỏ bất kỳ khóa nào có tên 'undefined'
             const cleanLevels = {};
             Object.keys(parsed.subjectLevels).forEach((k) => {
               if (k && k !== "undefined") {
@@ -138,7 +129,6 @@ export const AcademicSurveyModal = ({ isOpen, onSave, onDismiss }) => {
   };
 
   const handleConfirm = () => {
-    // Lọc bỏ triệt để các giá trị null hoặc 'undefined'
     const selectedSubs = Object.keys(subjectLevels).filter(
       (s) => s && s.trim() !== "" && s !== "undefined"
     );
@@ -175,33 +165,49 @@ export const AcademicSurveyModal = ({ isOpen, onSave, onDismiss }) => {
       className="position-absolute top-0 start-0 w-100 h-100 bg-[#F8FAFC] d-flex flex-column"
       style={{ zIndex: 1200, overflowY: "auto", overflowX: "hidden" }}
     >
-      <div className="bg-gradient-to-r from-blue-700 to-indigo-700 text-white px-3.5 py-3 d-flex align-items-center justify-content-between sticky-top shadow-sm flex-shrink-0">
-        <div className="d-flex align-items-center gap-2.5">
-          <button
-            onClick={onDismiss}
-            className="w-8 h-8 rounded-full bg-white/15 flex items-center justify-center border-0 text-white active:scale-95 transition cursor-pointer"
-          >
-            <i className="bi bi-arrow-left text-sm font-bold"></i>
-          </button>
-          <div>
-            <h6 className="mb-0 font-extrabold text-[15px] leading-tight text-white">
-              Kế hoạch & Lộ trình học tập
-            </h6>
-            <span className="text-blue-100 text-[11px] font-medium">
-              Dữ liệu đồng bộ trực tiếp từ CSDL Đào tạo
-            </span>
-          </div>
-        </div>
+      {/* 1. Header Bar: Đồng bộ 100% với ScheduleModal */}
+      <div className="bg-gradient-to-r from-blue-700 via-blue-600 to-indigo-700 text-white sticky-top shadow-xs select-none flex-shrink-0">
+        {/* Khoảng đệm né vạch giờ & pin */}
+        <div className="w-full h-10" />
 
-        <button
-          onClick={handleConfirm}
-          className="px-3.5 py-1.5 rounded-full bg-amber-400 text-slate-950 font-black text-xs border-0 shadow-sm active:scale-95 transition cursor-pointer"
-        >
-          Lưu lại
-        </button>
+        {/* Hàng tiêu đề chính */}
+        <div className="px-4 pb-3 pt-1 flex items-center justify-between gap-3">
+          <div className="flex items-center gap-3 min-w-0 flex-1">
+            <button
+              onClick={onDismiss}
+              className="w-9 h-9 rounded-full bg-white/15 hover:bg-white/25 active:scale-95 flex items-center justify-center border-0 text-white transition shrink-0 cursor-pointer shadow-2xs"
+              title="Quay lại"
+            >
+              <i className="bi bi-arrow-left text-sm font-black"></i>
+            </button>
+            <div className="flex flex-col justify-center min-w-0 flex-1">
+              <h6 className="mb-0 font-black text-[16px] tracking-tight leading-tight truncate text-white">
+                Kế hoạch & Lộ trình học tập
+              </h6>
+              <span className="text-blue-100/80 text-[11px] font-medium block truncate mt-0.5">
+                Dữ liệu đồng bộ trực tiếp từ CSDL Đào tạo
+              </span>
+            </div>
+          </div>
+
+          {/* Khoảng trống bên phải rộng 90px để nhường chỗ hoàn toàn cho cụm nút Zalo */}
+          <div className="w-[90px] shrink-0" />
+        </div>
       </div>
 
       <div className="p-3.5 space-y-4 flex-1 pb-20 max-w-lg mx-auto w-full">
+        {/* Thanh công cụ xác nhận trên đầu nội dung */}
+        <div className="flex items-center justify-between px-1">
+          <span className="text-xs font-bold text-slate-500">Thiết lập lộ trình cá nhân</span>
+          <button
+            onClick={handleConfirm}
+            className="px-3.5 py-1.5 rounded-full bg-amber-400 hover:bg-amber-500 text-slate-950 font-black text-xs border-0 shadow-xs active:scale-95 transition cursor-pointer flex items-center gap-1"
+          >
+            <i className="bi bi-check-lg"></i>
+            <span>Lưu lại</span>
+          </button>
+        </div>
+
         {/* Khối 1: Ngành */}
         <div className="bg-white rounded-3xl p-3.5 border border-slate-200/80 shadow-xs space-y-2">
           <label className="font-extrabold text-slate-900 text-xs flex items-center gap-1.5 m-0">

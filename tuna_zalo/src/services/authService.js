@@ -3,14 +3,12 @@ import * as zmp from "zmp-sdk";
 
 const API_BASE = "https://tuna-project.onrender.com/api";
 
-// Hàm lấy user hiện tại đã lưu hoặc dữ liệu mặc định ban đầu
+// 1. Chỉ lấy user từ cache, tuyệt đối không gọi SDK native khi load trang
 export const getInitialUser = () => {
   try {
     const saved = localStorage.getItem("tuna_current_user") || localStorage.getItem("user_info");
     if (saved) return JSON.parse(saved);
-  } catch (e) {
-    console.warn("Không đọc được cache user:", e);
-  }
+  } catch (e) {}
 
   return {
     id: 1,
@@ -23,73 +21,76 @@ export const getInitialUser = () => {
   };
 };
 
-// Hàm đăng nhập thực thụ (gắn vào sự kiện Click của người dùng)
+// 2. Không gọi sdk.login() tự động để triệt tiêu vĩnh viễn lỗi code: -5
+export const autoZaloLogin = async () => {
+  try {
+    const cached = localStorage.getItem("tuna_current_user") || localStorage.getItem("user_info");
+    if (cached) {
+      const user = JSON.parse(cached);
+      if (user && user.zalo_id && !user.zalo_id.includes("dev_")) {
+        return user;
+      }
+    }
+  } catch (e) {}
+  return null;
+};
+
+// 3. CHỈ GỌI LOGIN KHI NGƯỜI DÙNG BẤM NÚT (User Gesture)
 export const handleZaloLogin = async () => {
   const sdk = zmp.default || zmp;
-  let zaloId = "zalo_dev_2311052";
-  let name = "Minh";
-  let avatar = "https://ui-avatars.com/api/?name=Nguyen+Minh+Tuan&background=0052FF&color=fff";
-  let accessToken = "dev_mock_access_token";
+  let zaloId = "";
+  let name = "Sinh viên";
+  let avatar = "";
+  let accessToken = "";
 
   if (sdk) {
     try {
-      // 1. Cấp quyền
-      if (typeof sdk.authorize === "function") {
-        await sdk.authorize({ scopes: ["scope.userInfo"] });
+      // Khi user đã bấm nút, JSBridge đã sẵn sàng, gọi login sẽ không bị code: -5
+      if (typeof sdk.login === "function") {
+        await sdk.login({});
       }
 
-      // 2. Lấy UserInfo
       if (typeof sdk.getUserInfo === "function") {
         const resInfo = await sdk.getUserInfo({ avatarType: "normal" });
         if (resInfo?.userInfo) {
-          zaloId = resInfo.userInfo.id || zaloId;
-          name = resInfo.userInfo.name || name;
-          avatar = resInfo.userInfo.avatar || avatar;
+          zaloId = resInfo.userInfo.id;
+          name = resInfo.userInfo.name;
+          avatar = resInfo.userInfo.avatar;
         }
       }
 
-      // 3. Lấy AccessToken
       if (typeof sdk.getAccessToken === "function") {
-        const token = await sdk.getAccessToken();
-        if (token) accessToken = token;
+        accessToken = await sdk.getAccessToken({});
       }
     } catch (err) {
-      console.warn("Người dùng hủy hoặc Zalo SDK từ chối:", err.message);
+      console.warn("Lỗi xác thực Zalo:", err);
+      throw err;
     }
+  }
+
+  if (!zaloId) {
+    throw new Error("Không thể lấy thông tin từ Zalo");
   }
 
   // Gửi về backend Render
-  try {
-    const res = await fetch(`${API_BASE}/auth/zalo-login`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ accessToken, zaloId, name, avatar }),
-    });
+  const res = await fetch(`${API_BASE}/auth/zalo-login`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ accessToken, zaloId, name, avatar }),
+  });
 
-    if (res.ok) {
-      const data = await res.json();
-      if (data.success && data.user) {
-        localStorage.setItem("user_token", data.token || "mock_token");
-        localStorage.setItem("tuna_current_user", JSON.stringify(data.user));
-        return data.user;
-      }
-    }
-  } catch (apiErr) {
-    console.warn("Backend Render chưa phản hồi, giữ dữ liệu hiện tại:", apiErr.message);
+  const data = await res.json();
+  if (res.ok && data.success && data.user) {
+    localStorage.setItem("user_token", data.token || "logged_in");
+    localStorage.setItem("user_role", data.user.role || "student");
+    localStorage.setItem("user_info", JSON.stringify(data.user));
+    localStorage.setItem("user", JSON.stringify(data.user));
+    localStorage.setItem("tuna_current_user", JSON.stringify(data.user));
+    localStorage.setItem("tuna_user_id", data.user.student_code || data.user.zalo_id);
+    return data.user;
   }
 
-  const finalUser = {
-    id: 1,
-    zalo_id: zaloId,
-    name: name,
-    avatar: avatar,
-    student_code: "B2300001",
-    class_name: "HTTT2311",
-    role: "student",
-  };
-
-  localStorage.setItem("tuna_current_user", JSON.stringify(finalUser));
-  return finalUser;
+  throw new Error("Lỗi lưu trữ tài khoản phía máy chủ");
 };
 
 export const getCurrentUser = () => getInitialUser();

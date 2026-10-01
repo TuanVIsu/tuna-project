@@ -1,6 +1,9 @@
-// React core
+// tuna_zalo/src/app.jsx
 import React from "react";
 import { createRoot } from "react-dom/client";
+
+// Nạp bộ font icon Bootstrap (giúp hiển thị tất cả các icon bi-...)
+import "bootstrap-icons/font/bootstrap-icons.css";
 
 // ZaUI stylesheet
 import "zmp-ui/zaui.css";

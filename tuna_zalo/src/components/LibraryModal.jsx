@@ -5,7 +5,6 @@ import { saveDocumentToDB } from "../services/aiService";
 const API_BASE = "https://tuna-project.onrender.com/api";
 const ITEMS_PER_PAGE = 10;
 
-// Danh mục nhãn phân loại đồng bộ với Admin ManageLibrary
 const SUB_CATEGORIES = {
   lecture_slide: { label: "Slide bài giảng", badge: "bg-blue-50 text-blue-700 border-blue-200", icon: "bi-file-earmark-easel" },
   exam_prep: { label: "Đề thi & Trắc nghiệm", badge: "bg-purple-50 text-purple-700 border-purple-200", icon: "bi-patch-question" },
@@ -23,36 +22,27 @@ const normalizeText = (str) => {
 };
 
 export const LibraryModal = ({ isOpen, onClose, userMajor = "Hệ Thống Thông Tin", onNavigateToDocs }) => {
-  // Tab chính: 'docs' (Tài liệu) | 'videos' (Video bài giảng) | 'quizzes' (Đề thi & Flashcard)
   const [activeTab, setActiveTab] = useState("docs");
   const [filterType, setFilterType] = useState("all");
   const [filterSubCategory, setFilterSubCategory] = useState("all");
   const [searchQuery, setSearchQuery] = useState("");
 
-  // Danh mục ngành học nạp tự động từ CSDL
   const [allMajors, setAllMajors] = useState([]);
-
-  // Bộ lọc Lộ trình cá nhân vs Toàn trường
   const [selectedMajor, setSelectedMajor] = useState("all");
   const [selectedYear, setSelectedYear] = useState("all");
   const [selectedSemester, setSelectedSemester] = useState("all");
   const [isRoadmapOnly, setIsRoadmapOnly] = useState(false);
 
-  // Phân trang
   const [currentPage, setCurrentPage] = useState(1);
-
-  // Dữ liệu học liệu chia làm 3 nhóm
   const [resources, setResources] = useState({ docs: [], videos: [], quizzes: [] });
   const [loading, setLoading] = useState(false);
   const [previewDoc, setPreviewDoc] = useState(null);
   const [downloadingId, setDownloadingId] = useState(null);
 
-  // Modal làm bài / xem câu hỏi đề thi & thẻ Flashcard
   const [activeQuizExam, setActiveQuizExam] = useState(null);
   const [flippedCardIdx, setFlippedCardIdx] = useState(null);
-  const [selectedAnswers, setSelectedAnswers] = useState({}); // Lưu đáp án sinh viên chọn thử { [qId]: 'A' }
+  const [selectedAnswers, setSelectedAnswers] = useState({});
 
-  // Thông tin lộ trình cá nhân của sinh viên
   const [profile, setProfile] = useState({ year: 4, semester: 1, major: userMajor });
 
   useEffect(() => {
@@ -72,7 +62,6 @@ export const LibraryModal = ({ isOpen, onClose, userMajor = "Hệ Thống Thông
     }
   }, [isOpen, userMajor]);
 
-  // 1. Nạp danh mục ngành học từ CSDL
   const fetchMajors = async () => {
     try {
       const res = await fetch(`${API_BASE}/library/majors`);
@@ -85,7 +74,6 @@ export const LibraryModal = ({ isOpen, onClose, userMajor = "Hệ Thống Thông
     }
   };
 
-  // 2. Nạp toàn bộ học liệu từ CSDL (đã gộp UNION ALL với exam_tests)
   const fetchAllLibrary = async () => {
     try {
       setLoading(true);
@@ -93,7 +81,6 @@ export const LibraryModal = ({ isOpen, onClose, userMajor = "Hệ Thống Thông
       const data = await res.json();
       if (data.success) {
         const allItems = data.all || [];
-        // Lọc bỏ những mục Admin đã tạm ẩn (isPublished === false)
         const visibleItems = allItems.filter((i) => i.isPublished !== false);
 
         setResources({
@@ -137,7 +124,6 @@ export const LibraryModal = ({ isOpen, onClose, userMajor = "Hệ Thống Thông
     setSearchQuery("");
   };
 
-  // Thuật toán lọc kết hợp: Lộ trình + Dropdowns + NLP Search
   const filterResources = (items) => {
     return items.filter((item) => {
       if (filterType === "main" && item.isReference) return false;
@@ -187,7 +173,6 @@ export const LibraryModal = ({ isOpen, onClose, userMajor = "Hệ Thống Thông
   const currentVideos = useMemo(() => filterResources(resources.videos), [resources.videos, searchQuery, filterType, filterSubCategory, selectedMajor, selectedYear, selectedSemester]);
   const currentQuizzes = useMemo(() => filterResources(resources.quizzes), [resources.quizzes, searchQuery, filterType, filterSubCategory, selectedMajor, selectedYear, selectedSemester]);
 
-  // Cắt danh sách theo trang hiện tại (10 mục / trang)
   const paginatedDocs = useMemo(() => {
     const start = (currentPage - 1) * ITEMS_PER_PAGE;
     return currentDocs.slice(start, start + ITEMS_PER_PAGE);
@@ -224,7 +209,6 @@ export const LibraryModal = ({ isOpen, onClose, userMajor = "Hệ Thống Thông
     return `${API_BASE.replace("/api", "")}${url}`;
   };
 
-  // Mở modal làm bài / xem câu hỏi của đề thi
   const handleOpenQuiz = async (quiz) => {
     const realExamId = String(quiz.id).replace("exam_", "");
     setFlippedCardIdx(null);
@@ -242,7 +226,6 @@ export const LibraryModal = ({ isOpen, onClose, userMajor = "Hệ Thống Thông
     }
   };
 
-  // Tải tài liệu về Không gian cá nhân
   const handleDownloadAndSaveToDocs = async (doc) => {
     try {
       setDownloadingId(doc.id);
@@ -278,34 +261,35 @@ export const LibraryModal = ({ isOpen, onClose, userMajor = "Hệ Thống Thông
       className="position-absolute top-0 start-0 w-100 h-100 bg-[#F8FAFC] d-flex flex-column"
       style={{ zIndex: 1050, overflowY: "auto", overflowX: "hidden" }}
     >
-      {/* 1. Header Bar */}
-      <div className="bg-gradient-to-r from-blue-700 via-indigo-700 to-purple-700 text-white px-3 py-2.5 d-flex align-items-center justify-content-between sticky-top shadow-sm flex-shrink-0">
-        <div className="d-flex align-items-center gap-2 overflow-hidden">
-          <button
-            onClick={onClose}
-            className="w-7 h-7 rounded-full bg-white/15 flex items-center justify-center border-0 text-white active:scale-95 transition cursor-pointer shrink-0"
-          >
-            <i className="bi bi-chevron-left text-xs font-bold"></i>
-          </button>
-          <div className="truncate">
-            <h6 className="mb-0 font-black text-sm leading-tight text-white">Thư viện số CTUT</h6>
-            <span className="text-blue-100 text-[10px] font-medium truncate block">
-              {isRoadmapOnly
-                ? `Lộ trình: Năm ${profile.year} • Kỳ ${profile.semester}`
-                : "Kho học liệu & Đề thi đa chuyên ngành"}
-            </span>
-          </div>
-        </div>
+      {/* 1. Header Bar: Đồng bộ 100% với ScheduleModal */}
+      <div className="bg-gradient-to-r from-blue-700 via-blue-600 to-indigo-700 text-white sticky-top shadow-xs select-none">
+        {/* Khoảng đệm né vạch giờ & pin */}
+        <div className="w-full h-10" />
 
-        <button
-          onClick={isRoadmapOnly ? handleResetFilters : handleApplyRoadmapFilter}
-          className={`px-2.5 py-1 rounded-full font-black text-[11px] flex items-center gap-1 border-0 shadow-sm active:scale-95 transition cursor-pointer shrink-0 ${
-            isRoadmapOnly ? "bg-amber-400 text-slate-950" : "bg-white text-blue-700"
-          }`}
-        >
-          <i className={`bi ${isRoadmapOnly ? "bi-globe" : "bi-mortarboard-fill"} text-[10px]`}></i>
-          <span>{isRoadmapOnly ? "Xem tất cả" : "Lộ trình của tôi"}</span>
-        </button>
+        {/* Hàng tiêu đề chính */}
+        <div className="px-4 pb-3 pt-1 flex items-center justify-between gap-3">
+          <div className="flex items-center gap-3 min-w-0 flex-1">
+            <button
+              onClick={onClose}
+              className="w-9 h-9 rounded-full bg-white/15 hover:bg-white/25 active:scale-95 flex items-center justify-center border-0 text-white transition shrink-0 cursor-pointer shadow-2xs"
+              title="Quay lại"
+            >
+              <i className="bi bi-chevron-left text-sm font-black"></i>
+            </button>
+            
+            <div className="flex flex-col justify-center min-w-0 flex-1">
+              <h6 className="mb-0 font-black text-[16px] tracking-tight leading-tight truncate text-white">
+                Thư viện số CTUT
+              </h6>
+              <span className="text-blue-100/80 text-[11px] font-medium block truncate mt-0.5">
+                Kho học liệu & Đề thi chuyên ngành
+              </span>
+            </div>
+          </div>
+
+          {/* Khoảng trống bên phải rộng 90px để nhường chỗ hoàn toàn cho cụm nút Zalo */}
+          <div className="w-[90px] shrink-0" />
+        </div>
       </div>
 
       {/* 2. Thanh chuyển đổi 3 Tabs: Tài liệu / Video / Đề thi */}
@@ -338,28 +322,43 @@ export const LibraryModal = ({ isOpen, onClose, userMajor = "Hệ Thống Thông
         </div>
       </div>
 
-      {/* 3. Khu vực tìm kiếm NLP và Bộ lọc */}
+      {/* 3. Khu vực tìm kiếm NLP và Nút Lộ trình / Bộ lọc */}
       <div className="bg-white px-3 py-2.5 border-b border-slate-200 flex flex-col gap-2">
-        <div className="relative flex items-center">
-          <i className="bi bi-search absolute left-3 text-slate-400 text-xs"></i>
-          <input
-            type="text"
-            value={searchQuery}
-            onChange={(e) => setSearchQuery(e.target.value)}
-            placeholder="Tìm theo môn, mã HP, trắc nghiệm, giảng viên..."
-            className="w-full bg-slate-100 border border-slate-200/80 rounded-2xl pl-8 pr-8 py-1.5 text-xs font-bold text-slate-800 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:bg-white transition"
-          />
-          {searchQuery && (
-            <button
-              onClick={() => setSearchQuery("")}
-              className="absolute right-2.5 w-5 h-5 rounded-full bg-slate-200 text-slate-600 flex items-center justify-center text-[10px] border-0 cursor-pointer"
-            >
-              <i className="bi bi-x"></i>
-            </button>
-          )}
+        <div className="flex items-center gap-2">
+          <div className="relative flex-1 flex items-center">
+            <i className="bi bi-search absolute left-3 text-slate-400 text-xs"></i>
+            <input
+              type="text"
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              placeholder="Tìm theo môn, mã HP, trắc nghiệm, giảng viên..."
+              className="w-full bg-slate-100 border border-slate-200/80 rounded-2xl pl-8 pr-8 py-2 text-xs font-bold text-slate-800 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:bg-white transition"
+            />
+            {searchQuery && (
+              <button
+                onClick={() => setSearchQuery("")}
+                className="absolute right-2.5 w-5 h-5 rounded-full bg-slate-200 text-slate-600 flex items-center justify-center text-[10px] border-0 cursor-pointer"
+              >
+                <i className="bi bi-x"></i>
+              </button>
+            )}
+          </div>
+
+          {/* Nút lọc Lộ trình cá nhân đặt ở đây cực kỳ cân đối và thuận tay bấm */}
+          <button
+            onClick={isRoadmapOnly ? handleResetFilters : handleApplyRoadmapFilter}
+            className={`px-3 py-2 rounded-2xl font-black text-xs flex items-center gap-1.5 border-0 shadow-xs active:scale-95 transition cursor-pointer shrink-0 ${
+              isRoadmapOnly
+                ? "bg-amber-400 text-slate-950"
+                : "bg-blue-600 text-white shadow-blue-500/20"
+            }`}
+          >
+            <i className={`bi ${isRoadmapOnly ? "bi-globe" : "bi-mortarboard-fill"} text-xs`}></i>
+            <span>{isRoadmapOnly ? "Tất cả" : "Của tôi"}</span>
+          </button>
         </div>
 
-        {/* Thanh lọc Ngành - Năm - Kỳ (Ngành lấy động từ CSDL) */}
+        {/* Thanh lọc Ngành - Năm - Kỳ */}
         <div className="grid grid-cols-3 gap-1.5 pt-0.5">
           <select
             value={selectedMajor}
@@ -405,7 +404,7 @@ export const LibraryModal = ({ isOpen, onClose, userMajor = "Hệ Thống Thông
           </select>
         </div>
 
-        {/* Bộ lọc nhãn nội dung con (Sub-category Tags) */}
+        {/* Bộ lọc nhãn con */}
         <div className="flex items-center justify-between pt-0.5 overflow-x-auto gap-1">
           <div className="flex gap-1 flex-nowrap shrink-0">
             <button
@@ -439,8 +438,6 @@ export const LibraryModal = ({ isOpen, onClose, userMajor = "Hệ Thống Thông
 
       {/* 4. Nội dung danh sách học liệu theo Tab */}
       <div className="p-3 space-y-2.5 flex-1">
-        
-        {/* ================= TAB 1: TÀI LIỆU / SLIDE ================= */}
         {activeTab === "docs" && (
           <>
             {loading ? (
@@ -513,7 +510,6 @@ export const LibraryModal = ({ isOpen, onClose, userMajor = "Hệ Thống Thông
           </>
         )}
 
-        {/* ================= TAB 2: VIDEO BÀI GIẢNG ================= */}
         {activeTab === "videos" && (
           <>
             {loading ? (
@@ -565,7 +561,6 @@ export const LibraryModal = ({ isOpen, onClose, userMajor = "Hệ Thống Thông
           </>
         )}
 
-        {/* ================= TAB 3: ĐỀ THI & THẺ GHI NHỚ FLASHCARD ================= */}
         {activeTab === "quizzes" && (
           <>
             {loading ? (
@@ -633,7 +628,7 @@ export const LibraryModal = ({ isOpen, onClose, userMajor = "Hệ Thống Thông
         )}
       </div>
 
-      {/* 5. PHÂN TRANG (PAGINATION) */}
+      {/* 5. Phân trang */}
       {totalPages > 1 && (
         <div className="bg-white px-3 py-2 border-t border-slate-200 d-flex align-items-center justify-content-between sticky-bottom shadow-xs mt-auto">
           <button
@@ -658,7 +653,7 @@ export const LibraryModal = ({ isOpen, onClose, userMajor = "Hệ Thống Thông
         </div>
       )}
 
-      {/* 6. MODAL XEM TRƯỚC VÀ TẢI TÀI LIỆU */}
+      {/* 6. Modal xem trước */}
       {previewDoc && (
         <div
           className="position-fixed top-0 start-0 w-100 h-100 bg-dark/60 d-flex align-items-center justify-content-center p-3"
@@ -707,7 +702,7 @@ export const LibraryModal = ({ isOpen, onClose, userMajor = "Hệ Thống Thông
         </div>
       )}
 
-      {/* 7. MODAL LÀM BÀI TRẮC NGHIỆM ABCD HOẶC LẬT THẺ FLASHCARD CHO SINH VIÊN */}
+      {/* 7. Modal làm bài trắc nghiệm / flashcard */}
       {activeQuizExam && (
         <div
           className="position-fixed top-0 start-0 w-100 h-100 bg-dark/70 d-flex align-items-center justify-content-center p-3"
@@ -718,7 +713,6 @@ export const LibraryModal = ({ isOpen, onClose, userMajor = "Hệ Thống Thông
             className="bg-white rounded-3xl p-3.5 w-100 max-w-[480px] shadow-2xl flex flex-col gap-2.5 max-h-[88vh] overflow-hidden"
             onClick={(e) => e.stopPropagation()}
           >
-            {/* Header Modal */}
             <div className="flex items-center justify-between border-b pb-2">
               <div className="overflow-hidden">
                 <span className="px-2 py-0.5 rounded-md bg-purple-50 text-purple-700 font-extrabold text-[10px]">
@@ -734,10 +728,8 @@ export const LibraryModal = ({ isOpen, onClose, userMajor = "Hệ Thống Thông
               </button>
             </div>
 
-            {/* Thân Modal */}
             <div className="overflow-y-auto space-y-3 p-1 flex-1">
               {activeQuizExam.exam_type === "flashcard" ? (
-                /* CHẾ ĐỘ LẬT THẺ FLASHCARD */
                 <div className="space-y-2.5">
                   <div className="text-center text-[11px] text-slate-400 font-medium">
                     Nhấp vào thẻ để lật xem đáp án / định nghĩa
@@ -775,7 +767,6 @@ export const LibraryModal = ({ isOpen, onClose, userMajor = "Hệ Thống Thông
                   })}
                 </div>
               ) : (
-                /* CHẾ ĐỘ TRẮC NGHIỆM ABCD */
                 <div className="space-y-3">
                   {(activeQuizExam.questions || []).map((q, idx) => {
                     const chosen = selectedAnswers[q.id];
@@ -824,7 +815,6 @@ export const LibraryModal = ({ isOpen, onClose, userMajor = "Hệ Thống Thông
               )}
             </div>
 
-            {/* Footer Modal */}
             <div className="border-t pt-2 flex items-center justify-between">
               <span className="text-[10px] font-bold text-slate-400">
                 Tổng cộng: {activeQuizExam.questions?.length || 0} mục

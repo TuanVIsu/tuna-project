@@ -862,20 +862,26 @@ const handleSaveItem = async (e, task) => {
   return (
     <div className="container-fluid px-2 pb-5 position-relative overflow-hidden" style={{ minHeight: "100vh" }}>
       <div className="d-flex flex-column gap-3.5">
-        {/* Nguồn tài liệu học tập */}
-        <div className="card border-0 shadow-md rounded-4 p-3.5 bg-white border border-slate-100">
-          <div className="d-flex align-items-center justify-content-between mb-3">
-            <h6 className="fw-black text-slate-900 mb-0 d-flex align-items-center gap-2">
-              <span className="w-8 h-8 rounded-xl bg-blue-100 text-blue-700 flex items-center justify-center font-bold">
-                <i className="bi bi-folder2-open"></i>
-              </span>
-              Nguồn tài liệu học tập
-            </h6>
-            <label className="btn btn-sm btn-primary rounded-pill px-3 py-1 fw-bold mb-0 cursor-pointer d-flex align-items-center gap-1 shadow-xs border-0" style={{ cursor: "pointer" }}>
-              <i className="bi bi-plus-lg"></i> Tải tệp +
-              <input type="file" accept=".txt,.doc,.docx,.pdf" onChange={handleFileUpload} className="d-none" />
-            </label>
-          </div>
+{/* Nguồn tài liệu học tập - Đã tinh chỉnh chống rớt dòng chữ */}
+<div className="card border-0 shadow-md rounded-4 p-3 bg-white border border-slate-100">
+  <div className="flex items-center justify-between gap-2 mb-2.5">
+    <div className="flex items-center gap-2 min-w-0 flex-1">
+      <span className="w-7 h-7 rounded-xl bg-blue-100 text-blue-700 flex items-center justify-center font-bold text-sm shrink-0">
+        <i className="bi bi-folder2-open"></i>
+      </span>
+      <h6 className="font-black text-slate-900 m-0 text-xs sm:text-sm truncate">
+        Nguồn tài liệu học tập
+      </h6>
+    </div>
+
+    <label 
+      className="px-2.5 py-1.5 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-[11px] font-black border-0 cursor-pointer shadow-xs active:scale-95 transition flex items-center gap-1 shrink-0 m-0"
+    >
+      <i className="bi bi-plus-lg text-[10px]"></i>
+      <span>Tải tệp</span>
+      <input type="file" accept=".txt,.doc,.docx,.pdf" onChange={handleFileUpload} className="d-none" />
+    </label>
+  </div>
 
           {documents.length === 0 ? (
             <div className="text-center py-4 border-2 border-dashed border-slate-200 rounded-3 bg-slate-50/60">

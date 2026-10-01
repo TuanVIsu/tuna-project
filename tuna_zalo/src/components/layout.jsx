@@ -3,6 +3,7 @@ import React, { useState } from "react";
 import { Header } from "./Header";
 import { BottomBar } from "./BottomBar";
 import { NotificationModal } from "./NotificationModal";
+import logoImg from "../static/logo.png";
 
 export const Layout = ({ children, activeTab, setActiveTab, currentUser }) => {
   const [showNotificationModal, setShowNotificationModal] = useState(false);
@@ -15,13 +16,16 @@ export const Layout = ({ children, activeTab, setActiveTab, currentUser }) => {
     return "Chào buổi tối";
   };
 
-  const displayName = currentUser?.name || localStorage.getItem("tuna_user_name") || "Minh!";
+  const displayName = currentUser?.name || localStorage.getItem("tuna_user_name") || "Minh";
 
   return (
-    <div className="flex flex-col h-screen w-full max-w-[420px] mx-auto bg-gradient-to-b from-[#FFFFFF] via-[#FFFFFF] to-[#F7F9FC] text-slate-800 font-sans select-none overflow-hidden relative shadow-2xl">
-      {/* Header đồng bộ lời chào và nút chuông */}
+    <div 
+      className="flex flex-col h-screen w-full max-w-[420px] mx-auto bg-gradient-to-b from-[#FFFFFF] via-[#FFFFFF] to-[#F7F9FC] text-slate-800 font-sans select-none overflow-hidden relative shadow-2xl"
+      style={{ paddingTop: "env(safe-area-inset-top, 0px)" }}
+    >
+      {/* Header */}
       <Header
-        logoUrl="src/static/logo.png"
+        logoUrl={logoImg}
         userName={displayName}
         greeting={getGreeting()}
         notificationCount={unreadCount}
@@ -31,15 +35,12 @@ export const Layout = ({ children, activeTab, setActiveTab, currentUser }) => {
         }}
       />
 
-      {/* Nội dung trang */}
       <main className="flex-1 overflow-y-auto pb-24 px-4 pt-3 w-full">
         {children}
       </main>
 
-      {/* Thanh điều hướng dưới đáy */}
       <BottomBar activeTab={activeTab} setActiveTab={setActiveTab} />
 
-      {/* Cửa sổ Modal Thông Báo */}
       <NotificationModal
         isOpen={showNotificationModal}
         onClose={() => setShowNotificationModal(false)}

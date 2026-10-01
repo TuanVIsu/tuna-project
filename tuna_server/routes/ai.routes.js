@@ -44,7 +44,7 @@ const checkUserTokenLimit = async (userId) => {
 // 1. APIS QUẢN TRỊ ADMIN (ManageAI.jsx)
 // =============================================================================
 
-// GET /api/admin/ai/stats hoặc /api/ai/stats
+// GET /api/ai/stats - Lấy thống kê sử dụng AI
 router.get('/stats', async (req, res) => {
   try {
     const [settingsRes, statsRes, featuresRes, topUsersRes, recentTasksRes, cacheCountRes] = await Promise.all([
@@ -126,7 +126,7 @@ router.get('/stats', async (req, res) => {
   }
 });
 
-// PUT /api/admin/ai/settings - Lưu cấu hình vào CSDL
+// PUT /api/ai/settings - Lưu cấu hình vào CSDL
 router.put('/settings', async (req, res) => {
   try {
     const { daily_token_limit_per_user, max_questions_per_gen, enable_ai_global, cache_ttl_hours } = req.body;
@@ -164,12 +164,11 @@ router.put('/settings', async (req, res) => {
   }
 });
 
-// POST /api/admin/ai/clear-cache - Làm sạch bộ nhớ đệm
+// POST /api/ai/clear-cache - Làm sạch bộ nhớ đệm
 router.post('/clear-cache', async (req, res) => {
   try {
     const delRes = await pool.query(`DELETE FROM ai_cached_outputs`);
     
-    // Ghi audit log
     await pool.query(
       `INSERT INTO admin_audit_logs (actor_id, actor_name, actor_role, action, target, details)
        VALUES ($1, $2, $3, $4, $5, $6)`,
@@ -183,9 +182,10 @@ router.post('/clear-cache', async (req, res) => {
 });
 
 // =============================================================================
-// 2. APIS SINH DỮ LIỆU & TOKEN GATEWAY (Kết nối CSDL kiểm tra hạn mức)
+// 2. APIS SINH DỮ LIỆU & TOKEN GATEWAY (Kết nối Gemini & CSDL)
 // =============================================================================
 
+// POST /api/ai/generate - Sinh nội dung trực tiếp qua Gemini
 router.post('/generate', async (req, res) => {
   const { prompt, isJson, userId = 'anonymous', featureType = 'test_api' } = req.body;
   try {
@@ -229,8 +229,8 @@ router.post('/generate', async (req, res) => {
     res.status(500).json({ success: false, error: error.message });
   }
 });
-// BỔ SUNG VÀO routes/ai.routes.js (Trước module.exports = router)
 
+// POST /api/daily-quiz/generate hoặc /api/ai/daily-quiz/generate
 router.post(['/daily-quiz/generate', '/ai/daily-quiz/generate'], async (req, res) => {
   let { subject, targetGoal = 'KhaGioi', dailyPace = 15, userId = 'B2300001' } = req.body;
 
@@ -317,30 +317,14 @@ YÊU CẦU: Trả về duy nhất một chuỗi JSON hợp lệ không có markd
       questions: generatedQuestions,
       flashcards: parsed.flashcards || [],
     });
-  } catch (err) {
+} catch (err) {
     console.error("Lỗi daily-quiz:", err.message);
-    // Dự phòng offline khi mất mạng hoặc nghẽn API để UI luôn hoạt động
-    res.json({
-      success: true,
-      source: 'fallback-offline',
-      subject,
-      questions: [
-        {
-          question: `Nội dung cốt lõi của học phần ${subject} là gì?`,
-          options: [
-            "A. Nắm vững nguyên lý và phương pháp thực hành chuẩn",
-            "B. Chỉ học lý thuyết trừu tượng",
-            "C. Cài đặt các ứng dụng không liên quan",
-            "D. Không có cấu trúc cố định"
-          ],
-          answer: "A",
-          explain: "Học phần trang bị kiến thức nền tảng và phương pháp thực hành chuyên sâu."
-        }
-      ],
-      flashcards: [
-        { front: `Định nghĩa học phần ${subject}`, back: `Cấu trúc và nguyên lý vận hành chuẩn mực.` }
-      ]
+    // Báo lỗi thực tế về giao diện để người dùng biết AI đang gặp trục trặc
+    res.status(500).json({
+      success: false,
+      error: `Không thể tạo bài tập lúc này: ${err.message}`
     });
   }
 });
+
 module.exports = router;

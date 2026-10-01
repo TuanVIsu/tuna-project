@@ -1,24 +1,18 @@
-// src/services/aiService.js
+// tuna_zalo/src/services/aiService.js
 
-const isLocalhost =
-  typeof window !== "undefined" &&
-  (window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1");
-
-const API_BASE = isLocalhost
-  ? "https://tuna-project.onrender.com/api"
-  : "https://clean-places-taste.loca.lt/api";
+// Luôn kết nối trực tiếp đến backend Render đã triển khai ổn định
+const API_BASE = "https://tuna-project.onrender.com/api";
 
 const getCommonHeaders = () => {
   const token = localStorage.getItem("user_token") || localStorage.getItem("admin_token");
   const headers = {
     "Content-Type": "application/json",
-    "bypass-tunnel-reminder": "true",
   };
   if (token) headers["Authorization"] = `Bearer ${token}`;
   return headers;
 };
 
-// Hàm đọc response JSON an toàn, tránh lỗi HTML <!DOCTYPE
+// Hàm đọc response JSON an toàn, tránh lỗi cú pháp khi server gặp sự cố
 const parseJsonResponse = async (res) => {
   const contentType = res.headers.get("content-type");
   if (!contentType || !contentType.includes("application/json")) {
@@ -39,7 +33,7 @@ export const computeContentHash = async (content) => {
 export const fetchDocumentsFromDB = async () => {
   try {
     const res = await fetch(`${API_BASE}/documents`, {
-      headers: { "bypass-tunnel-reminder": "true" },
+      headers: getCommonHeaders(),
     });
     if (res.ok) {
       const json = await parseJsonResponse(res);
@@ -84,7 +78,7 @@ export const deleteDocumentFromDB = async (id) => {
   try {
     await fetch(`${API_BASE}/documents/${id}`, { 
       method: "DELETE",
-      headers: { "bypass-tunnel-reminder": "true" },
+      headers: getCommonHeaders(),
     });
   } catch (e) {}
 };
@@ -93,7 +87,7 @@ export const deleteDocumentFromDB = async (id) => {
 export const fetchTasksFromDB = async () => {
   try {
     const res = await fetch(`${API_BASE}/tasks`, {
-      headers: { "bypass-tunnel-reminder": "true" },
+      headers: getCommonHeaders(),
     });
     if (res.ok) {
       const json = await parseJsonResponse(res);
@@ -138,7 +132,7 @@ export const deleteTaskFromDB = async (id) => {
   try {
     await fetch(`${API_BASE}/tasks/${id}`, { 
       method: "DELETE",
-      headers: { "bypass-tunnel-reminder": "true" },
+      headers: getCommonHeaders(),
     });
   } catch (e) {}
 };
@@ -148,7 +142,7 @@ export const clearAllTasksFromDB = async () => {
     localStorage.removeItem("tuna_cached_tasks");
     await fetch(`${API_BASE}/tasks`, { 
       method: "DELETE",
-      headers: { "bypass-tunnel-reminder": "true" },
+      headers: getCommonHeaders(),
     });
   } catch (e) {}
 };
@@ -158,7 +152,7 @@ export const checkPostgresCache = async (hash, feature, requiredCount = 5, diffi
   try {
     const url = `${API_BASE}/ai/cache?hash=${hash}&feature=${feature}_${difficulty}&limit=${requiredCount}`;
     const res = await fetch(url, {
-      headers: { "bypass-tunnel-reminder": "true" },
+      headers: getCommonHeaders(),
     });
     if (!res.ok) return null;
     const result = await parseJsonResponse(res);
@@ -194,7 +188,6 @@ const callGemini = async (prompt, isJson = false, featureType = "ai_feature") =>
     const currentUser = JSON.parse(localStorage.getItem("user_info") || localStorage.getItem("user") || "{}");
     const userId = currentUser.zalo_id || currentUser.student_code || "anonymous";
 
-    // Gọi đúng endpoint /api/ai/generate được cung cấp trong routes/ai.routes.js
     const response = await fetch(`${API_BASE}/ai/generate`, {
       method: "POST",
       headers: getCommonHeaders(),

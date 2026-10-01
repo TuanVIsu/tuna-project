@@ -45,7 +45,6 @@ export const ScheduleModal = ({ isOpen, onClose }) => {
       const data = await res.json();
 
       if (data.success) {
-        // Nếu tài khoản đang chờ phê duyệt hoặc bị từ chối
         if (data.isPending) {
           setPendingNotice({
             status: data.verificationStatus,
@@ -55,7 +54,6 @@ export const ScheduleModal = ({ isOpen, onClose }) => {
           return;
         }
 
-        // Nếu đã được duyệt -> Map dữ liệu như bình thường
         const normalized = (data.data || []).map((s) => ({
           id: s.id,
           title: s.title || s.subjectName,
@@ -90,7 +88,7 @@ export const ScheduleModal = ({ isOpen, onClose }) => {
   const currentWeekDays = useMemo(() => {
     const base = new Date(currentViewDate);
     const day = base.getDay();
-    const diff = base.getDate() - day + (day === 0 ? -6 : 1); // Thứ 2 bắt đầu
+    const diff = base.getDate() - day + (day === 0 ? -6 : 1);
 
     const monday = new Date(base.setDate(diff));
     const days = [];
@@ -102,37 +100,27 @@ export const ScheduleModal = ({ isOpen, onClose }) => {
     return days;
   }, [currentViewDate]);
 
-  // Chuyển tuần kế tiếp / tuần trước
   const handleShiftWeek = (offsetWeeks) => {
     const next = new Date(currentViewDate);
     next.setDate(next.getDate() + offsetWeeks * 7);
     setCurrentViewDate(next);
   };
 
-  // Chuyển tháng kế tiếp / tháng trước
   const handleShiftMonth = (offsetMonths) => {
     const next = new Date(currentViewDate);
     next.setMonth(next.getMonth() + offsetMonths);
     setCurrentViewDate(next);
   };
 
-  // Logic lọc theo tab
   const filteredSchedules = useMemo(() => {
     const sorted = [...schedules].sort((a, b) => new Date(a.date) - new Date(b.date));
 
-    if (viewMode === "all") {
-      return sorted;
-    }
-
-    if (viewMode === "day") {
-      return sorted.filter((s) => s.date === selectedDayKey);
-    }
-
+    if (viewMode === "all") return sorted;
+    if (viewMode === "day") return sorted.filter((s) => s.date === selectedDayKey);
     if (viewMode === "week") {
       const weekKeys = new Set(currentWeekDays.map((d) => getLocalDateString(d)));
       return sorted.filter((s) => weekKeys.has(s.date));
     }
-
     if (viewMode === "month") {
       const viewMonth = currentViewDate.getMonth();
       const viewYear = currentViewDate.getFullYear();
@@ -142,11 +130,9 @@ export const ScheduleModal = ({ isOpen, onClose }) => {
         return y === viewYear && m === viewMonth + 1;
       });
     }
-
     return sorted;
   }, [schedules, viewMode, selectedDayKey, currentWeekDays, currentViewDate]);
 
-  // Nhóm theo ngày
   const groupedSchedules = useMemo(() => {
     const map = {};
     filteredSchedules.forEach((item) => {
@@ -156,7 +142,6 @@ export const ScheduleModal = ({ isOpen, onClose }) => {
     return map;
   }, [filteredSchedules]);
 
-  // Gửi lưu lịch tùy chỉnh lên server
   const handleAddSubmit = async (e) => {
     e.preventDefault();
     if (!title.trim()) return;
@@ -192,7 +177,6 @@ export const ScheduleModal = ({ isOpen, onClose }) => {
     }
   };
 
-  // Xóa lịch cá nhân
   const handleDelete = async (id) => {
     if (!window.confirm("Bạn muốn xóa tiết học/sự kiện này?")) return;
     const token = localStorage.getItem("token") || localStorage.getItem("admin_token");
@@ -240,44 +224,46 @@ export const ScheduleModal = ({ isOpen, onClose }) => {
       className="position-absolute top-0 start-0 w-100 h-100 bg-[#F8FAFC] d-flex flex-column"
       style={{ zIndex: 1050, overflowY: "auto", overflowX: "hidden" }}
     >
-      {/* 1. Header Bar */}
-      <div className="bg-gradient-to-r from-blue-700 to-indigo-700 text-white px-3.5 py-3 d-flex align-items-center justify-content-between sticky-top shadow-sm">
-        <div className="d-flex align-items-center gap-2.5">
-          <button
-            onClick={onClose}
-            className="w-8 h-8 rounded-full bg-white/15 flex items-center justify-center border-0 text-white active:scale-95 transition"
-          >
-            <i className="bi bi-chevron-left text-sm font-bold"></i>
-          </button>
-          <div>
-            <h6 className="mb-0 font-extrabold text-[15px] leading-tight">Thời khóa biểu</h6>
-            <span className="text-blue-100 text-[11px] font-medium">
-              {loading
-                ? "Đang đồng bộ..."
-                : pendingNotice
-                ? "Chờ phê duyệt"
-                : `Tổng cộng: ${schedules.length} học phần`}
-            </span>
-          </div>
-        </div>
+      {/* 1. Header Bar: Căn chỉnh đối xứng, hạ đệm chuẩn né tai thỏ & phím Zalo */}
+      <div className="bg-gradient-to-r from-blue-700 via-blue-600 to-indigo-700 text-white sticky-top shadow-xs select-none">
+        {/* Khoảng đệm né vạch giờ & pin */}
+        <div className="w-full h-10" />
 
-        <button
-          onClick={() => setShowAddForm(!showAddForm)}
-          className="px-3 py-1.5 rounded-full bg-white text-blue-700 font-extrabold text-xs flex items-center gap-1 border-0 shadow-sm active:scale-95 transition"
-        >
-          <i className={`bi ${showAddForm ? "bi-x-lg" : "bi-plus-lg"}`}></i>
-          {showAddForm ? "Đóng" : "Thêm mới"}
-        </button>
+        {/* Hàng tiêu đề chính */}
+        <div className="px-4 pb-3 pt-1 flex items-center justify-between gap-3">
+          <div className="flex items-center gap-3 min-w-0 flex-1">
+            <button
+              onClick={onClose}
+              className="w-9 h-9 rounded-full bg-white/15 hover:bg-white/25 active:scale-95 flex items-center justify-center border-0 text-white transition shrink-0 cursor-pointer shadow-2xs"
+              title="Quay lại"
+            >
+              <i className="bi bi-chevron-left text-sm font-black"></i>
+            </button>
+            
+            <div className="flex flex-col justify-center min-w-0 flex-1">
+              <h6 className="mb-0 font-black text-[16px] tracking-tight leading-tight truncate text-white">
+                Thời khóa biểu
+              </h6>
+              <span className="text-blue-100/80 text-[11px] font-medium block truncate mt-0.5">
+                {loading ? "Đang đồng bộ..." : `Tổng cộng: ${schedules.length} học phần`}
+              </span>
+            </div>
+          </div>
+
+          {/* Khoảng trống bên phải rộng 90px để nhường chỗ hoàn toàn cho cụm nút Zalo */}
+          <div className="w-[90px] shrink-0" />
+        </div>
       </div>
 
-      {/* 2. Bộ lọc Tab */}
-      <div className="bg-white px-3 py-2 border-b border-slate-200 flex items-center justify-between gap-2 shadow-2xs">
-        <div className="bg-slate-100 p-1 rounded-2xl flex flex-1 border border-slate-200/70">
+      {/* 2. Thanh công cụ: Bộ lọc Tabs dàn đều + Nút Thêm mới có lề cách chuẩn */}
+      <div className="bg-white px-3.5 py-2.5 border-b border-slate-200/80 flex items-center justify-between gap-2 shadow-2xs">
+        {/* Bộ lọc tab con dàn đều đẹp mắt */}
+        <div className="bg-slate-100 p-1 rounded-2xl flex flex-1 items-center border border-slate-200/60">
           {[
             { id: "all", label: "Tất cả" },
             { id: "day", label: "Hôm nay" },
-            { id: "week", label: "Tuần này" },
-            { id: "month", label: "Tháng này" },
+            { id: "week", label: "Tuần" },
+            { id: "month", label: "Tháng" },
           ].map((tab) => {
             const isActive = viewMode === tab.id;
             return (
@@ -290,10 +276,10 @@ export const ScheduleModal = ({ isOpen, onClose }) => {
                     setCurrentViewDate(new Date());
                   }
                 }}
-                className={`flex-1 py-1.5 rounded-xl text-xs font-black transition border-0 ${
+                className={`flex-1 py-1.5 rounded-xl text-[11px] font-extrabold transition border-0 text-center ${
                   isActive
                     ? "bg-blue-600 text-white shadow-xs"
-                    : "bg-transparent text-slate-600 hover:text-slate-900"
+                    : "bg-transparent text-slate-500 hover:text-slate-800"
                 }`}
               >
                 {tab.label}
@@ -301,6 +287,19 @@ export const ScheduleModal = ({ isOpen, onClose }) => {
             );
           })}
         </div>
+
+        {/* Nút Thêm mới: Cách mép phải hài hòa, không dính sát viền */}
+        <button
+          onClick={() => setShowAddForm(!showAddForm)}
+          className={`px-3 py-1.5 rounded-xl font-black text-xs flex items-center gap-1.5 border-0 shadow-xs active:scale-95 transition cursor-pointer shrink-0 ${
+            showAddForm
+              ? "bg-slate-100 text-slate-700"
+              : "bg-blue-600 text-white shadow-blue-500/25"
+          }`}
+        >
+          <i className={`bi ${showAddForm ? "bi-x-lg" : "bi-plus-lg"} text-[11px]`}></i>
+          <span>{showAddForm ? "Đóng" : "Thêm"}</span>
+        </button>
       </div>
 
       {/* 3. Thanh điều hướng Tuần / Tháng */}
@@ -450,7 +449,7 @@ export const ScheduleModal = ({ isOpen, onClose }) => {
         </div>
       )}
 
-      {/* 5. Danh sách thẻ môn học / Thông báo chờ duyệt */}
+      {/* 5. Danh sách thẻ môn học */}
       <div className="p-3.5 space-y-4 flex-1 pb-16">
         {loading ? (
           <div className="text-center py-10 text-slate-400 text-xs font-bold">
@@ -458,7 +457,6 @@ export const ScheduleModal = ({ isOpen, onClose }) => {
             <div>Đang tải dữ liệu thời khóa biểu...</div>
           </div>
         ) : pendingNotice ? (
-          /* Khối hiển thị khi tài khoản đang chờ duyệt hoặc bị từ chối */
           <div className="bg-white rounded-3xl p-6 text-center border border-amber-200 shadow-2xs mx-1 my-3">
             <div
               className={`w-14 h-14 rounded-2xl flex items-center justify-center text-2xl mx-auto mb-3 ${
@@ -498,7 +496,6 @@ export const ScheduleModal = ({ isOpen, onClose }) => {
         ) : (
           Object.entries(groupedSchedules).map(([dateKey, items]) => (
             <div key={dateKey} className="space-y-2.5">
-              {/* Header ngày */}
               <div className="flex items-center gap-2 px-1">
                 <span className="px-3 py-1 rounded-full bg-blue-600 text-white text-[10.5px] font-extrabold tracking-wide shadow-2xs">
                   {getDayName(dateKey)}, {dateKey.split("-").reverse().join("/")}
@@ -508,7 +505,6 @@ export const ScheduleModal = ({ isOpen, onClose }) => {
                 </span>
               </div>
 
-              {/* Danh sách thẻ môn */}
               <div className="space-y-2.5">
                 {items.map((item) => {
                   const meta = getCategoryMeta(item.category);
