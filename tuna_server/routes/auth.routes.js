@@ -1,3 +1,4 @@
+// tuna_server/routes/auth.routes.js
 const express = require('express');
 const router = express.Router();
 const jwt = require('jsonwebtoken');
@@ -6,6 +7,7 @@ const nodemailer = require('nodemailer');
 const { OAuth2Client } = require('google-auth-library');
 const pool = require('../config/db');
 
+// Lấy secret key an toàn
 let JWT_SECRET = process.env.JWT_SECRET || 'tuna_secret_jwt_key_2026';
 try {
   const authMiddleware = require('../middlewares/auth');
@@ -16,13 +18,21 @@ try {
 
 const googleClient = new OAuth2Client(process.env.GOOGLE_CLIENT_ID || '');
 
+// Cấu hình nodemailer tối ưu tuyệt đối cho máy chủ Render (tránh timeout)
 const transporter = nodemailer.createTransport({
   host: 'smtp.gmail.com',
-  port: 465,
-  secure: true,
+  port: 587,
+  secure: false, // Dùng STARTTLS qua cổng 587
+  family: 4,     // Ép buộc kết nối IPv4 để tránh treo kết nối trên Render
+  connectionTimeout: 10000,
+  greetingTimeout: 10000,
+  socketTimeout: 15000,
   auth: {
     user: process.env.SMTP_USER,
-    pass: (process.env.SMTP_PASS || '').replace(/\s+/g, ''),
+    pass: (process.env.SMTP_PASS || '').replace(/\s+/g, ''), // Tự động dọn sạch khoảng trắng
+  },
+  tls: {
+    rejectUnauthorized: false,
   },
 });
 
@@ -30,6 +40,7 @@ const transporter = nodemailer.createTransport({
 // 1. CỔNG XÁC THỰC EMAIL (.ctuet.edu.vn)
 // ==========================================
 
+// POST /api/auth/send-otp
 router.post('/send-otp', async (req, res) => {
   try {
     const { email } = req.body;
@@ -39,6 +50,7 @@ router.post('/send-otp', async (req, res) => {
 
     const targetEmail = email.trim().toLowerCase();
 
+    // Bắt buộc email kết thúc bằng .ctuet.edu.vn
     if (!targetEmail.endsWith('.ctuet.edu.vn')) {
       return res.status(400).json({
         success: false,
@@ -49,12 +61,21 @@ router.post('/send-otp', async (req, res) => {
     const otp = Math.floor(100000 + Math.random() * 900000).toString();
     const expiresAt = new Date(Date.now() + 5 * 60 * 1000);
 
+    // Lưu mã OTP vào database
     await pool.query(
       `INSERT INTO student_verifications (student_code, email, otp_code, expires_at)
        VALUES ($1, $2, $3, $4)`,
       [targetEmail, targetEmail, otp, expiresAt]
     );
 
+    // Phản hồi ngay cho Mini App để không bị loading lâu
+    res.json({
+      success: true,
+      message: `Đã gửi mã OTP đến ${targetEmail}`,
+      targetEmail,
+    });
+
+    // Gửi email ngầm ở nền
     const mailOptions = {
       from: `"TUNA Trợ Lý Học Tập" <${process.env.SMTP_USER}>`,
       to: targetEmail,
@@ -74,20 +95,21 @@ router.post('/send-otp', async (req, res) => {
       `,
     };
 
-    const info = await transporter.sendMail(mailOptions);
-    console.log('✅ Đã gửi thư OTP thành công:', targetEmail, info.messageId);
+    transporter.sendMail(mailOptions)
+      .then((info) => {
+        console.log(`✅ [Nodemailer] Đã gửi OTP thành công tới: ${targetEmail} (${info.messageId})`);
+      })
+      .catch((err) => {
+        console.error(`❌ [Nodemailer] Lỗi gửi thư tới ${targetEmail}:`, err.message);
+      });
 
-    return res.json({
-      success: true,
-      message: `Đã gửi mã OTP đến ${targetEmail}`,
-      targetEmail,
-    });
   } catch (error) {
-    console.error('❌ Lỗi gửi OTP:', error);
-    return res.status(500).json({ success: false, message: `Lỗi gửi mail: ${error.message}` });
+    console.error('❌ Lỗi database / send-otp:', error);
+    return res.status(500).json({ success: false, message: 'Lỗi hệ thống khi tạo mã OTP!' });
   }
 });
 
+// POST /api/auth/verify-otp
 router.post('/verify-otp', async (req, res) => {
   try {
     const { email, userCode, otp, name } = req.body;
@@ -154,6 +176,7 @@ router.post('/verify-otp', async (req, res) => {
 // 2. CỔNG ĐĂNG NHẬP ADMIN & QUẢN TRỊ VIÊN
 // ==========================================
 
+// POST /api/auth/admin-google-login
 router.post('/admin-google-login', async (req, res) => {
   const { credential, intent = 'login' } = req.body;
 
@@ -237,6 +260,7 @@ router.post('/admin-google-login', async (req, res) => {
   }
 });
 
+// POST /api/auth/admin-password-login
 router.post('/admin-password-login', async (req, res) => {
   const { account, password } = req.body;
 
@@ -303,6 +327,7 @@ router.post('/admin-password-login', async (req, res) => {
   }
 });
 
+// POST /api/auth/admin-request-access
 router.post('/admin-request-access', async (req, res) => {
   const { fullName, email, reason, requestedRole } = req.body;
 
@@ -344,6 +369,7 @@ router.post('/admin-request-access', async (req, res) => {
   }
 });
 
+// POST /api/auth/admin-request-reset-password
 router.post('/admin-request-reset-password', async (req, res) => {
   const { email, note } = req.body;
 
@@ -390,6 +416,7 @@ router.post('/admin-request-reset-password', async (req, res) => {
 // 3. ĐĂNG NHẬP QUA ZALO CŨ (DỰ PHÒNG)
 // ==========================================
 
+// POST /api/auth/zalo-login
 router.post('/zalo-login', async (req, res) => {
   const { zaloId, name, avatar } = req.body;
   try {
