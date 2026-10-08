@@ -1,3 +1,4 @@
+// tuna_server/routes/auth.routes.js
 const express = require('express');
 const router = express.Router();
 const jwt = require('jsonwebtoken');
@@ -5,7 +6,17 @@ const bcrypt = require('bcryptjs');
 const nodemailer = require('nodemailer');
 const { OAuth2Client } = require('google-auth-library');
 const pool = require('../config/db');
-const { JWT_SECRET } = require('../middlewares/auth');
+
+// Lấy JWT_SECRET an toàn
+let JWT_SECRET = process.env.JWT_SECRET || 'tuna_secret_jwt_key_2026';
+try {
+  const authMiddleware = require('../middlewares/auth');
+  if (authMiddleware && authMiddleware.JWT_SECRET) {
+    JWT_SECRET = authMiddleware.JWT_SECRET;
+  }
+} catch (e) {
+  // Dự phòng nếu chưa có middleware auth
+}
 
 const googleClient = new OAuth2Client(process.env.GOOGLE_CLIENT_ID || '');
 
@@ -20,9 +31,9 @@ const transporter = nodemailer.createTransport({
   },
 });
 
-// =========================================================================
-// 1. CỔNG XÁC THỰC EMAIL THÀNH VIÊN TRƯỜNG (.ctuet.edu.vn) CHO ZALO MINI APP
-// =========================================================================
+// ==========================================
+// 1. CỔNG XÁC THỰC EMAIL (.ctuet.edu.vn)
+// ==========================================
 
 // POST /api/auth/send-otp
 router.post('/send-otp', async (req, res) => {
@@ -34,7 +45,7 @@ router.post('/send-otp', async (req, res) => {
 
     const targetEmail = email.trim().toLowerCase();
 
-    // Chỉ cần email kết thúc bằng .ctuet.edu.vn là hợp lệ
+    // Bắt buộc email kết thúc bằng .ctuet.edu.vn
     if (!targetEmail.endsWith('.ctuet.edu.vn')) {
       return res.status(400).json({
         success: false,
@@ -45,7 +56,6 @@ router.post('/send-otp', async (req, res) => {
     const otp = Math.floor(100000 + Math.random() * 900000).toString();
     const expiresAt = new Date(Date.now() + 5 * 60 * 1000);
 
-    // Lưu mã OTP vào database
     await pool.query(
       `INSERT INTO student_verifications (student_code, email, otp_code, expires_at)
        VALUES ($1, $2, $3, $4)`,
@@ -60,7 +70,7 @@ router.post('/send-otp', async (req, res) => {
         <div style="font-family: Arial, sans-serif; max-width: 480px; margin: auto; padding: 24px; border: 1px solid #e2e8f0; border-radius: 16px;">
           <h2 style="color: #0045ce; text-align: center; margin-bottom: 8px;">Xác Thực Tài Khoản TUNA</h2>
           <p style="color: #475569; font-size: 14px;">Xin chào bạn,</p>
-          <p style="color: #475569; font-size: 14px;">Mã OTP dùng để đăng nhập vào ứng dụng TUNA là:</p>
+          <p style="color: #475569; font-size: 14px;">Mã xác thực đăng nhập của bạn là:</p>
           <div style="text-align: center; margin: 24px 0;">
             <span style="font-size: 32px; font-weight: 800; letter-spacing: 6px; color: #0045ce; background: #eff6ff; padding: 12px 24px; border-radius: 12px; border: 1px dashed #3b82f6;">${otp}</span>
           </div>
@@ -149,34 +159,34 @@ router.post('/verify-otp', async (req, res) => {
   }
 });
 
-// =========================================================================
-// 2. CỔNG ĐĂNG NHẬP & PHÊ DUYỆT ADMIN / GIẢNG VIÊN (WEB QUẢN TRỊ TRÊN RENDER)
-// =========================================================================
+// ==========================================
+// 2. CỔNG ĐĂNG NHẬP ADMIN & QUẢN TRỊ VIÊN
+// ==========================================
 
-// POST /api/auth/admin-google-login[cite: 14]
+// POST /api/auth/admin-google-login
 router.post('/admin-google-login', async (req, res) => {
-  const { credential, intent = 'login' } = req.body;[cite: 14]
+  const { credential, intent = 'login' } = req.body;
 
   try {
     if (!credential) {
-      return res.status(400).json({ success: false, message: 'Thiếu mã xác thực Google!' });[cite: 14]
+      return res.status(400).json({ success: false, message: 'Thiếu mã xác thực Google!' });
     }
 
     const ticket = await googleClient.verifyIdToken({
       idToken: credential,
       audience: process.env.GOOGLE_CLIENT_ID,
-    });[cite: 14]
+    });
 
-    const payload = ticket.getPayload();[cite: 14]
-    const googleEmail = (payload.email || '').toLowerCase();[cite: 14]
-    const googleName = payload.name || 'Người dùng Google';[cite: 14]
-    const googleAvatar = payload.picture || '';[cite: 14]
-    const googleSub = payload.sub;[cite: 14]
+    const payload = ticket.getPayload();
+    const googleEmail = (payload.email || '').toLowerCase();
+    const googleName = payload.name || 'Người dùng Google';
+    const googleAvatar = payload.picture || '';
+    const googleSub = payload.sub;
 
     let adminRes = await pool.query(
       `SELECT * FROM admin_users WHERE LOWER(email) = $1 LIMIT 1`,
       [googleEmail]
-    );[cite: 14]
+    );
 
     if (adminRes.rows.length === 0) {
       if (intent === 'request_permission') {
@@ -190,22 +200,22 @@ router.post('/admin-google-login', async (req, res) => {
             googleId: googleSub,
           },
           message: 'Tài khoản chưa có quyền truy cập. Vui lòng gửi yêu cầu cấp quyền.',
-        });[cite: 14]
+        });
       }
 
       return res.status(401).json({
         success: false,
         message: 'Tài khoản Google này chưa được cấp quyền quản trị trên hệ thống!',
-      });[cite: 14]
+      });
     }
 
-    const admin = adminRes.rows[0];[cite: 14]
+    const admin = adminRes.rows[0];
 
     if (!admin.is_active) {
-      return res.status(403).json({ success: false, message: 'Tài khoản này đang bị tạm khóa!' });[cite: 14]
+      return res.status(403).json({ success: false, message: 'Tài khoản này đang bị tạm khóa!' });
     }
 
-    await pool.query(`UPDATE admin_users SET google_id = $1 WHERE id = $2`, [googleSub, admin.id]);[cite: 14]
+    await pool.query(`UPDATE admin_users SET google_id = $1 WHERE id = $2`, [googleSub, admin.id]);
 
     const token = jwt.sign(
       {
@@ -217,7 +227,7 @@ router.post('/admin-google-login', async (req, res) => {
       },
       JWT_SECRET,
       { expiresIn: '3d' }
-    );[cite: 14]
+    );
 
     res.json({
       success: true,
@@ -230,20 +240,20 @@ router.post('/admin-google-login', async (req, res) => {
         role: admin.role,
         permissions: admin.custom_permissions || ['all'],
       },
-    });[cite: 14]
+    });
   } catch (error) {
-    console.error('❌ Lỗi Google OAuth:', error.message);[cite: 14]
-    res.status(500).json({ success: false, message: 'Lỗi xác thực Google: ' + error.message });[cite: 14]
+    console.error('❌ Lỗi Google OAuth:', error.message);
+    res.status(500).json({ success: false, message: 'Lỗi xác thực Google: ' + error.message });
   }
 });
 
-// POST /api/auth/admin-password-login[cite: 14]
+// POST /api/auth/admin-password-login
 router.post('/admin-password-login', async (req, res) => {
-  const { account, password } = req.body;[cite: 14]
+  const { account, password } = req.body;
 
   try {
     if (!account || !password) {
-      return res.status(400).json({ success: false, message: 'Vui lòng nhập tài khoản và mật khẩu!' });[cite: 14]
+      return res.status(400).json({ success: false, message: 'Vui lòng nhập tài khoản và mật khẩu!' });
     }
 
     const result = await pool.query(
@@ -252,27 +262,27 @@ router.post('/admin-password-login', async (req, res) => {
        WHERE LOWER(username) = LOWER($1) OR LOWER(COALESCE(email, '')) = LOWER($1) 
        LIMIT 1`,
       [account.trim()]
-    );[cite: 14]
+    );
 
     if (result.rows.length === 0) {
-      return res.status(401).json({ success: false, message: 'Tài khoản không tồn tại trong danh sách quản trị!' });[cite: 14]
+      return res.status(401).json({ success: false, message: 'Tài khoản không tồn tại trong danh sách quản trị!' });
     }
 
-    const admin = result.rows[0];[cite: 14]
+    const admin = result.rows[0];
 
     if (!admin.is_active) {
-      return res.status(403).json({ success: false, message: 'Tài khoản đang bị tạm khóa!' });[cite: 14]
+      return res.status(403).json({ success: false, message: 'Tài khoản đang bị tạm khóa!' });
     }
 
-    let isMatch = false;[cite: 14]
+    let isMatch = false;
     if (admin.password.startsWith('$2a$') || admin.password.startsWith('$2b$')) {
-      isMatch = await bcrypt.compare(password, admin.password);[cite: 14]
+      isMatch = await bcrypt.compare(password, admin.password);
     } else {
-      isMatch = (admin.password === password || password === 'Admin@123');[cite: 14]
+      isMatch = (admin.password === password || password === 'Admin@123');
     }
 
     if (!isMatch) {
-      return res.status(401).json({ success: false, message: 'Mật khẩu không chính xác!' });[cite: 14]
+      return res.status(401).json({ success: false, message: 'Mật khẩu không chính xác!' });
     }
 
     const token = jwt.sign(
@@ -285,7 +295,7 @@ router.post('/admin-password-login', async (req, res) => {
       },
       JWT_SECRET,
       { expiresIn: '3d' }
-    );[cite: 14]
+    );
 
     res.json({
       success: true,
@@ -298,33 +308,33 @@ router.post('/admin-password-login', async (req, res) => {
         role: admin.role,
         permissions: admin.custom_permissions || ['all'],
       },
-    });[cite: 14]
+    });
   } catch (error) {
-    res.status(500).json({ success: false, message: error.message });[cite: 14]
+    res.status(500).json({ success: false, message: error.message });
   }
 });
 
-// POST /api/auth/admin-request-access[cite: 14]
+// POST /api/auth/admin-request-access
 router.post('/admin-request-access', async (req, res) => {
-  const { fullName, email, reason, requestedRole } = req.body;[cite: 14]
+  const { fullName, email, reason, requestedRole } = req.body;
 
   try {
     if (!fullName || !email) {
-      return res.status(400).json({ success: false, message: 'Vui lòng điền họ tên và email liên hệ!' });[cite: 14]
+      return res.status(400).json({ success: false, message: 'Vui lòng điền họ tên và email liên hệ!' });
     }
 
-    const cleanEmail = email.trim().toLowerCase();[cite: 14]
+    const cleanEmail = email.trim().toLowerCase();
 
     const existingUser = await pool.query(
       `SELECT id, role, is_active FROM admin_users WHERE LOWER(email) = $1 LIMIT 1`,
       [cleanEmail]
-    );[cite: 14]
+    );
 
     if (existingUser.rows.length > 0 && existingUser.rows[0].is_active) {
       return res.status(400).json({
         success: false,
         message: `Tài khoản này đã tồn tại trên hệ thống với vai trò [${existingUser.rows[0].role}]!`,
-      });[cite: 14]
+      });
     }
 
     await pool.query(
@@ -337,36 +347,36 @@ router.post('/admin-request-access', async (req, res) => {
           status = 'pending',
           created_at = CURRENT_TIMESTAMP`,
       [fullName.trim(), cleanEmail, reason || '', requestedRole || 'instructor']
-    );[cite: 14]
+    );
 
-    res.json({ success: true, message: 'Đã gửi/cập nhật yêu cầu cấp quyền thành công tới Super Admin!' });[cite: 14]
+    res.json({ success: true, message: 'Đã gửi/cập nhật yêu cầu cấp quyền thành công tới Super Admin!' });
   } catch (error) {
-    console.error('Lỗi gửi đơn cấp quyền:', error.message);[cite: 14]
-    res.status(500).json({ success: false, message: error.message });[cite: 14]
+    console.error('Lỗi gửi đơn cấp quyền:', error.message);
+    res.status(500).json({ success: false, message: error.message });
   }
 });
 
-// POST /api/auth/admin-request-reset-password[cite: 14]
+// POST /api/auth/admin-request-reset-password
 router.post('/admin-request-reset-password', async (req, res) => {
-  const { email, note } = req.body;[cite: 14]
+  const { email, note } = req.body;
 
   try {
     if (!email || !email.trim()) {
-      return res.status(400).json({ success: false, message: 'Vui lòng nhập địa chỉ email!' });[cite: 14]
+      return res.status(400).json({ success: false, message: 'Vui lòng nhập địa chỉ email!' });
     }
 
-    const cleanEmail = email.trim().toLowerCase();[cite: 14]
+    const cleanEmail = email.trim().toLowerCase();
 
     const checkUser = await pool.query(
       `SELECT id, full_name FROM admin_users WHERE LOWER(email) = $1 LIMIT 1`,
       [cleanEmail]
-    );[cite: 14]
+    );
 
     if (checkUser.rows.length === 0) {
       return res.status(404).json({
         success: false,
         message: 'Email này không tồn tại trong danh sách tài khoản quản trị!',
-      });[cite: 14]
+      });
     }
 
     await pool.query(
@@ -377,28 +387,28 @@ router.post('/admin-request-reset-password', async (req, res) => {
           status = 'pending',
           created_at = CURRENT_TIMESTAMP`,
       [cleanEmail, note ? note.trim() : '']
-    );[cite: 14]
+    );
 
     res.json({
       success: true,
       message: 'Yêu cầu khôi phục mật khẩu đã được chuyển đến Super Admin phê duyệt!',
-    });[cite: 14]
+    });
   } catch (error) {
-    console.error('Lỗi gửi yêu cầu reset mật khẩu:', error.message);[cite: 14]
-    res.status(500).json({ success: false, message: error.message });[cite: 14]
+    console.error('Lỗi gửi yêu cầu reset mật khẩu:', error.message);
+    res.status(500).json({ success: false, message: error.message });
   }
 });
 
-// =========================================================================
-// 3. ĐĂNG NHẬP QUA ZALO CŨ (DỰ PHÒNG CHO NỀN TẢNG MINI APP)[cite: 14]
-// =========================================================================
+// ==========================================
+// 3. ĐĂNG NHẬP QUA ZALO CŨ (DỰ PHÒNG)
+// ==========================================
 
-// POST /api/auth/zalo-login[cite: 14]
+// POST /api/auth/zalo-login
 router.post('/zalo-login', async (req, res) => {
-  const { zaloId, name, avatar } = req.body;[cite: 14]
+  const { zaloId, name, avatar } = req.body;
   try {
-    const validName = name || 'Thành viên';[cite: 14]
-    const validAvatar = avatar || '';[cite: 14]
+    const validName = name || 'Thành viên';
+    const validAvatar = avatar || '';
 
     const userQuery = `
       INSERT INTO users (zalo_id, name, avatar, role) 
@@ -406,26 +416,26 @@ router.post('/zalo-login', async (req, res) => {
       ON CONFLICT (zalo_id) 
       DO UPDATE SET name = EXCLUDED.name, avatar = EXCLUDED.avatar
       RETURNING *;
-    `;[cite: 14]
-    const userResult = await pool.query(userQuery, [String(zaloId), validName, validAvatar]);[cite: 14]
-    const user = userResult.rows[0];[cite: 14]
+    `;
+    const userResult = await pool.query(userQuery, [String(zaloId), validName, validAvatar]);
+    const user = userResult.rows[0];
 
-    let schedules = [];[cite: 14]
+    let schedules = [];
     if (user.student_code) {
       const scheduleQuery = `
         SELECT * FROM student_schedules 
         WHERE student_code = $1 
         ORDER BY day_of_week, start_period ASC;
-      `;[cite: 14]
-      const schedResult = await pool.query(scheduleQuery, [user.student_code]);[cite: 14]
-      schedules = schedResult.rows;[cite: 14]
+      `;
+      const schedResult = await pool.query(scheduleQuery, [user.student_code]);
+      schedules = schedResult.rows;
     }
 
     const token = jwt.sign(
       { id: user.id, zaloId: user.zalo_id, role: user.role, studentCode: user.student_code },
       JWT_SECRET,
       { expiresIn: '7d' }
-    );[cite: 14]
+    );
 
     res.json({
       success: true,
@@ -443,10 +453,10 @@ router.post('/zalo-login', async (req, res) => {
         is_linked: !!user.student_code,
       },
       schedules,
-    });[cite: 14]
+    });
   } catch (error) {
-    res.status(500).json({ success: false, error: error.message });[cite: 14]
+    res.status(500).json({ success: false, error: error.message });
   }
 });
 
-module.exports = router;[cite: 14]
+module.exports = router;
