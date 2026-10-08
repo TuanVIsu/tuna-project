@@ -43,7 +43,6 @@ const transporter = nodemailer.createTransport({
 // ==========================================
 // 1. CỔNG XÁC THỰC EMAIL (.ctuet.edu.vn)
 // ==========================================
-
 // POST /api/auth/send-otp
 router.post('/send-otp', async (req, res) => {
   try {
@@ -72,11 +71,15 @@ router.post('/send-otp', async (req, res) => {
       [targetEmail, targetEmail, otp, expiresAt]
     );
 
-    const mailOptions = {
-      from: `"TUNA Trợ Lý Học Tập" <${process.env.SMTP_USER}>`,
-      to: targetEmail,
+    // Gửi email qua HTTPS API (Cổng 443 - không bao giờ bị Render timeout)
+    const emailPayload = {
+      sender: { 
+        name: "TUNA - Trợ Lý Học Tập", 
+        email: process.env.SMTP_USER || "nguyentuan452016@gmail.com" 
+      },
+      to: [{ email: targetEmail }],
       subject: `[TUNA] Mã xác thực tài khoản: ${otp}`,
-      html: `
+      htmlContent: `
         <div style="font-family: Arial, sans-serif; max-width: 480px; margin: auto; padding: 24px; border: 1px solid #e2e8f0; border-radius: 16px;">
           <h2 style="color: #0045ce; text-align: center; margin-bottom: 8px;">Xác Thực Tài Khoản TUNA</h2>
           <p style="color: #475569; font-size: 14px;">Xin chào bạn,</p>
@@ -91,22 +94,34 @@ router.post('/send-otp', async (req, res) => {
       `,
     };
 
-    // Phản hồi ngay cho Mini App để không bị loading lâu
-    res.json({
+    // Gửi ngầm qua HTTP REST API
+    fetch('https://api.brevo.com/v3/smtp/email', {
+      method: 'POST',
+      headers: {
+        'accept': 'application/json',
+        'api-key': process.env.BREVO_API_KEY,
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify(emailPayload),
+    })
+      .then(async (response) => {
+        const resData = await response.json();
+        if (!response.ok) {
+          console.error(`❌ [Brevo API] Lỗi gửi thư tới ${targetEmail}:`, resData);
+        } else {
+          console.log(`✅ [Brevo API] Đã gửi OTP thành công tới: ${targetEmail}`, resData.messageId);
+        }
+      })
+      .catch((err) => {
+        console.error(`❌ [Brevo API] Lỗi mạng khi gọi API:`, err.message);
+      });
+
+    // Phản hồi ngay cho Mini App
+    return res.json({
       success: true,
       message: `Đã gửi mã OTP đến ${targetEmail}`,
       targetEmail,
     });
-
-    // Gửi email bất đồng bộ ngầm
-    transporter.sendMail(mailOptions)
-      .then((info) => {
-        console.log(`✅ [Nodemailer] Đã gửi OTP thành công tới: ${targetEmail} (${info.messageId})`);
-      })
-      .catch((err) => {
-        console.error(`❌ [Nodemailer] Lỗi gửi thư tới ${targetEmail}:`, err.message);
-      });
-
   } catch (error) {
     console.error('❌ Lỗi database / send-otp:', error);
     return res.status(500).json({ success: false, message: 'Lỗi hệ thống khi tạo mã OTP!' });
