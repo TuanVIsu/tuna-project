@@ -1,13 +1,14 @@
-// tuna_server/routes/auth.routes.js
+// routes/auth.routes.js
 const express = require('express');
 const router = express.Router();
 const jwt = require('jsonwebtoken');
 const bcrypt = require('bcryptjs');
 const nodemailer = require('nodemailer');
+const dns = require('dns');
 const { OAuth2Client } = require('google-auth-library');
 const pool = require('../config/db');
 
-// Lấy secret key an toàn
+// Lấy JWT_SECRET an toàn
 let JWT_SECRET = process.env.JWT_SECRET || 'tuna_secret_jwt_key_2026';
 try {
   const authMiddleware = require('../middlewares/auth');
@@ -18,18 +19,21 @@ try {
 
 const googleClient = new OAuth2Client(process.env.GOOGLE_CLIENT_ID || '');
 
-// Cấu hình nodemailer tối ưu tuyệt đối cho máy chủ Render (tránh timeout)
+// Cấu hình transporter ép buộc IPv4 qua cổng 587 (Khắc phục triệt để ENETUNREACH trên Render)
 const transporter = nodemailer.createTransport({
   host: 'smtp.gmail.com',
   port: 587,
-  secure: false, // Dùng STARTTLS qua cổng 587
-  family: 4,     // Ép buộc kết nối IPv4 để tránh treo kết nối trên Render
-  connectionTimeout: 10000,
+  secure: false, // Sử dụng STARTTLS
+  lookup: (hostname, options, callback) => {
+    // Ép buộc phân giải DNS sang IPv4
+    return dns.lookup(hostname, { family: 4 }, callback);
+  },
+  connectionTimeout: 15000,
   greetingTimeout: 10000,
   socketTimeout: 15000,
   auth: {
     user: process.env.SMTP_USER,
-    pass: (process.env.SMTP_PASS || '').replace(/\s+/g, ''), // Tự động dọn sạch khoảng trắng
+    pass: (process.env.SMTP_PASS || '').replace(/\s+/g, ''),
   },
   tls: {
     rejectUnauthorized: false,
@@ -68,14 +72,6 @@ router.post('/send-otp', async (req, res) => {
       [targetEmail, targetEmail, otp, expiresAt]
     );
 
-    // Phản hồi ngay cho Mini App để không bị loading lâu
-    res.json({
-      success: true,
-      message: `Đã gửi mã OTP đến ${targetEmail}`,
-      targetEmail,
-    });
-
-    // Gửi email ngầm ở nền
     const mailOptions = {
       from: `"TUNA Trợ Lý Học Tập" <${process.env.SMTP_USER}>`,
       to: targetEmail,
@@ -95,6 +91,14 @@ router.post('/send-otp', async (req, res) => {
       `,
     };
 
+    // Phản hồi ngay cho Mini App để không bị loading lâu
+    res.json({
+      success: true,
+      message: `Đã gửi mã OTP đến ${targetEmail}`,
+      targetEmail,
+    });
+
+    // Gửi email bất đồng bộ ngầm
     transporter.sendMail(mailOptions)
       .then((info) => {
         console.log(`✅ [Nodemailer] Đã gửi OTP thành công tới: ${targetEmail} (${info.messageId})`);
