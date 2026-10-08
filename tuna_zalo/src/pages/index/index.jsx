@@ -166,7 +166,7 @@ function IndexPage() {
             </div>
             <h4 className="font-black text-slate-900 text-sm m-0">Xác Thực Sinh Viên</h4>
             <p className="text-[11px] text-slate-400 m-0 mt-0.5">
-              Đăng nhập qua hòm thư trường <b>@student.ctuet.edu.vn</b>
+              Đăng nhập qua hòm thư trường 
             </p>
           </div>
 
@@ -183,25 +183,33 @@ function IndexPage() {
           )}
 
           <form onSubmit={otpSent ? handleVerifyOtp : handleSendOtp} className="space-y-2.5">
-            <div>
-              <label className="text-[11px] font-bold text-slate-700 block mb-1">
-                Tài khoản Email sinh viên *
-              </label>
-              <div className="relative">
-                <input
-                  type="text"
-                  required
-                  disabled={otpSent}
-                  placeholder="tên_tài_khoản"
-                  value={emailUser}
-                  onChange={(e) => setEmailUser(e.target.value.trim().toLowerCase())}
-                  className="w-full p-2.5 bg-slate-50 rounded-xl border border-slate-200 text-xs font-black text-[#0045ce] focus:outline-none disabled:opacity-60"
-                />
-                <span className="absolute right-2.5 top-2.5 text-[10.5px] font-bold text-slate-400">
-                  @student.ctuet.edu.vn
-                </span>
-              </div>
-            </div>
+ <div>
+  <label className="text-[11px] font-bold text-slate-700 block mb-1">
+    Tài khoản Email sinh viên *
+  </label>
+  <div className="relative flex items-center">
+    <input
+      type="text"
+      required
+      disabled={otpSent}
+      placeholder="Nhập tên tài khoản hoặc MSSV"
+      value={emailUser}
+      onChange={(e) => {
+        // Tự động bỏ đuôi @... nếu sinh viên copy dán cả email đầy đủ vào
+        const val = e.target.value.trim().toLowerCase().replace(/@.*$/, "");
+        setEmailUser(val);
+      }}
+      className="w-full py-2.5 px-3 bg-slate-50 rounded-xl border border-slate-200 text-xs font-black text-[#0045ce] focus:outline-none disabled:opacity-60"
+    />
+    
+    {/* Khi người dùng chưa gõ gì (!emailUser) thì hiện gợi ý, khi gõ vào sẽ tự động ẩn hoàn toàn */}
+    {!emailUser && (
+      <span className="absolute right-3 text-[10.5px] font-bold text-slate-400 pointer-events-none select-none">
+    
+      </span>
+    )}
+  </div>
+</div>
 
             <div>
               <label className="text-[11px] font-bold text-slate-700 block mb-1">
