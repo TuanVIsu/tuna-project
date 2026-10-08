@@ -129,6 +129,7 @@ router.post('/send-otp', async (req, res) => {
 });
 
 // POST /api/auth/verify-otp
+// POST /api/auth/verify-otp
 router.post('/verify-otp', async (req, res) => {
   try {
     const { email, userCode, otp, name } = req.body;
@@ -165,10 +166,12 @@ router.post('/verify-otp', async (req, res) => {
       );
       finalUser = updateRes.rows[0];
     } else {
+      // Gán zalo_id tự sinh để tránh lỗi NOT NULL constraint trong PostgreSQL
+      const generatedZaloId = `ctut_${cleanCode.toLowerCase()}`;
       const insertRes = await pool.query(
-        `INSERT INTO users (student_code, name, role, is_verified)
-         VALUES ($1, $2, $3, TRUE) RETURNING *`,
-        [cleanCode, name || `Thành viên ${cleanCode}`, assignedRole]
+        `INSERT INTO users (zalo_id, student_code, name, role, is_verified)
+         VALUES ($1, $2, $3, $4, TRUE) RETURNING *`,
+        [generatedZaloId, cleanCode, name || `Thành viên ${cleanCode}`, assignedRole]
       );
       finalUser = insertRes.rows[0];
     }
