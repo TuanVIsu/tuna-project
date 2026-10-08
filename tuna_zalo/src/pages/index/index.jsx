@@ -1,4 +1,3 @@
-// tuna_zalo/src/pages/index/index.jsx
 import React, { useState, useEffect } from "react";
 import Layout from "../../components/layout";
 import { HomeSection } from "./HomeSection";
@@ -22,13 +21,11 @@ function IndexPage() {
   const [showLibrary, setShowLibrary] = useState(false);
   const [academicProfile, setAcademicProfile] = useState(null);
 
-  // States quản lý xác thực OTP
-  const [authStep, setAuthStep] = useState(1); // 1: Nhập thông tin, 2: Nhập OTP
   const [emailUser, setEmailUser] = useState("");
   const [studentCode, setStudentCode] = useState("");
   const [fullName, setFullName] = useState("");
-  const [className, setClassName] = useState("");
   const [otpValue, setOtpValue] = useState("");
+  const [otpSent, setOtpSent] = useState(false);
   const [loading, setLoading] = useState(false);
   const [statusMsg, setStatusMsg] = useState({ text: "", type: "" });
   const [countdown, setCountdown] = useState(0);
@@ -48,7 +45,6 @@ function IndexPage() {
     } catch (e) {}
   }, []);
 
-  // Bộ đếm ngược thời gian gửi lại OTP
   useEffect(() => {
     if (countdown > 0) {
       const timer = setTimeout(() => setCountdown(countdown - 1), 1000);
@@ -56,11 +52,10 @@ function IndexPage() {
     }
   }, [countdown]);
 
-  // BƯỚC 1: Gửi mã OTP về email trường
   const handleSendOtp = async (e) => {
-    e.preventDefault();
+    if (e) e.preventDefault();
     if (!emailUser.trim()) {
-      setStatusMsg({ text: "Vui lòng nhập tên tài khoản Email trường!", type: "error" });
+      setStatusMsg({ text: "Vui lòng nhập tên tài khoản Email sinh viên!", type: "error" });
       return;
     }
     if (!studentCode.trim()) {
@@ -88,23 +83,22 @@ function IndexPage() {
       const data = await res.json();
 
       if (data.success) {
-        setAuthStep(2);
+        setOtpSent(true);
         setCountdown(60);
         setStatusMsg({
-          text: `Mã OTP đã gửi về ${cleanEmailUser}@ctuet.edu.vn`,
+          text: `Mã OTP đã gửi về ${cleanEmailUser}@student.ctuet.edu.vn`,
           type: "success",
         });
       } else {
-        setStatusMsg({ text: data.message || "Không thể gửi OTP đến email này!", type: "error" });
+        setStatusMsg({ text: data.message || "Không thể gửi OTP!", type: "error" });
       }
     } catch (err) {
-      setStatusMsg({ text: "Không thể kết nối đến máy chủ. Vui lòng thử lại sau!", type: "error" });
+      setStatusMsg({ text: "Lỗi kết nối máy chủ xác thực!", type: "error" });
     } finally {
       setLoading(false);
     }
   };
 
-  // BƯỚC 2: Kiểm tra OTP và kích hoạt tài khoản
   const handleVerifyOtp = async (e) => {
     e.preventDefault();
     if (!otpValue || otpValue.trim().length < 6) {
@@ -127,8 +121,6 @@ function IndexPage() {
           actualMssv: cleanMssv,
           otp: otpValue.trim(),
           name: fullName.trim(),
-          className: className.trim() || "Chưa phân lớp",
-          faculty: "Công nghệ thông tin",
         }),
       });
       const data = await res.json();
@@ -138,7 +130,6 @@ function IndexPage() {
           ...data.user,
           student_code: cleanMssv,
           name: fullName.trim(),
-          class_name: className.trim() || data.user.class_name,
         };
 
         localStorage.setItem("user", JSON.stringify(finalUser));
@@ -146,10 +137,10 @@ function IndexPage() {
         localStorage.setItem("tuna_user_id", finalUser.student_code);
         setCurrentUser(finalUser);
       } else {
-        setStatusMsg({ text: data.message || "Mã OTP không chính xác hoặc đã hết hạn!", type: "error" });
+        setStatusMsg({ text: data.message || "Mã OTP không đúng hoặc đã hết hạn!", type: "error" });
       }
     } catch (err) {
-      setStatusMsg({ text: "Lỗi kết nối máy chủ xác thực!", type: "error" });
+      setStatusMsg({ text: "Lỗi kết nối máy chủ khi xác thực!", type: "error" });
     } finally {
       setLoading(false);
     }
@@ -165,7 +156,6 @@ function IndexPage() {
     }
   };
 
-  // MÀN HÌNH KHÓA: Bắt buộc xác thực danh tính qua email trường
   if (!currentUser) {
     return (
       <div className="position-fixed top-0 start-0 w-100 h-100 bg-[#F8FAFC] d-flex flex-column align-items-center justify-content-center p-3 z-50">
@@ -176,7 +166,7 @@ function IndexPage() {
             </div>
             <h4 className="font-black text-slate-900 text-sm m-0">Xác Thực Sinh Viên</h4>
             <p className="text-[11px] text-slate-400 m-0 mt-0.5">
-              Đăng nhập qua hòm thư trường <b>@ctuet.edu.vn</b>
+              Đăng nhập qua hòm thư trường <b>@student.ctuet.edu.vn</b>
             </p>
           </div>
 
@@ -192,68 +182,75 @@ function IndexPage() {
             </div>
           )}
 
-          {authStep === 1 ? (
-            <form onSubmit={handleSendOtp} className="space-y-2.5">
-              <div>
-                <label className="text-[11px] font-bold text-slate-700 block mb-1">
-                  Email sinh viên trường *
-                </label>
-                <div className="relative">
-                  <input
-                    type="text"
-                    required
-                    placeholder="tên_tài_khoản"
-                    value={emailUser}
-                    onChange={(e) => setEmailUser(e.target.value.trim().toLowerCase())}
-                    className="w-full p-2.5 bg-slate-50 rounded-xl border border-slate-200 text-xs font-black text-[#0045ce] focus:outline-none"
-                  />
-                  <span className="absolute right-2.5 top-2.5 text-[10.5px] font-bold text-slate-400">
-                    @ctuet.edu.vn
-                  </span>
-                </div>
-              </div>
-
-              <div>
-                <label className="text-[11px] font-bold text-slate-700 block mb-1">
-                  Mã Số Sinh Viên (MSSV) *
-                </label>
+          <form onSubmit={otpSent ? handleVerifyOtp : handleSendOtp} className="space-y-2.5">
+            <div>
+              <label className="text-[11px] font-bold text-slate-700 block mb-1">
+                Tài khoản Email sinh viên *
+              </label>
+              <div className="relative">
                 <input
                   type="text"
                   required
-                  placeholder="Nhập mã số sinh viên"
-                  value={studentCode}
-                  onChange={(e) => setStudentCode(e.target.value.toUpperCase())}
-                  className="w-full p-2.5 bg-slate-50 rounded-xl border border-slate-200 text-xs font-bold text-slate-800 focus:outline-none uppercase"
+                  disabled={otpSent}
+                  placeholder="tên_tài_khoản"
+                  value={emailUser}
+                  onChange={(e) => setEmailUser(e.target.value.trim().toLowerCase())}
+                  className="w-full p-2.5 bg-slate-50 rounded-xl border border-slate-200 text-xs font-black text-[#0045ce] focus:outline-none disabled:opacity-60"
                 />
+                <span className="absolute right-2.5 top-2.5 text-[10.5px] font-bold text-slate-400">
+                  @student.ctuet.edu.vn
+                </span>
               </div>
+            </div>
 
-              <div>
-                <label className="text-[11px] font-bold text-slate-700 block mb-1">
-                  Họ và Tên *
+            <div>
+              <label className="text-[11px] font-bold text-slate-700 block mb-1">
+                Mã Số Sinh Viên (MSSV) *
+              </label>
+              <input
+                type="text"
+                required
+                disabled={otpSent}
+                placeholder="Nhập mã số sinh viên"
+                value={studentCode}
+                onChange={(e) => setStudentCode(e.target.value.toUpperCase())}
+                className="w-full p-2.5 bg-slate-50 rounded-xl border border-slate-200 text-xs font-bold text-slate-800 focus:outline-none uppercase disabled:opacity-60"
+              />
+            </div>
+
+            <div>
+              <label className="text-[11px] font-bold text-slate-700 block mb-1">
+                Họ và Tên *
+              </label>
+              <input
+                type="text"
+                required
+                disabled={otpSent}
+                placeholder="Nhập đầy đủ họ và tên"
+                value={fullName}
+                onChange={(e) => setFullName(e.target.value)}
+                className="w-full p-2 bg-slate-50 rounded-xl border border-slate-200 text-xs font-bold text-slate-800 focus:outline-none disabled:opacity-60"
+              />
+            </div>
+
+            {otpSent && (
+              <div className="pt-1">
+                <label className="text-[11px] font-bold text-emerald-700 block mb-1">
+                  Nhập mã OTP (6 chữ số trong email) *
                 </label>
                 <input
                   type="text"
+                  maxLength={6}
                   required
-                  placeholder="Nhập đầy đủ họ và tên"
-                  value={fullName}
-                  onChange={(e) => setFullName(e.target.value)}
-                  className="w-full p-2 bg-slate-50 rounded-xl border border-slate-200 text-xs font-bold text-slate-800 focus:outline-none"
+                  placeholder="••••••"
+                  value={otpValue}
+                  onChange={(e) => setOtpValue(e.target.value)}
+                  className="w-full p-2.5 bg-emerald-50 rounded-xl border border-emerald-300 text-center text-lg font-black tracking-widest text-[#0045ce] focus:outline-none"
                 />
               </div>
+            )}
 
-              <div>
-                <label className="text-[11px] font-bold text-slate-700 block mb-1">
-                  Lớp sinh hoạt
-                </label>
-                <input
-                  type="text"
-                  placeholder="Nhập mã lớp"
-                  value={className}
-                  onChange={(e) => setClassName(e.target.value)}
-                  className="w-full p-2 bg-slate-50 rounded-xl border border-slate-200 text-xs font-bold text-slate-800 focus:outline-none"
-                />
-              </div>
-
+            {!otpSent ? (
               <button
                 type="submit"
                 disabled={loading}
@@ -268,25 +265,100 @@ function IndexPage() {
                   </>
                 )}
               </button>
-            </form>
-          ) : (
-            <form onSubmit={handleVerifyOtp} className="space-y-3">
-              <div>
-                <label className="text-[11px] font-bold text-slate-700 block mb-1">
-                  Nhập mã OTP (6 số từ email)
-                </label>
-                <input
-                  type="text"
-                  maxLength={6}
-                  required
-                  placeholder="••••••"
-                  value={otpValue}
-                  onChange={(e) => setOtpValue(e.target.value)}
-                  className="w-full p-3 bg-slate-50 rounded-xl border border-slate-200 text-center text-lg font-black tracking-widest text-[#0045ce] focus:outline-none"
-                />
-              </div>
+            ) : (
+              <div className="space-y-2 pt-1">
+                <button
+                  type="submit"
+                  disabled={loading}
+                  className="w-full py-3 bg-emerald-600 hover:bg-emerald-700 text-white font-black rounded-xl text-xs border-0 cursor-pointer shadow-md active:scale-95 transition flex items-center justify-center gap-1.5"
+                >
+                  {loading ? (
+                    <span className="spinner-border spinner-border-sm"></span>
+                  ) : (
+                    <>
+                      <i className="bi bi-check-circle-fill"></i>
+                      <span>Xác nhận & Vào ứng dụng</span>
+                    </>
+                  )}
+                </button>
 
-              <button
-                type="submit"
-                disabled={loading}
-                className="w-full py-3 bg-emerald-600 hover:bg-emerald-700 text
+                <div className="flex items-center justify-between text-xs pt-1">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setOtpSent(false);
+                      setOtpValue("");
+                    }}
+                    className="text-slate-400 hover:text-slate-600 font-bold border-0 bg-transparent cursor-pointer p-0"
+                  >
+                    ← Sửa lại thông tin
+                  </button>
+
+                  <button
+                    type="button"
+                    disabled={countdown > 0}
+                    onClick={handleSendOtp}
+                    className="text-[#0045ce] disabled:text-slate-400 font-bold border-0 bg-transparent cursor-pointer p-0"
+                  >
+                    {countdown > 0 ? `Gửi lại sau (${countdown}s)` : "Gửi lại OTP"}
+                  </button>
+                </div>
+              </div>
+            )}
+          </form>
+        </div>
+      </div>
+    );
+  }
+
+  const renderContent = () => {
+    switch (activeTab) {
+      case "home":
+        return <HomeSection currentUser={currentUser} onNavigate={handleNavigate} />;
+      case "streak":
+        return <StreakLeaderboardSection currentUser={currentUser} onBack={() => setActiveTab("home")} />;
+      case "timeline":
+        return (
+          <TimelinePage
+            onBack={() => setActiveTab("home")}
+            onNavigateToTasks={() => setActiveTab("tasks")}
+            onNavigateToDocs={() => setActiveTab("docs")}
+            onOpenScheduleModal={() => setShowSchedule(true)}
+          />
+        );
+      case "aihub":
+        return <AIHubSection currentUser={currentUser} onNavigate={handleNavigate} />;
+      case "tasks":
+        return <TasksSection currentUser={currentUser} onNavigate={handleNavigate} />;
+      case "docs":
+        return <DocsSection currentUser={currentUser} onNavigateToAIHub={() => setActiveTab("aihub")} />;
+      case "community":
+        return <ChatSection currentUser={currentUser} />;
+      case "profile":
+        return <ProfileSection currentUser={currentUser} />;
+      default:
+        return <HomeSection currentUser={currentUser} onNavigate={handleNavigate} />;
+    }
+  };
+
+  return (
+    <Layout activeTab={activeTab} setActiveTab={setActiveTab}>
+      <div key={activeTab} className="page-transition">
+        {renderContent()}
+      </div>
+
+      <ScheduleModal isOpen={showSchedule} onClose={() => setShowSchedule(false)} />
+      <LibraryModal
+        isOpen={showLibrary}
+        onClose={() => setShowLibrary(false)}
+        userMajor={currentUser?.faculty || "Công Nghệ Thông Tin"}
+        onNavigateToDocs={() => {
+          setShowLibrary(false);
+          setActiveTab("docs");
+        }}
+      />
+    </Layout>
+  );
+}
+
+export default IndexPage;
