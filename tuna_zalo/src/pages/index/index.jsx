@@ -19,10 +19,10 @@ function IndexPage() {
   const [currentUser, setCurrentUser] = useState(() => getInitialUser());
   const [showSchedule, setShowSchedule] = useState(false);
   const [showLibrary, setShowLibrary] = useState(false);
-  const [academicProfile, setAcademicProfile] = useState(null);
 
-  const [emailUser, setEmailUser] = useState("");
-  const [studentCode, setStudentCode] = useState("");
+  // States quản lý xác thực thành viên
+  const [email, setEmail] = useState("");
+  const [userCode, setUserCode] = useState("");
   const [fullName, setFullName] = useState("");
   const [otpValue, setOtpValue] = useState("");
   const [otpSent, setOtpSent] = useState(false);
@@ -36,13 +36,6 @@ function IndexPage() {
       if (user) setCurrentUser(user);
     };
     init();
-
-    try {
-      const savedProfile = localStorage.getItem("user_academic_profile");
-      if (savedProfile && savedProfile !== "undefined") {
-        setAcademicProfile(JSON.parse(savedProfile));
-      }
-    } catch (e) {}
   }, []);
 
   useEffect(() => {
@@ -54,16 +47,22 @@ function IndexPage() {
 
   const handleSendOtp = async (e) => {
     if (e) e.preventDefault();
-    if (!emailUser.trim()) {
-      setStatusMsg({ text: "Vui lòng nhập tên tài khoản Email sinh viên!", type: "error" });
+    const cleanEmail = email.trim().toLowerCase();
+
+    if (!cleanEmail) {
+      setStatusMsg({ text: "Vui lòng nhập địa chỉ email của bạn!", type: "error" });
       return;
     }
-    if (!studentCode.trim()) {
-      setStatusMsg({ text: "Vui lòng nhập Mã số sinh viên (MSSV)!", type: "error" });
+    if (!cleanEmail.endsWith(".ctuet.edu.vn")) {
+      setStatusMsg({ text: "Email phải có đuôi kết thúc bằng .ctuet.edu.vn!", type: "error" });
+      return;
+    }
+    if (!userCode.trim()) {
+      setStatusMsg({ text: "Vui lòng nhập MSSV hoặc Mã định danh!", type: "error" });
       return;
     }
     if (!fullName.trim()) {
-      setStatusMsg({ text: "Vui lòng nhập Họ và tên sinh viên!", type: "error" });
+      setStatusMsg({ text: "Vui lòng nhập Họ và tên!", type: "error" });
       return;
     }
 
@@ -71,14 +70,10 @@ function IndexPage() {
     setStatusMsg({ text: "", type: "" });
 
     try {
-      const cleanEmailUser = emailUser.trim().toLowerCase();
       const res = await fetch(`${API_BASE}/auth/send-otp`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ 
-          studentCode: cleanEmailUser,
-          actualMssv: studentCode.trim().toUpperCase(),
-        }),
+        body: JSON.stringify({ email: cleanEmail }),
       });
       const data = await res.json();
 
@@ -86,14 +81,14 @@ function IndexPage() {
         setOtpSent(true);
         setCountdown(60);
         setStatusMsg({
-          text: `Mã OTP đã gửi về ${cleanEmailUser}@student.ctuet.edu.vn`,
+          text: `Mã OTP đã gửi về ${data.targetEmail || cleanEmail}`,
           type: "success",
         });
       } else {
         setStatusMsg({ text: data.message || "Không thể gửi OTP!", type: "error" });
       }
     } catch (err) {
-      setStatusMsg({ text: "Lỗi kết nối máy chủ xác thực!", type: "error" });
+      setStatusMsg({ text: "Không thể kết nối máy chủ xác thực!", type: "error" });
     } finally {
       setLoading(false);
     }
@@ -110,15 +105,15 @@ function IndexPage() {
     setStatusMsg({ text: "", type: "" });
 
     try {
-      const cleanEmailUser = emailUser.trim().toLowerCase();
-      const cleanMssv = studentCode.trim().toUpperCase();
+      const cleanEmail = email.trim().toLowerCase();
+      const cleanCode = userCode.trim().toUpperCase();
 
       const res = await fetch(`${API_BASE}/auth/verify-otp`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          studentCode: cleanEmailUser,
-          actualMssv: cleanMssv,
+          email: cleanEmail,
+          userCode: cleanCode,
           otp: otpValue.trim(),
           name: fullName.trim(),
         }),
@@ -128,7 +123,7 @@ function IndexPage() {
       if (data.success && data.user) {
         const finalUser = {
           ...data.user,
-          student_code: cleanMssv,
+          student_code: cleanCode,
           name: fullName.trim(),
         };
 
@@ -156,6 +151,7 @@ function IndexPage() {
     }
   };
 
+  // MÀN HÌNH KHÓA: Nhập email đuôi .ctuet.edu.vn và mã OTP
   if (!currentUser) {
     return (
       <div className="position-fixed top-0 start-0 w-100 h-100 bg-[#F8FAFC] d-flex flex-column align-items-center justify-content-center p-3 z-50">
@@ -164,9 +160,9 @@ function IndexPage() {
             <div className="w-14 h-14 rounded-2xl bg-blue-50 text-[#0045ce] flex items-center justify-center text-2xl mx-auto mb-2 shadow-inner">
               <i className="bi bi-shield-check"></i>
             </div>
-            <h4 className="font-black text-slate-900 text-sm m-0">Xác Thực Sinh Viên</h4>
+            <h4 className="font-black text-slate-900 text-sm m-0">Xác Thực Thành Viên CTUT</h4>
             <p className="text-[11px] text-slate-400 m-0 mt-0.5">
-              Đăng nhập qua hòm thư trường 
+              Dành cho tài khoản email kết thúc bằng <b>.ctuet.edu.vn</b>
             </p>
           </div>
 
@@ -183,45 +179,32 @@ function IndexPage() {
           )}
 
           <form onSubmit={otpSent ? handleVerifyOtp : handleSendOtp} className="space-y-2.5">
- <div>
-  <label className="text-[11px] font-bold text-slate-700 block mb-1">
-    Tài khoản Email sinh viên *
-  </label>
-  <div className="relative flex items-center">
-    <input
-      type="text"
-      required
-      disabled={otpSent}
-      placeholder="Nhập tên tài khoản hoặc MSSV"
-      value={emailUser}
-      onChange={(e) => {
-        // Tự động bỏ đuôi @... nếu sinh viên copy dán cả email đầy đủ vào
-        const val = e.target.value.trim().toLowerCase().replace(/@.*$/, "");
-        setEmailUser(val);
-      }}
-      className="w-full py-2.5 px-3 bg-slate-50 rounded-xl border border-slate-200 text-xs font-black text-[#0045ce] focus:outline-none disabled:opacity-60"
-    />
-    
-    {/* Khi người dùng chưa gõ gì (!emailUser) thì hiện gợi ý, khi gõ vào sẽ tự động ẩn hoàn toàn */}
-    {!emailUser && (
-      <span className="absolute right-3 text-[10.5px] font-bold text-slate-400 pointer-events-none select-none">
-    
-      </span>
-    )}
-  </div>
-</div>
+            <div>
+              <label className="text-[11px] font-bold text-slate-700 block mb-1">
+                Địa chỉ Email trường *
+              </label>
+              <input
+                type="email"
+                required
+                disabled={otpSent}
+                placeholder="Nhập email đuôi .ctuet.edu.vn"
+                value={email}
+                onChange={(e) => setEmail(e.target.value.trim().toLowerCase())}
+                className="w-full py-2.5 px-3 bg-slate-50 rounded-xl border border-slate-200 text-xs font-black text-[#0045ce] focus:outline-none disabled:opacity-60"
+              />
+            </div>
 
             <div>
               <label className="text-[11px] font-bold text-slate-700 block mb-1">
-                Mã Số Sinh Viên (MSSV) *
+                Mã Số Sinh Viên / Mã Cán Bộ *
               </label>
               <input
                 type="text"
                 required
                 disabled={otpSent}
-                placeholder="Nhập mã số sinh viên"
-                value={studentCode}
-                onChange={(e) => setStudentCode(e.target.value.toUpperCase())}
+                placeholder="Nhập mã số cá nhân"
+                value={userCode}
+                onChange={(e) => setUserCode(e.target.value.toUpperCase())}
                 className="w-full p-2.5 bg-slate-50 rounded-xl border border-slate-200 text-xs font-bold text-slate-800 focus:outline-none uppercase disabled:opacity-60"
               />
             </div>
@@ -319,6 +302,7 @@ function IndexPage() {
     );
   }
 
+  // Giao diện chính của ứng dụng
   const renderContent = () => {
     switch (activeTab) {
       case "home":
@@ -359,7 +343,7 @@ function IndexPage() {
       <LibraryModal
         isOpen={showLibrary}
         onClose={() => setShowLibrary(false)}
-        userMajor={currentUser?.faculty || "Công Nghệ Thông Tin"}
+        userMajor={currentUser?.faculty || "Hệ Thống Thông Tin"}
         onNavigateToDocs={() => {
           setShowLibrary(false);
           setActiveTab("docs");
