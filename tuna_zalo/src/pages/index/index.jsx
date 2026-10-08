@@ -20,7 +20,6 @@ function IndexPage() {
   const [showSchedule, setShowSchedule] = useState(false);
   const [showLibrary, setShowLibrary] = useState(false);
 
-  // States quản lý xác thực thành viên
   const [email, setEmail] = useState("");
   const [userCode, setUserCode] = useState("");
   const [fullName, setFullName] = useState("");
@@ -151,7 +150,6 @@ function IndexPage() {
     }
   };
 
-  // MÀN HÌNH KHÓA: Nhập email đuôi .ctuet.edu.vn và mã OTP
   if (!currentUser) {
     return (
       <div className="position-fixed top-0 start-0 w-100 h-100 bg-[#F8FAFC] d-flex flex-column align-items-center justify-content-center p-3 z-50">
@@ -166,9 +164,10 @@ function IndexPage() {
             </p>
           </div>
 
+          {/* SỬA LỖI TRÀN CHỮ: Thêm break-all, break-words và overflow-hidden */}
           {statusMsg.text && (
             <div
-              className={`p-2.5 rounded-xl text-xs font-semibold mb-3 leading-snug ${
+              className={`p-2.5 rounded-xl text-xs font-semibold mb-3 leading-snug break-all break-words overflow-hidden ${
                 statusMsg.type === "error"
                   ? "bg-rose-50 text-rose-600 border border-rose-200"
                   : "bg-emerald-50 text-emerald-700 border border-emerald-200"
@@ -187,7 +186,7 @@ function IndexPage() {
                 type="email"
                 required
                 disabled={otpSent}
-                placeholder="Nhập email đuôi .ctuet.edu.vn"
+                placeholder="Nhập đầy đủ email .ctuet.edu.vn"
                 value={email}
                 onChange={(e) => setEmail(e.target.value.trim().toLowerCase())}
                 className="w-full py-2.5 px-3 bg-slate-50 rounded-xl border border-slate-200 text-xs font-black text-[#0045ce] focus:outline-none disabled:opacity-60"
@@ -302,7 +301,6 @@ function IndexPage() {
     );
   }
 
-  // Giao diện chính của ứng dụng
   const renderContent = () => {
     switch (activeTab) {
       case "home":
