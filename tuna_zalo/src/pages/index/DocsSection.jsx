@@ -1,6 +1,5 @@
 // tuna_zalo/src/pages/index/DocsSection.jsx
 import React, { useState, useEffect, useRef, useMemo } from "react";
-import * as pdfjsLib from "pdfjs-dist";
 import {
   fetchDocumentsFromDB,
   saveDocumentToDB,
@@ -9,8 +8,6 @@ import {
 } from "../../services/aiService";
 
 const API_BASE = "https://tuna-project.onrender.com/api";
-
-pdfjsLib.GlobalWorkerOptions.workerSrc = `https://cdnjs.cloudflare.com/ajax/libs/pdf.js/${pdfjsLib.version || "3.11.174"}/pdf.worker.min.js`;
 
 export const DocsSection = ({ onNavigateToAIHub }) => {
   const [documents, setDocuments] = useState(() => {
@@ -28,7 +25,7 @@ export const DocsSection = ({ onNavigateToAIHub }) => {
   const [activeVideoModal, setActiveVideoModal] = useState(null);
   const [docFilter, setDocFilter] = useState("all"); // 'all' | 'files' | 'ai_summary'
 
-  // PDF Viewer
+  // PDF Viewer states
   const [pdfDoc, setPdfDoc] = useState(null);
   const [pageNum, setPageNum] = useState(1);
   const [totalPages, setTotalPages] = useState(0);
@@ -73,6 +70,7 @@ export const DocsSection = ({ onNavigateToAIHub }) => {
     });
   }, [documents, docFilter]);
 
+  // Tải và đọc file PDF an toàn trên mọi dòng máy (kể cả iPhone X / iOS 16)
   useEffect(() => {
     if (!viewingDoc) {
       setPdfDoc(null);
@@ -86,14 +84,32 @@ export const DocsSection = ({ onNavigateToAIHub }) => {
 
     if (isPDF && targetUrl && targetUrl.startsWith("http")) {
       setPdfLoading(true);
-      pdfjsLib.getDocument(targetUrl).promise
-        .then((doc) => {
-          setPdfDoc(doc);
-          setTotalPages(doc.numPages);
-          setPageNum(1);
-          setPdfLoading(false);
-        })
-        .catch(() => setPdfLoading(false));
+
+      const renderPdfWithInstance = (lib) => {
+        lib.GlobalWorkerOptions.workerSrc =
+          "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
+        lib.getDocument(targetUrl).promise
+          .then((doc) => {
+            setPdfDoc(doc);
+            setTotalPages(doc.numPages);
+            setPageNum(1);
+            setPdfLoading(false);
+          })
+          .catch(() => setPdfLoading(false));
+      };
+
+      if (window.pdfjsLib) {
+        renderPdfWithInstance(window.pdfjsLib);
+      } else {
+        const script = document.createElement("script");
+        script.src = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js";
+        script.onload = () => {
+          if (window.pdfjsLib) renderPdfWithInstance(window.pdfjsLib);
+          else setPdfLoading(false);
+        };
+        script.onerror = () => setPdfLoading(false);
+        document.head.appendChild(script);
+      }
     }
   }, [viewingDoc]);
 
@@ -101,6 +117,7 @@ export const DocsSection = ({ onNavigateToAIHub }) => {
     if (!pdfDoc || !canvasRef.current) return;
     pdfDoc.getPage(pageNum).then((page) => {
       const canvas = canvasRef.current;
+      if (!canvas) return;
       const context = canvas.getContext("2d");
       const viewport = page.getViewport({ scale: 1.15 });
       canvas.height = viewport.height;
@@ -154,7 +171,6 @@ export const DocsSection = ({ onNavigateToAIHub }) => {
     setDocuments((prev) => prev.filter((d) => d.id !== docId));
     await deleteDocumentFromDB(docId);
 
-    // Đồng bộ: Nếu là bản tóm tắt hoặc bản dịch AI, gỡ cờ isDocSaved trong ai_tasks
     if (targetDoc && (targetDoc.type === "AI_SUMMARY" || targetDoc.name?.startsWith("[Tóm tắt]") || targetDoc.name?.startsWith("[Bản dịch]"))) {
       try {
         const rawCachedTasks = localStorage.getItem("tuna_cached_tasks");
@@ -245,14 +261,14 @@ export const DocsSection = ({ onNavigateToAIHub }) => {
     }
   };
 
-  // MÀN HÌNH ĐỌC TÀI LIỆU TOÀN MÀN HÌNH (SAFE AREA CHUẨN IOS)
+  // MÀN HÌNH ĐỌC TÀI LIỆU TOÀN MÀN HÌNH
   if (viewingDoc) {
     const isAiDoc = viewingDoc.name?.startsWith("[Tóm tắt]") || viewingDoc.name?.startsWith("[Bản dịch]");
     const ext = (viewingDoc.name?.split(".").pop() || viewingDoc.type || (isAiDoc ? "VĂN BẢN AI" : "DOC")).toUpperCase();
 
     return (
       <div className="position-fixed top-0 start-0 w-100 h-100 bg-[#F8FAFC] d-flex flex-column z-50 overflow-hidden">
-        {/* Header né Dynamic Island / Tai thỏ chuẩn */}
+        {/* Header đệm né tai thỏ */}
         <div 
           className="bg-[#0045ce] text-white px-3.5 pb-3 d-flex align-items-center justify-content-between shadow-sm shrink-0"
           style={{ paddingTop: "max(var(--sat, 0px), 38px)" }}
@@ -297,7 +313,6 @@ export const DocsSection = ({ onNavigateToAIHub }) => {
 
         <div className="flex-1 w-100 bg-slate-100 d-flex flex-column overflow-hidden position-relative">
           {isAiDoc ? (
-            /* Khung đọc văn bản tóm tắt */
             <div 
               className="flex-1 overflow-y-auto p-3.5 max-w-lg mx-auto w-full"
               style={{ paddingBottom: "calc(var(--sab, 0px) + 36px)" }}
