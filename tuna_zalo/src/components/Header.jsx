@@ -1,9 +1,11 @@
 // src/components/Header.jsx
 import React from "react";
 
+const DEFAULT_AVATAR = "https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&w=256&q=80";
+
 export const Header = ({
   userName = "Sinh viên",
-  greeting = "Chào buổi chiều",
+  greeting = "Chào buổi tối",
   avatarUrl = "",
   logoUrl = "/src/static/logo.png",
   notificationCount = 1,
@@ -12,14 +14,11 @@ export const Header = ({
 }) => {
   return (
     <header className="sticky top-0 z-50 w-full select-none shadow-xs">
-      {/* ================= TẦNG 1: TOP BAR XANH ZALOPAY NATIVE ================= */}
+      {/* TẦNG 1: TOP BAR */}
       <div className="bg-[#0045ce] text-white w-full">
-        {/* Khoảng đệm an toàn Dynamic Island / Notch */}
-        <div className="safe-top-spacer" />
+        <div className="safe-top-spacer" style={{ height: "max(var(--sat, 0px), 38px)" }} />
 
-        {/* Thanh tiêu đề chính: h-[52px] đảm bảo căn giữa hoàn hảo với nút native Zalo */}
         <div className="flex items-center justify-between px-4 h-[50px]">
-          {/* Logo & Tên ứng dụng */}
           <div className="flex items-center gap-2.5 min-w-0 -translate-y-[6px]">
             <img
               src={logoUrl}
@@ -34,26 +33,22 @@ export const Header = ({
             </span>
           </div>
 
-          {/* Chừa đúng khoảng cách cho cụm capsule (...) và (X/Power) trên Zalo iOS */}
           <div className="w-[105px] h-full shrink-0 pointer-events-none" />
         </div>
       </div>
 
-      {/* ================= TẦNG 2: THÔNG TIN SINH VIÊN ================= */}
+      {/* TẦNG 2: THÔNG TIN SINH VIÊN */}
       <div className="bg-white px-4 py-2.5 flex items-center justify-between border-b border-slate-100 shadow-[0_2px_8px_rgba(0,0,0,0.03)] w-full">
         <div className="flex items-center gap-3 min-w-0 flex-1 mr-2">
-          {/* Avatar viền kép */}
+          {/* Avatar dạng ảnh đại diện học tập */}
           <div className="relative w-10 h-10 rounded-full p-[2px] bg-gradient-to-tr from-blue-600 to-indigo-500 shadow-2xs shrink-0">
             <div className="w-full h-full rounded-full overflow-hidden bg-white p-[1px]">
               <img
-                src={
-                  avatarUrl ||
-                  `https://ui-avatars.com/api/?name=${encodeURIComponent(userName)}&background=0045ce&color=fff&bold=true`
-                }
+                src={avatarUrl || DEFAULT_AVATAR}
                 alt="Avatar"
                 className="w-full h-full object-cover rounded-full"
                 onError={(e) => {
-                  e.target.src = `https://ui-avatars.com/api/?name=${encodeURIComponent(userName)}&background=0045ce&color=fff&bold=true`;
+                  e.target.src = DEFAULT_AVATAR;
                 }}
               />
             </div>
@@ -70,7 +65,6 @@ export const Header = ({
           </div>
         </div>
 
-        {/* Cụm công cụ bên phải */}
         <div className="flex items-center gap-2 shrink-0">
           {onSearchClick && (
             <button

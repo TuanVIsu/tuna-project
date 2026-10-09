@@ -1,13 +1,12 @@
 // src/pages/index/ProfileSection.jsx
 import React, { useState, useEffect, useMemo, useCallback } from "react";
-import { handleZaloLogin, getCurrentUser } from "../../services/authService";
+import { getCurrentUser } from "../../services/authService";
 
 const API_BASE = "https://tuna-project.onrender.com/api";
+const DEFAULT_AVATAR = "https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&w=256&q=80";
 
 export const ProfileSection = ({ currentUser: initialUser }) => {
   const [user, setUser] = useState(initialUser || getCurrentUser());
-  const [loading, setLoading] = useState(false);
-
   const [stats, setStats] = useState({
     streak: 0,
     xp: 0,
@@ -16,7 +15,6 @@ export const ProfileSection = ({ currentUser: initialUser }) => {
 
   const [availableFaculties, setAvailableFaculties] = useState([]);
 
-  // Toast thay alert()
   const [toastMessage, setToastMessage] = useState(null);
   const showToast = (message, type = "success") => {
     setToastMessage({ message, type });
@@ -26,7 +24,6 @@ export const ProfileSection = ({ currentUser: initialUser }) => {
   const [showEditModal, setShowEditModal] = useState(false);
   const [nameInput, setNameInput] = useState("");
   const [studentCodeInput, setStudentCodeInput] = useState("");
-  const [classNameInput, setClassNameInput] = useState("");
   const [facultyInput, setFacultyInput] = useState("");
   const [isUpdating, setIsUpdating] = useState(false);
 
@@ -82,46 +79,31 @@ export const ProfileSection = ({ currentUser: initialUser }) => {
     if (user) {
       setNameInput(user.name || "");
       setStudentCodeInput(user.student_code || "");
-      setClassNameInput(user.class_name || "");
-      setFacultyInput(user.faculty || (availableFaculties[0] || ""));
+      setFacultyInput(user.faculty || (availableFaculties[0] || "Hệ Thống Thông Tin"));
     }
   }, [user, availableFaculties]);
 
-  const onLoginClick = async () => {
-    setLoading(true);
-    try {
-      const loggedUser = await handleZaloLogin();
-      if (loggedUser) {
-        setUser(loggedUser);
-        fetchProfileAndStats();
-        showToast("Đăng nhập Zalo thành công!");
-      }
-    } catch (e) {
-      showToast("Đăng nhập thất bại: " + e.message, "error");
-    } finally {
-      setLoading(false);
-    }
-  };
-
   const onLogoutClick = () => {
     localStorage.removeItem("user_token");
+    localStorage.removeItem("token");
     localStorage.removeItem("user_role");
     localStorage.removeItem("user_info");
     localStorage.removeItem("user");
+    localStorage.removeItem("tuna_current_user");
     localStorage.removeItem("tuna_user_id");
     setUser(null);
     showToast("Đã đăng xuất tài khoản!");
+    window.location.reload();
   };
 
   const handleOpenEdit = () => {
     if (!user) {
-      showToast("Vui lòng đăng nhập bằng Zalo trước!", "error");
+      showToast("Vui lòng xác thực tài khoản trước!", "error");
       return;
     }
     setNameInput(user.name || "");
     setStudentCodeInput(user.student_code || "");
-    setClassNameInput(user.class_name || "");
-    setFacultyInput(user.faculty || (availableFaculties[0] || ""));
+    setFacultyInput(user.faculty || (availableFaculties[0] || "Hệ Thống Thông Tin"));
     setShowEditModal(true);
   };
 
@@ -142,10 +124,9 @@ export const ProfileSection = ({ currentUser: initialUser }) => {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          zaloId: user.zalo_id || user.id || myUserId,
+          zaloId: user.zalo_id || `ctut_${studentCodeInput.trim().toLowerCase()}`,
           name: nameInput.trim(),
-          studentCode: studentCodeInput.trim(),
-          className: classNameInput.trim(),
+          studentCode: studentCodeInput.trim().toUpperCase(),
           faculty: facultyInput.trim(),
         }),
       });
@@ -156,15 +137,15 @@ export const ProfileSection = ({ currentUser: initialUser }) => {
         const updatedUser = {
           ...user,
           name: nameInput.trim(),
-          student_code: studentCodeInput.trim(),
-          class_name: classNameInput.trim(),
+          student_code: studentCodeInput.trim().toUpperCase(),
           faculty: facultyInput.trim(),
-          verification_status: "pending",
+          verification_status: "approved",
+          is_verified: true,
         };
         setUser(updatedUser);
         localStorage.setItem("user", JSON.stringify(updatedUser));
         localStorage.setItem("user_info", JSON.stringify(updatedUser));
-        localStorage.setItem("tuna_user_id", studentCodeInput.trim());
+        localStorage.setItem("tuna_user_id", studentCodeInput.trim().toUpperCase());
         setShowEditModal(false);
         fetchProfileAndStats();
       } else {
@@ -179,10 +160,9 @@ export const ProfileSection = ({ currentUser: initialUser }) => {
 
   return (
     <div className="flex flex-col gap-3.5 pb-8 px-1 w-full relative">
-      {/* TOAST THÔNG BÁO HIỆN ĐẠI */}
       {toastMessage && (
         <div 
-          className="fixed top-24 left-3 right-3 z-50 flex items-center justify-between p-3.5 rounded-2xl shadow-xl border animate-in slide-in-from-top duration-300 backdrop-blur-md"
+          className="fixed top-24 left-3 right-3 z-50 flex items-center justify-between p-3.5 rounded-2xl shadow-xl border animate-in slide-in-from-top duration-300 backdrop-blur-md break-words"
           style={{
             backgroundColor: toastMessage.type === "error" ? "rgba(239, 68, 68, 0.95)" : "rgba(16, 185, 129, 0.95)",
             color: "white",
@@ -206,89 +186,65 @@ export const ProfileSection = ({ currentUser: initialUser }) => {
         </div>
       )}
 
-      {/* Khối Thông tin Người dùng */}
-      {!user ? (
-        <div className="bg-white rounded-3xl p-5 shadow-xs border border-slate-200/80 text-center flex flex-col items-center">
-          <div className="w-16 h-16 rounded-full bg-blue-50 text-[#0045ce] flex items-center justify-center text-3xl mb-3 shadow-inner">
-            <i className="bi bi-person-circle"></i>
-          </div>
-          <h5 className="font-black text-slate-900 mb-1 text-sm">Chào bạn!</h5>
-          <p className="text-xs text-slate-500 mb-4 font-medium">
-            Đăng nhập qua Zalo để đồng bộ tiến độ học tập, bài thi và phân quyền.
-          </p>
-          <button
-            onClick={onLoginClick}
-            disabled={loading}
-            className="w-full py-3 bg-[#0045ce] hover:bg-blue-700 text-white font-black rounded-2xl shadow-md shadow-blue-500/20 active:scale-95 transition flex items-center justify-center gap-2 border-0 cursor-pointer text-xs"
-          >
-            {loading ? (
-              <div className="spinner-border spinner-border-sm" role="status"></div>
-            ) : (
-              <>
-                <i className="bi bi-shield-lock-fill"></i> Đăng nhập bằng Zalo
-              </>
-            )}
-          </button>
-        </div>
-      ) : (
-        <div className="bg-white rounded-3xl p-4 shadow-xs border border-slate-200/80 flex flex-col gap-3">
-          <div className="flex items-center gap-3">
-            <div className="w-14 h-14 rounded-full overflow-hidden border-2 border-[#0045ce] p-0.5 shadow-xs shrink-0 bg-blue-50 flex items-center justify-center">
-              {user.avatar ? (
-                <img src={user.avatar} alt="Avatar" className="w-full h-full object-cover rounded-full" />
-              ) : (
-                <span className="font-black text-[#0045ce] text-lg">
-                  {user.name ? user.name.slice(0, 2).toUpperCase() : "SV"}
-                </span>
-              )}
-            </div>
-
-            <div className="flex flex-col flex-1 overflow-hidden">
-              <div className="flex items-center gap-2">
-                <h6 className="font-black text-slate-900 mb-0 text-[15px] truncate">
-                  {user.name || "Người dùng"}
-                </h6>
-                <span
-                  className={`px-2 py-0.5 text-[9.5px] font-extrabold rounded-full uppercase shrink-0 ${
-                    user.is_verified || user.verification_status === "approved"
-                      ? "bg-emerald-50 text-emerald-700 border border-emerald-200"
-                      : "bg-amber-50 text-amber-700 border border-amber-200"
-                  }`}
-                >
-                  {user.is_verified || user.verification_status === "approved"
-                    ? "Đã duyệt"
-                    : "Chờ duyệt"}
-                </span>
-              </div>
-              <p className="text-[11.5px] text-slate-500 mb-0 mt-0.5 truncate font-medium">
-                MSSV: <b className="text-[#0045ce]">{user.student_code || "Chưa cập nhật"}</b> • Lớp: <b className="text-slate-700">{user.class_name || "Chưa phân lớp"}</b>
-              </p>
-              <p className="text-[11px] text-slate-400 mb-0 truncate font-semibold">
-                Khoa: {user.faculty || "Chưa cập nhật khoa"}
-              </p>
-            </div>
+      {/* Thẻ thông tin cá nhân */}
+      <div className="bg-white rounded-3xl p-4 shadow-xs border border-slate-200/80 flex flex-col gap-3">
+        <div className="flex items-center gap-3">
+          <div className="w-14 h-14 rounded-full overflow-hidden border-2 border-[#0045ce] p-0.5 shadow-xs shrink-0 bg-blue-50 flex items-center justify-center">
+            <img
+              src={user?.avatar || DEFAULT_AVATAR}
+              alt="Avatar"
+              className="w-full h-full object-cover rounded-full"
+              onError={(e) => {
+                e.target.src = DEFAULT_AVATAR;
+              }}
+            />
           </div>
 
-          <div className="grid grid-cols-3 gap-2 pt-2.5 border-t border-slate-100 text-center">
-            <div className="bg-slate-50 p-2.5 rounded-2xl border border-slate-100">
-              <span className="text-[10px] text-slate-500 font-bold block">Chuỗi học</span>
-              <span className="text-xs font-black text-slate-900">🔥 {stats.streak} ngày</span>
-            </div>
-            <div className="bg-slate-50 p-2.5 rounded-2xl border border-slate-100">
-              <span className="text-[10px] text-slate-500 font-bold block">Điểm thưởng</span>
-              <span className="text-xs font-black text-[#0045ce]">⚡ {stats.xp} XP</span>
-            </div>
-            <div className="bg-slate-50 p-2.5 rounded-2xl border border-slate-100">
-              <span className="text-[10px] text-slate-500 font-bold block">Xếp hạng</span>
-              <span className="text-xs font-black text-amber-600">
-                🏆 Top {stats.rank}
+          <div className="flex flex-col flex-1 overflow-hidden min-w-0">
+            <div className="flex items-center gap-2">
+              <h6 className="font-black text-slate-900 mb-0 text-[15px] truncate break-words">
+                {user?.name || "Sinh viên"}
+              </h6>
+              <span
+                className={`px-2 py-0.5 text-[9.5px] font-extrabold rounded-full uppercase shrink-0 ${
+                  user?.is_verified || user?.verification_status === "approved"
+                    ? "bg-emerald-50 text-emerald-700 border border-emerald-200"
+                    : "bg-amber-50 text-amber-700 border border-amber-200"
+                }`}
+              >
+                {user?.is_verified || user?.verification_status === "approved"
+                  ? "Đã duyệt"
+                  : "Chờ duyệt"}
               </span>
             </div>
+            <p className="text-[11.5px] text-slate-500 mb-0 mt-0.5 truncate font-medium">
+              MSSV: <b className="text-[#0045ce]">{user?.student_code || "Chưa cập nhật"}</b>
+            </p>
+            <p className="text-[11px] text-slate-400 mb-0 truncate font-semibold">
+              Khoa: {user?.faculty || "Hệ Thống Thông Tin"}
+            </p>
           </div>
         </div>
-      )}
 
-      {/* Cài đặt & Sửa hồ sơ */}
+        <div className="grid grid-cols-3 gap-2 pt-2.5 border-t border-slate-100 text-center">
+          <div className="bg-slate-50 p-2.5 rounded-2xl border border-slate-100">
+            <span className="text-[10px] text-slate-500 font-bold block">Chuỗi học</span>
+            <span className="text-xs font-black text-slate-900">🔥 {stats.streak} ngày</span>
+          </div>
+          <div className="bg-slate-50 p-2.5 rounded-2xl border border-slate-100">
+            <span className="text-[10px] text-slate-500 font-bold block">Điểm thưởng</span>
+            <span className="text-xs font-black text-[#0045ce]">⚡ {stats.xp} XP</span>
+          </div>
+          <div className="bg-slate-50 p-2.5 rounded-2xl border border-slate-100">
+            <span className="text-[10px] text-slate-500 font-bold block">Xếp hạng</span>
+            <span className="text-xs font-black text-amber-600">
+              🏆 Top {stats.rank}
+            </span>
+          </div>
+        </div>
+      </div>
+
+      {/* Cài đặt tài khoản */}
       <div className="bg-white rounded-3xl p-4 shadow-xs border border-slate-200/80 space-y-2.5">
         <p className="text-[10.5px] font-extrabold text-slate-400 uppercase tracking-wider mb-1">
           Tài khoản & Hồ sơ sinh viên
@@ -298,16 +254,16 @@ export const ProfileSection = ({ currentUser: initialUser }) => {
           onClick={handleOpenEdit}
           className="flex items-center justify-between p-2.5 rounded-2xl hover:bg-slate-50 active:scale-98 transition cursor-pointer border border-transparent hover:border-slate-200/80"
         >
-          <div className="flex items-center gap-3 overflow-hidden">
+          <div className="flex items-center gap-3 overflow-hidden min-w-0 flex-1">
             <div className="w-10 h-10 rounded-2xl bg-blue-50 text-[#0045ce] flex items-center justify-center text-lg shrink-0 border border-blue-100">
               <i className="bi bi-person-badge"></i>
             </div>
-            <div className="truncate">
+            <div className="truncate min-w-0 flex-1">
               <p className="text-xs font-black text-slate-800 m-0 leading-tight">Chỉnh sửa hồ sơ</p>
               <p className="text-[11px] text-slate-500 m-0 mt-0.5 truncate font-medium">
                 {user?.student_code
-                  ? `${user.name} • ${user.student_code} • ${user.class_name || "Chưa có lớp"}`
-                  : "Cập nhật MSSV, lớp và chuyên ngành"}
+                  ? `${user.name} • ${user.student_code} • ${user.faculty || "Hệ Thống Thông Tin"}`
+                  : "Cập nhật MSSV và chuyên ngành"}
               </p>
             </div>
           </div>
@@ -326,7 +282,7 @@ export const ProfileSection = ({ currentUser: initialUser }) => {
         </button>
       )}
 
-      {/* MODAL CẬP NHẬT HỒ SƠ */}
+      {/* Modal Sửa Hồ Sơ */}
       {showEditModal && (
         <div
           className="position-fixed top-0 start-0 w-100 h-100 d-flex align-items-center justify-content-center p-3 z-50 animate-fade-in"
@@ -372,13 +328,13 @@ export const ProfileSection = ({ currentUser: initialUser }) => {
                   required
                   placeholder="VD: B2300001"
                   value={studentCodeInput}
-                  onChange={(e) => setStudentCodeInput(e.target.value)}
-                  className="form-control form-control-sm rounded-3 fw-bold text-[#0045ce]"
+                  onChange={(e) => setStudentCodeInput(e.target.value.toUpperCase())}
+                  className="form-control form-control-sm rounded-3 fw-bold text-[#0045ce] uppercase"
                 />
               </div>
 
               <div>
-                <label className="form-label text-muted small fw-bold mb-1">Chuyên Ngành (Từ CSDL)</label>
+                <label className="form-label text-muted small fw-bold mb-1">Chuyên Ngành</label>
                 <select
                   value={facultyInput}
                   onChange={(e) => setFacultyInput(e.target.value)}
@@ -396,18 +352,6 @@ export const ProfileSection = ({ currentUser: initialUser }) => {
                     </option>
                   )}
                 </select>
-              </div>
-
-              <div>
-                <label className="form-label text-muted small fw-bold mb-1">Mã Lớp Sinh Hoạt *</label>
-                <input
-                  type="text"
-                  required
-                  placeholder="VD: HTTT2311"
-                  value={classNameInput}
-                  onChange={(e) => setClassNameInput(e.target.value)}
-                  className="form-control form-control-sm rounded-3 fw-bold"
-                />
               </div>
 
               <div className="d-flex gap-2 mt-3">

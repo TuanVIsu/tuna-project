@@ -17,7 +17,6 @@ export const HomeSection = ({ currentUser, onNavigate }) => {
   const [showLibraryModal, setShowLibraryModal] = useState(false);
   const [currentTaskIdx, setCurrentTaskIdx] = useState(0);
 
-  // ĐỒNG BỘ CHÍNH XÁC USER ID DUY NHẤT (Khớp hoàn toàn với TasksSection)
   const myUserId = useMemo(() => {
     let savedId = localStorage.getItem("tuna_user_id");
     if (!savedId) {
@@ -63,7 +62,6 @@ export const HomeSection = ({ currentUser, onNavigate }) => {
     loadStoredData();
   }, [currentUser]);
 
-  // Đồng bộ chuỗi Streak trực tiếp từ CSDL theo myUserId
   const fetchStreak = async () => {
     if (!myUserId) return;
     try {
@@ -85,7 +83,6 @@ export const HomeSection = ({ currentUser, onNavigate }) => {
     fetchStreak();
   }, [myUserId]);
 
-  // TRUY VẤN LỊCH TRÌNH TỪ CSDL POSTGRESQL (learning_timelines)
   useEffect(() => {
     const fetchTodayTimeline = async () => {
       if (!academicProfile) return;
@@ -112,7 +109,6 @@ export const HomeSection = ({ currentUser, onNavigate }) => {
     fetchTodayTimeline();
   }, [todayStr, academicProfile, myUserId]);
 
-  // THỜI KHÓA BIỂU + BẢN GHI TỪ BẢNG learning_timelines
   const todaySchedules = useMemo(() => {
     const scheduleItems = [];
 
@@ -180,8 +176,7 @@ export const HomeSection = ({ currentUser, onNavigate }) => {
     return scheduleItems;
   }, [schedules, dbTimelinesToday, todayStr, onNavigate]);
 
-const dynamicTaskList = useMemo(() => {
-    // Lọc sạch tất cả các phần tử rỗng hoặc mang chữ "undefined"
+  const dynamicTaskList = useMemo(() => {
     const rawSubjects = academicProfile?.subjects || [];
     const subjects = rawSubjects.filter(
       (s) => s && String(s).trim() !== "" && String(s) !== "undefined"
@@ -253,8 +248,7 @@ const dynamicTaskList = useMemo(() => {
     else if (activeTask.actionTarget === "docs") onNavigate && onNavigate("docs");
   };
 
-  // Lưới tiện ích: Bấm "Xếp hạng" chuyển sang trang streak
-const quickActions = [
+  const quickActions = [
     { label: "Lịch học", icon: "bi-calendar3", iconBg: "bg-gradient-to-br from-emerald-500 to-teal-600 text-white shadow-emerald-500/20", action: () => setShowScheduleModal(true) },
     { label: "Thư viện", icon: "bi-collection-play-fill", iconBg: "bg-gradient-to-br from-cyan-500 to-blue-600 text-white shadow-cyan-500/20", action: () => setShowLibraryModal(true) },
     { label: "Hỏi AI", icon: "bi-stars", iconBg: "bg-gradient-to-br from-amber-500 to-orange-600 text-white shadow-amber-500/20", action: () => onNavigate && onNavigate("aihub") },
@@ -317,9 +311,8 @@ const quickActions = [
         }}
       />
 
-{/* 1. BANNER LỘ TRÌNH HỌC TẬP (GỌN GÀNG, KHÔNG RỚT DÒNG) */}
+      {/* 1. Banner lộ trình */}
       <div className="rounded-3xl bg-gradient-to-r from-blue-700 via-indigo-700 to-slate-900 p-4 text-white shadow-lg shadow-blue-900/15 border border-white/10">
-        {/* Hàng 1: Tiêu đề ngành & Nút đổi lộ trình */}
         <div className="flex items-center justify-between gap-2">
           <div className="min-w-0 flex-1">
             <span className="text-[10px] font-extrabold uppercase tracking-wider text-blue-200/90 block mb-0.5">
@@ -341,7 +334,6 @@ const quickActions = [
           </button>
         </div>
 
-        {/* Hàng 2: Thanh thông số dàn đều 100% chiều ngang */}
         <div className="mt-3 pt-2.5 border-t border-white/10 flex items-center justify-between text-[11px] text-blue-100/90 font-medium">
           <div className="flex items-center gap-1.5 whitespace-nowrap">
             <span className="w-1.5 h-1.5 rounded-full bg-cyan-400"></span>
@@ -361,7 +353,7 @@ const quickActions = [
         </div>
       </div>
 
-{/* 2. LƯỚI TIỆN ÍCH CUỘN NGANG 2 HÀNG (VUỐT QUA ĐỂ XEM THÊM) */}
+      {/* 2. Tiện ích */}
       <div className="bg-white p-3 rounded-3xl border border-slate-200/80 shadow-xs relative">
         <div className="grid grid-rows-2 grid-flow-col auto-cols-[68px] gap-y-3.5 gap-x-2.5 overflow-x-auto no-scrollbar scroll-smooth py-1 px-1">
           {quickActions.map((item, idx) => (
@@ -383,7 +375,7 @@ const quickActions = [
         </div>
       </div>
 
-      {/* 3. THẺ NHIỆM VỤ TIẾN ĐỘ & HUY HIỆU STREAK (BẤM ĐỂ CHUYỂN SANG TRANG STREAK) */}
+      {/* 3. Thẻ nhiệm vụ */}
       <div className="bg-white rounded-3xl p-4 shadow-xs border border-slate-200/80 relative overflow-hidden">
         <div className="flex items-center justify-between mb-2">
           <span className={`px-2.5 py-0.5 rounded-full text-[10.5px] font-black tracking-wide flex items-center gap-1 ${activeTask.tagBg}`}>
@@ -402,10 +394,10 @@ const quickActions = [
           </button>
         </div>
 
-        <h3 className="text-[14px] font-black text-slate-900 leading-snug mt-1 mb-1 truncate">
+        <h3 className="text-[14px] font-black text-slate-900 leading-snug mt-1 mb-1 truncate break-words">
           {activeTask.title}
         </h3>
-        <p className="text-[11px] text-slate-500 leading-relaxed min-h-[32px] font-medium mb-2.5">
+        <p className="text-[11px] text-slate-500 leading-relaxed min-h-[32px] font-medium mb-2.5 break-words">
           {activeTask.desc}
         </p>
 
@@ -447,7 +439,7 @@ const quickActions = [
         </div>
       </div>
 
-      {/* 4. LỊCH TRÌNH HÔM NAY */}
+      {/* 4. Lịch trình hôm nay */}
       <div className="bg-white rounded-3xl p-4 shadow-xs border border-slate-200/80">
         <div className="flex items-center justify-between mb-3">
           <div className="flex items-center gap-2">
@@ -481,8 +473,8 @@ const quickActions = [
                 onClick={item.action}
                 className={`border-l-[4px] ${item.borderLeft} bg-slate-50/80 hover:bg-slate-100/90 rounded-r-2xl p-3 transition-all cursor-pointer flex items-center justify-between border border-slate-100 active:scale-[0.99]`}
               >
-                <div className="overflow-hidden pr-2">
-                  <p className="text-xs font-black text-slate-900 leading-tight m-0 truncate">
+                <div className="overflow-hidden pr-2 min-w-0 flex-1">
+                  <p className="text-xs font-black text-slate-900 leading-tight m-0 truncate break-words">
                     {item.title}
                   </p>
                   <p className="text-[11px] text-slate-500 mt-1 font-semibold m-0 flex items-center gap-1 truncate">

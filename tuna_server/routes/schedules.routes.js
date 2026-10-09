@@ -7,17 +7,14 @@ const { authenticateToken } = require('../middlewares/auth');
 // =============================================================================
 // 1. LẤY DANH MỤC NGÀNH VÀ KHÓA TỰ ĐỘNG TỪ CSDL (CHO ADMIN BỘ LỌC & MODAL)
 // =============================================================================
-// routes/schedules.routes.js -> GET /admin/meta-options
 router.get('/admin/meta-options', authenticateToken, async (req, res) => {
   try {
-    // 1. Truy vấn danh mục ngành từ bảng faculty_majors
     const majorsRes = await pool.query(
       `SELECT major_code AS "majorCode", major_name AS "majorName" 
        FROM faculty_majors 
        ORDER BY id ASC`
     );
 
-    // 2. Truy vấn danh mục khóa từ bảng academic_cohorts
     const cohortsRes = await pool.query(
       `SELECT cohort_code AS "cohortCode", admission_year AS "admissionYear" 
        FROM academic_cohorts 
@@ -25,7 +22,6 @@ router.get('/admin/meta-options', authenticateToken, async (req, res) => {
        ORDER BY admission_year DESC`
     );
 
-    // Chuẩn hóa dữ liệu trả về cho Frontend
     const majors = majorsRes.rows.length > 0 
       ? majorsRes.rows 
       : [{ majorCode: "HTTT", majorName: "Hệ Thống Thông Tin" }];
@@ -96,8 +92,6 @@ router.get('/available-subjects', authenticateToken, async (req, res) => {
 // =============================================================================
 // 3. QUẢN TRỊ THỜI KHÓA BIỂU DÀNH CHO GIẢNG VIÊN / ADMIN (ACADEMIC SCHEDULES)
 // =============================================================================
-
-// Lấy danh sách lịch trình theo bộ lọc
 router.get('/admin/list', authenticateToken, async (req, res) => {
   const { major, cohort, year, semester, type, className } = req.query;
   try {
@@ -149,8 +143,6 @@ router.get('/admin/list', authenticateToken, async (req, res) => {
   }
 });
 
-// Thêm mới tiết học / lịch thi / thực hành (Hỗ trợ Auto-fill từ Khung CTĐT)
-// routes/schedules.routes.js -> POST /admin/create
 router.post('/admin/create', authenticateToken, async (req, res) => {
   const {
     facultyMajor,
@@ -164,7 +156,7 @@ router.post('/admin/create', authenticateToken, async (req, res) => {
     subjectCode,
     subjectName,
     scheduleType,
-    specificDate, // Chỉ cần ngày diễn ra (YYYY-MM-DD)
+    specificDate,
     startPeriod,
     endPeriod,
     room,
@@ -194,7 +186,6 @@ router.post('/admin/create', authenticateToken, async (req, res) => {
       });
     }
 
-    // Tự động tính Thứ trong tuần từ ngày diễn ra (2: Thứ Hai ... 8: Chủ Nhật)
     const dateObj = new Date(specificDate);
     const jsDay = dateObj.getDay(); 
     const computedDayOfWeek = jsDay === 0 ? 8 : jsDay + 1;
@@ -220,7 +211,6 @@ router.post('/admin/create', authenticateToken, async (req, res) => {
   }
 });
 
-// Chỉnh sửa tiết học / lịch thi
 router.put('/admin/:id', authenticateToken, async (req, res) => {
   const { id } = req.params;
   const {
@@ -280,7 +270,6 @@ router.put('/admin/:id', authenticateToken, async (req, res) => {
   }
 });
 
-// Xóa tiết học / lịch thi
 router.delete('/admin/:id', authenticateToken, async (req, res) => {
   try {
     await pool.query(`DELETE FROM academic_schedules WHERE id = $1`, [req.params.id]);
@@ -291,7 +280,7 @@ router.delete('/admin/:id', authenticateToken, async (req, res) => {
 });
 
 // =============================================================================
-// 4. DÀNH CHO ZALO MINI APP (ĐỒNG BỘ THEO NGÀNH, KHÓA, LỚP VÀ NĂM HỌC)
+// 4. DÀNH CHO ZALO MINI APP (ĐỒNG BỘ NỚI LỎNG KHI KHÔNG CÓ CLASS_NAME)
 // =============================================================================
 router.get('/student-schedule', async (req, res) => {
   const { studentCode, zaloId, month, year } = req.query;
@@ -301,7 +290,6 @@ router.get('/student-schedule', async (req, res) => {
       return res.json({ success: true, data: [] });
     }
 
-    // 1. Phải SELECT rõ ràng is_verified và verification_status
     let userQuery = `
       SELECT id, zalo_id, faculty, class_name, student_code,
              COALESCE(is_verified, false) AS "isVerified",
@@ -331,25 +319,23 @@ router.get('/student-schedule', async (req, res) => {
 
     const user = userRes.rows[0];
 
-    // 2. KIỂM TRA CHẶN: Nếu chưa được duyệt (isVerified === false), CHẶN KHÔNG TRẢ VỀ LỊCH CHUNG CỦA LỚP
-    if (!user.isVerified) {
+    // Chỉ chặn nếu tài khoản bị từ chối chính thức
+    if (user.verificationStatus === 'rejected') {
       return res.json({
         success: true,
         data: [],
         isPending: true,
-        verificationStatus: user.verificationStatus,
-        message: user.verificationStatus === 'rejected'
-          ? `Yêu cầu vào lớp "${user.class_name}" của bạn đã bị từ chối!`
-          : `Hồ sơ lớp "${user.class_name}" của bạn đang chờ Ban cán sự / Admin phê duyệt!`,
+        verificationStatus: 'rejected',
+        message: 'Tài khoản của bạn đã bị từ chối truy cập thời khóa biểu!',
       });
     }
 
-    // 3. Nếu ĐÃ ĐƯỢC DUYỆT -> Truy vấn thời khóa biểu bình thường
     const facultyMajor = user.faculty || 'Hệ Thống Thông Tin';
     const className = user.class_name;
-    const cohortMatch = (className || '').match(/K?(\d{2})/i);
+    const cohortMatch = (className || '').match(/K?(\d{2})/i) || (user.student_code || '').match(/(\d{2})/);
     const cohort = cohortMatch ? `K${cohortMatch[1]}` : 'K23';
 
+    // Truy vấn lịch học nới lỏng
     let scheduleQuery = `
       SELECT 
         id,
@@ -365,11 +351,11 @@ router.get('/student-schedule', async (req, res) => {
         END AS category
       FROM academic_schedules
       WHERE faculty_major = $1 
-        AND cohort = $2
-        AND (class_name IS NULL OR class_name = '' OR class_name = $3)
+        AND (cohort = $2 OR cohort IS NULL OR cohort = '')
+        AND ($3::text IS NULL OR class_name IS NULL OR class_name = '' OR class_name = $3)
         AND specific_date IS NOT NULL
     `;
-    const scheduleParams = [facultyMajor, cohort, className];
+    const scheduleParams = [facultyMajor, cohort, className || null];
 
     if (month && year) {
       scheduleParams.push(Number(month), Number(year));
@@ -397,7 +383,7 @@ router.get('/student-schedule', async (req, res) => {
 });
 
 // =============================================================================
-// 5. MÔN HỌC KHUNG CHƯƠNG TRÌNH ĐÀO TẠO (ALIAS /curriculum & /curriculum-subjects)
+// 5. MÔN HỌC KHUNG CHƯƠNG TRÌNH ĐÀO TẠO
 // =============================================================================
 router.get(['/curriculum', '/curriculum-subjects', '/curriculum/subjects'], async (req, res) => {
   const { major, year, semester } = req.query;
@@ -633,7 +619,7 @@ router.post(['/generate-wrr-plan', '/timelines/generate-wrr-plan'], async (req, 
 });
 
 // =============================================================================
-// 7. QUẢN LÝ ĐIỂM DANH STREAK
+// 7. QUẢN LÝ ĐIỂM DANH STREAK & TÍCH LŨY ĐIỂM XP
 // =============================================================================
 router.get('/streak/:userId', async (req, res) => {
   const { userId } = req.params;
@@ -642,7 +628,7 @@ router.get('/streak/:userId', async (req, res) => {
     const result = await pool.query(query, [userId]);
 
     if (result.rows.length === 0) {
-      return res.json({ success: true, current_streak: 0, longest_streak: 0, last_completed_date: null });
+      return res.json({ success: true, current_streak: 0, longest_streak: 0, xp_points: 0, last_completed_date: null });
     }
 
     const streakData = result.rows[0];
@@ -667,6 +653,7 @@ router.get('/streak/:userId', async (req, res) => {
       success: true,
       current_streak: streakData.current_streak,
       longest_streak: streakData.longest_streak,
+      xp_points: streakData.xp_points || 0,
       last_completed_date: streakData.last_completed_date,
     });
   } catch (error) {
@@ -688,8 +675,8 @@ router.post('/streak/complete', async (req, res) => {
 
     if (checkResult.rows.length === 0) {
       const insertQuery = `
-        INSERT INTO user_streaks (user_id, current_streak, longest_streak, last_completed_date, updated_at)
-        VALUES ($1, 1, 1, $2, CURRENT_TIMESTAMP) RETURNING *;
+        INSERT INTO user_streaks (user_id, current_streak, longest_streak, xp_points, last_completed_date, updated_at)
+        VALUES ($1, 1, 1, 20, $2, CURRENT_TIMESTAMP) RETURNING *;
       `;
       const insertResult = await pool.query(insertQuery, [userId, todayStr]);
       return res.json({ success: true, streak: insertResult.rows[0] });
@@ -709,9 +696,14 @@ router.post('/streak/complete', async (req, res) => {
       let newStreak = diffDays === 1 ? Number(streakRecord.current_streak) + 1 : 1;
       const newLongest = Math.max(newStreak, Number(streakRecord.longest_streak || 0));
 
+      // Tích lũy 20 XP mỗi lần hoàn thành chuỗi ngày mới
       const updateQuery = `
         UPDATE user_streaks
-        SET current_streak = $1, longest_streak = $2, last_completed_date = $3, updated_at = CURRENT_TIMESTAMP
+        SET current_streak = $1, 
+            longest_streak = $2, 
+            xp_points = COALESCE(xp_points, 0) + 20,
+            last_completed_date = $3, 
+            updated_at = CURRENT_TIMESTAMP
         WHERE user_id = $4 RETURNING *;
       `;
       const updateResult = await pool.query(updateQuery, [newStreak, newLongest, todayStr, userId]);

@@ -17,7 +17,6 @@ export const AcademicSurveyModal = ({ isOpen, onSave, onDismiss }) => {
   const [dailyPace, setDailyPace] = useState(15);
   const [reminderTime, setReminderTime] = useState("20:00");
 
-  // Toast thay alert()
   const [toastMessage, setToastMessage] = useState(null);
   const showToast = (message, type = "success") => {
     setToastMessage({ message, type });
@@ -176,10 +175,9 @@ export const AcademicSurveyModal = ({ isOpen, onSave, onDismiss }) => {
       className="position-absolute top-0 start-0 w-100 h-100 bg-[#F8FAFC] d-flex flex-column"
       style={{ zIndex: 1200, overflowY: "auto", overflowX: "hidden" }}
     >
-      {/* TOAST THÔNG BÁO HIỆN ĐẠI */}
       {toastMessage && (
         <div 
-          className="fixed top-24 left-3 right-3 z-50 flex items-center justify-between p-3.5 rounded-2xl shadow-xl border animate-in slide-in-from-top duration-300 backdrop-blur-md"
+          className="fixed top-24 left-3 right-3 z-50 flex items-center justify-between p-3.5 rounded-2xl shadow-xl border animate-in slide-in-from-top duration-300 backdrop-blur-md break-words"
           style={{
             backgroundColor: toastMessage.type === "error" ? "rgba(239, 68, 68, 0.95)" : "rgba(16, 185, 129, 0.95)",
             color: "white",
@@ -203,7 +201,7 @@ export const AcademicSurveyModal = ({ isOpen, onSave, onDismiss }) => {
         </div>
       )}
 
-      {/* 1. Header Bar: Đồng bộ 100% chuẩn né tai thỏ */}
+      {/* Header Bar */}
       <div className="bg-[#0045ce] text-white sticky-top shadow-xs select-none flex-shrink-0">
         <div style={{ height: "max(var(--sat, 0px), 38px)", width: "100%" }} />
 
@@ -225,7 +223,6 @@ export const AcademicSurveyModal = ({ isOpen, onSave, onDismiss }) => {
               </span>
             </div>
           </div>
-
           <div className="w-[105px] shrink-0 pointer-events-none" />
         </div>
       </div>
@@ -319,7 +316,7 @@ export const AcademicSurveyModal = ({ isOpen, onSave, onDismiss }) => {
               <span className="w-5 h-5 rounded-full bg-blue-100 text-[#0045ce] flex items-center justify-center text-[10.5px] font-black">3</span>
               Môn học theo khung ({Object.keys(subjectLevels).filter((k) => k !== "undefined").length} môn đã chọn):
             </label>
-            <span className="text-[10px] text-slate-400 font-bold">Lấy từ PostgreSQL</span>
+            <span className="text-[10px] text-slate-400 font-bold">Lấy từ CSDL</span>
           </div>
 
           {isLoadingSubjects ? (
@@ -346,7 +343,7 @@ export const AcademicSurveyModal = ({ isOpen, onSave, onDismiss }) => {
                   >
                     <div className="flex items-center justify-between">
                       <div>
-                        <span className="font-bold text-xs text-slate-800">{subName}</span>
+                        <span className="font-bold text-xs text-slate-800 break-words">{subName}</span>
                         <span className="text-[10px] text-slate-500 ml-2 font-semibold">({sub.credits} tín chỉ)</span>
                       </div>
                       <i className={`bi ${isChecked ? "bi-check-circle-fill text-[#0045ce]" : "bi-circle text-slate-300"}`}></i>

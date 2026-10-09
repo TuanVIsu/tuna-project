@@ -1,3 +1,4 @@
+// tuna_zalo/src/pages/index/index.jsx
 import React, { useState, useEffect } from "react";
 import Layout from "../../components/layout";
 import { HomeSection } from "./HomeSection";
@@ -32,7 +33,12 @@ function IndexPage() {
   useEffect(() => {
     const init = async () => {
       const user = await autoZaloLogin();
-      if (user) setCurrentUser(user);
+      if (user) {
+        setCurrentUser(user);
+        if (user.name) {
+          localStorage.setItem("tuna_user_name", user.name);
+        }
+      }
     };
     init();
   }, []);
@@ -126,9 +132,13 @@ function IndexPage() {
           name: fullName.trim(),
         };
 
+        // Lưu đồng bộ bộ nhớ cục bộ
         localStorage.setItem("user", JSON.stringify(finalUser));
+        localStorage.setItem("user_info", JSON.stringify(finalUser));
         localStorage.setItem("tuna_current_user", JSON.stringify(finalUser));
         localStorage.setItem("tuna_user_id", finalUser.student_code);
+        localStorage.setItem("tuna_user_name", finalUser.name);
+
         setCurrentUser(finalUser);
       } else {
         setStatusMsg({ text: data.message || "Mã OTP không đúng hoặc đã hết hạn!", type: "error" });
@@ -164,7 +174,6 @@ function IndexPage() {
             </p>
           </div>
 
-          {/* SỬA LỖI TRÀN CHỮ: Thêm break-all, break-words và overflow-hidden */}
           {statusMsg.text && (
             <div
               className={`p-2.5 rounded-xl text-xs font-semibold mb-3 leading-snug break-all break-words overflow-hidden ${
@@ -325,14 +334,19 @@ function IndexPage() {
       case "community":
         return <ChatSection currentUser={currentUser} />;
       case "profile":
-        return <ProfileSection currentUser={currentUser} />;
+        return (
+          <ProfileSection 
+            currentUser={currentUser} 
+            onUserUpdated={(updated) => setCurrentUser(updated)} 
+          />
+        );
       default:
         return <HomeSection currentUser={currentUser} onNavigate={handleNavigate} />;
     }
   };
 
   return (
-    <Layout activeTab={activeTab} setActiveTab={setActiveTab}>
+    <Layout activeTab={activeTab} setActiveTab={setActiveTab} currentUser={currentUser}>
       <div key={activeTab} className="page-transition">
         {renderContent()}
       </div>

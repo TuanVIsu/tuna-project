@@ -3,12 +3,10 @@ const express = require('express');
 const router = express.Router();
 const jwt = require('jsonwebtoken');
 const bcrypt = require('bcryptjs');
-const nodemailer = require('nodemailer');
-const dns = require('dns');
 const { OAuth2Client } = require('google-auth-library');
 const pool = require('../config/db');
 
-// Lấy JWT_SECRET an toàn
+// Lấy JWT_SECRET
 let JWT_SECRET = process.env.JWT_SECRET || 'tuna_secret_jwt_key_2026';
 try {
   const authMiddleware = require('../middlewares/auth');
@@ -19,31 +17,9 @@ try {
 
 const googleClient = new OAuth2Client(process.env.GOOGLE_CLIENT_ID || '');
 
-// Cấu hình transporter ép buộc IPv4 qua cổng 587 (Khắc phục triệt để ENETUNREACH trên Render)
-const transporter = nodemailer.createTransport({
-  host: 'smtp.gmail.com',
-  port: 587,
-  secure: false, // Sử dụng STARTTLS
-  lookup: (hostname, options, callback) => {
-    // Ép buộc phân giải DNS sang IPv4
-    return dns.lookup(hostname, { family: 4 }, callback);
-  },
-  connectionTimeout: 15000,
-  greetingTimeout: 10000,
-  socketTimeout: 15000,
-  auth: {
-    user: process.env.SMTP_USER,
-    pass: (process.env.SMTP_PASS || '').replace(/\s+/g, ''),
-  },
-  tls: {
-    rejectUnauthorized: false,
-  },
-});
-
 // ==========================================
 // 1. CỔNG XÁC THỰC EMAIL (.ctuet.edu.vn)
 // ==========================================
-// POST /api/auth/send-otp
 router.post('/send-otp', async (req, res) => {
   try {
     const { email } = req.body;
@@ -53,7 +29,6 @@ router.post('/send-otp', async (req, res) => {
 
     const targetEmail = email.trim().toLowerCase();
 
-    // Bắt buộc email kết thúc bằng .ctuet.edu.vn
     if (!targetEmail.endsWith('.ctuet.edu.vn')) {
       return res.status(400).json({
         success: false,
@@ -64,14 +39,12 @@ router.post('/send-otp', async (req, res) => {
     const otp = Math.floor(100000 + Math.random() * 900000).toString();
     const expiresAt = new Date(Date.now() + 5 * 60 * 1000);
 
-    // Lưu mã OTP vào database
     await pool.query(
       `INSERT INTO student_verifications (student_code, email, otp_code, expires_at)
        VALUES ($1, $2, $3, $4)`,
       [targetEmail, targetEmail, otp, expiresAt]
     );
 
-    // Gửi email qua HTTPS API (Cổng 443 - không bao giờ bị Render timeout)
     const emailPayload = {
       sender: { 
         name: "TUNA - Trợ Lý Học Tập", 
@@ -94,7 +67,7 @@ router.post('/send-otp', async (req, res) => {
       `,
     };
 
-    // Gửi ngầm qua HTTP REST API
+    // Gửi ngầm qua Brevo HTTPS API (Cổng 443 - Không timeout trên Render)
     fetch('https://api.brevo.com/v3/smtp/email', {
       method: 'POST',
       headers: {
@@ -113,23 +86,20 @@ router.post('/send-otp', async (req, res) => {
         }
       })
       .catch((err) => {
-        console.error(`❌ [Brevo API] Lỗi mạng khi gọi API:`, err.message);
+        console.error(`❌ [Brevo API] Lỗi kết nối mạng:`, err.message);
       });
 
-    // Phản hồi ngay cho Mini App
     return res.json({
       success: true,
       message: `Đã gửi mã OTP đến ${targetEmail}`,
       targetEmail,
     });
   } catch (error) {
-    console.error('❌ Lỗi database / send-otp:', error);
+    console.error('❌ Lỗi send-otp:', error);
     return res.status(500).json({ success: false, message: 'Lỗi hệ thống khi tạo mã OTP!' });
   }
 });
 
-// POST /api/auth/verify-otp
-// POST /api/auth/verify-otp
 router.post('/verify-otp', async (req, res) => {
   try {
     const { email, userCode, otp, name } = req.body;
@@ -166,7 +136,6 @@ router.post('/verify-otp', async (req, res) => {
       );
       finalUser = updateRes.rows[0];
     } else {
-      // Gán zalo_id tự sinh để tránh lỗi NOT NULL constraint trong PostgreSQL
       const generatedZaloId = `ctut_${cleanCode.toLowerCase()}`;
       const insertRes = await pool.query(
         `INSERT INTO users (zalo_id, student_code, name, role, is_verified)
@@ -197,8 +166,6 @@ router.post('/verify-otp', async (req, res) => {
 // ==========================================
 // 2. CỔNG ĐĂNG NHẬP ADMIN & QUẢN TRỊ VIÊN
 // ==========================================
-
-// POST /api/auth/admin-google-login
 router.post('/admin-google-login', async (req, res) => {
   const { credential, intent = 'login' } = req.body;
 
@@ -282,7 +249,6 @@ router.post('/admin-google-login', async (req, res) => {
   }
 });
 
-// POST /api/auth/admin-password-login
 router.post('/admin-password-login', async (req, res) => {
   const { account, password } = req.body;
 
@@ -349,7 +315,6 @@ router.post('/admin-password-login', async (req, res) => {
   }
 });
 
-// POST /api/auth/admin-request-access
 router.post('/admin-request-access', async (req, res) => {
   const { fullName, email, reason, requestedRole } = req.body;
 
@@ -391,7 +356,6 @@ router.post('/admin-request-access', async (req, res) => {
   }
 });
 
-// POST /api/auth/admin-request-reset-password
 router.post('/admin-request-reset-password', async (req, res) => {
   const { email, note } = req.body;
 
@@ -437,8 +401,6 @@ router.post('/admin-request-reset-password', async (req, res) => {
 // ==========================================
 // 3. ĐĂNG NHẬP QUA ZALO CŨ (DỰ PHÒNG)
 // ==========================================
-
-// POST /api/auth/zalo-login
 router.post('/zalo-login', async (req, res) => {
   const { zaloId, name, avatar } = req.body;
   try {
@@ -454,17 +416,6 @@ router.post('/zalo-login', async (req, res) => {
     `;
     const userResult = await pool.query(userQuery, [String(zaloId), validName, validAvatar]);
     const user = userResult.rows[0];
-
-    let schedules = [];
-    if (user.student_code) {
-      const scheduleQuery = `
-        SELECT * FROM student_schedules 
-        WHERE student_code = $1 
-        ORDER BY day_of_week, start_period ASC;
-      `;
-      const schedResult = await pool.query(scheduleQuery, [user.student_code]);
-      schedules = schedResult.rows;
-    }
 
     const token = jwt.sign(
       { id: user.id, zaloId: user.zalo_id, role: user.role, studentCode: user.student_code },
@@ -487,7 +438,6 @@ router.post('/zalo-login', async (req, res) => {
         faculty: user.faculty,
         is_linked: !!user.student_code,
       },
-      schedules,
     });
   } catch (error) {
     res.status(500).json({ success: false, error: error.message });

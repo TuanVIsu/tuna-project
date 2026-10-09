@@ -23,9 +23,8 @@ export const DocsSection = ({ onNavigateToAIHub }) => {
   const [uploading, setUploading] = useState(false);
   const [viewingDoc, setViewingDoc] = useState(null);
   const [activeVideoModal, setActiveVideoModal] = useState(null);
-  const [docFilter, setDocFilter] = useState("all"); // 'all' | 'files' | 'ai_summary'
+  const [docFilter, setDocFilter] = useState("all");
 
-  // PDF Viewer states
   const [pdfDoc, setPdfDoc] = useState(null);
   const [pageNum, setPageNum] = useState(1);
   const [totalPages, setTotalPages] = useState(0);
@@ -60,7 +59,6 @@ export const DocsSection = ({ onNavigateToAIHub }) => {
     return matched.length > 0 ? matched.slice(0, 8) : adminVideos.slice(0, 6);
   }, [documents, adminVideos]);
 
-  // Phân loại danh sách tài liệu
   const filteredDocuments = useMemo(() => {
     return documents.filter((doc) => {
       const isAi = doc.name?.startsWith("[Tóm tắt]") || doc.name?.startsWith("[Bản dịch]");
@@ -70,7 +68,6 @@ export const DocsSection = ({ onNavigateToAIHub }) => {
     });
   }, [documents, docFilter]);
 
-  // Tải và đọc file PDF an toàn trên mọi dòng máy (kể cả iPhone X / iOS 16)
   useEffect(() => {
     if (!viewingDoc) {
       setPdfDoc(null);
@@ -261,16 +258,14 @@ export const DocsSection = ({ onNavigateToAIHub }) => {
     }
   };
 
-  // MÀN HÌNH ĐỌC TÀI LIỆU TOÀN MÀN HÌNH
   if (viewingDoc) {
     const isAiDoc = viewingDoc.name?.startsWith("[Tóm tắt]") || viewingDoc.name?.startsWith("[Bản dịch]");
     const ext = (viewingDoc.name?.split(".").pop() || viewingDoc.type || (isAiDoc ? "VĂN BẢN AI" : "DOC")).toUpperCase();
 
     return (
       <div className="position-fixed top-0 start-0 w-100 h-100 bg-[#F8FAFC] d-flex flex-column z-50 overflow-hidden">
-        {/* Header đệm né tai thỏ */}
         <div 
-          className="bg-[#0045ce] text-white px-3.5 pb-3 d-flex align-items-center justify-content-between shadow-sm shrink-0"
+          className="bg-[#0045ce] text-white px-3.5 pb-3 d-flex align-items-center justify-between shadow-sm shrink-0"
           style={{ paddingTop: "max(var(--sat, 0px), 38px)" }}
         >
           <div className="d-flex align-items-center gap-2 overflow-hidden flex-1 min-w-0 pr-2">
@@ -281,7 +276,7 @@ export const DocsSection = ({ onNavigateToAIHub }) => {
               <i className="bi bi-arrow-left text-sm font-bold"></i>
             </button>
             <div className="truncate">
-              <h6 className="mb-0 font-black text-sm text-white truncate leading-tight">{viewingDoc.name}</h6>
+              <h6 className="mb-0 font-black text-sm text-white truncate leading-tight break-all">{viewingDoc.name}</h6>
               <span className="text-blue-100 text-[10.5px]">
                 {isAiDoc ? "Bản Tóm Tắt AI" : ext} • {viewingDoc.size}
               </span>
@@ -317,7 +312,7 @@ export const DocsSection = ({ onNavigateToAIHub }) => {
               className="flex-1 overflow-y-auto p-3.5 max-w-lg mx-auto w-full"
               style={{ paddingBottom: "calc(var(--sab, 0px) + 36px)" }}
             >
-              <div className="bg-white rounded-3xl p-4 shadow-sm border border-slate-200/80 leading-relaxed text-slate-800 text-xs whitespace-pre-wrap">
+              <div className="bg-white rounded-3xl p-4 shadow-sm border border-slate-200/80 leading-relaxed text-slate-800 text-xs whitespace-pre-wrap break-words">
                 <div className="flex items-center justify-between pb-2 mb-3 border-b border-slate-100">
                   <span className="font-extrabold text-[11px] text-amber-700 bg-amber-50 px-2 py-0.5 rounded-md border border-amber-200">
                     Nội dung tóm tắt kiến thức
@@ -364,7 +359,7 @@ export const DocsSection = ({ onNavigateToAIHub }) => {
                 <div className="w-16 h-16 rounded-3xl mx-auto flex items-center justify-center text-3xl font-black bg-blue-50 text-[#0045ce] border border-blue-100">
                   <i className="bi bi-file-earmark-text-fill"></i>
                 </div>
-                <h4 className="text-sm font-black text-slate-900 m-0">{viewingDoc.name}</h4>
+                <h4 className="text-sm font-black text-slate-900 m-0 break-words">{viewingDoc.name}</h4>
                 <p className="text-xs text-slate-500 m-0">Tệp tài liệu giáo trình chính khóa.</p>
                 <button
                   onClick={() => handleDownloadFile(viewingDoc)}
@@ -407,7 +402,7 @@ export const DocsSection = ({ onNavigateToAIHub }) => {
         </label>
       </div>
 
-      {/* Bộ lọc phân loại tài liệu */}
+      {/* Bộ lọc */}
       <div className="bg-white p-1 rounded-2xl border border-slate-200 flex items-center gap-1 shadow-2xs">
         {[
           { id: "all", label: "Tất cả", icon: "bi-collection" },
@@ -466,7 +461,7 @@ export const DocsSection = ({ onNavigateToAIHub }) => {
                         </span>
                         <span className="text-[10px] text-slate-400">{doc.date || "Vừa lưu"}</span>
                       </div>
-                      <h5 className="text-xs font-black text-slate-900 m-0 truncate leading-snug">
+                      <h5 className="text-xs font-black text-slate-900 m-0 truncate leading-snug break-words">
                         {doc.name}
                       </h5>
                       <p className="text-[10px] text-slate-400 font-medium m-0 mt-0.5 truncate">
@@ -497,21 +492,21 @@ export const DocsSection = ({ onNavigateToAIHub }) => {
         )}
       </div>
 
-      {/* Video bài giảng chính khóa */}
+      {/* Video bài giảng */}
       <div className="bg-white rounded-3xl p-3.5 border border-slate-200 shadow-xs space-y-2.5">
         <div className="flex items-center justify-between px-1">
           <h4 className="text-xs font-black text-slate-900 m-0 flex items-center gap-1.5">
             <i className="bi bi-play-circle-fill text-rose-600"></i> Video bài giảng chính khóa
           </h4>
           <span className="text-[10.5px] text-slate-400 font-semibold">
-            Ban Quản Trị cung cấp
+            Thư viện số TUNA
           </span>
         </div>
 
         {relevantVideos.length === 0 ? (
           <div className="text-center py-6 border border-slate-150 rounded-2xl bg-slate-50/50">
             <i className="bi bi-camera-video-off text-2xl text-slate-300 mb-1 block"></i>
-            <p className="text-xs text-slate-500 font-medium m-0">Chưa có bài giảng video cho môn học này từ Ban Quản Trị.</p>
+            <p className="text-xs text-slate-500 font-medium m-0">Chưa có bài giảng video cho môn học này.</p>
           </div>
         ) : (
           <div className="space-y-2">
@@ -534,7 +529,7 @@ export const DocsSection = ({ onNavigateToAIHub }) => {
                         Năm {vid.year} • K{vid.semester}
                       </span>
                     </div>
-                    <h5 className="text-xs font-black text-slate-900 m-0 truncate">{vid.title}</h5>
+                    <h5 className="text-xs font-black text-slate-900 m-0 truncate break-words">{vid.title}</h5>
                     <p className="text-[10px] text-slate-400 m-0">
                       GV: <b className="text-slate-600">{vid.author}</b> {vid.duration ? `• ${vid.duration}` : ""}
                     </p>
@@ -574,7 +569,7 @@ export const DocsSection = ({ onNavigateToAIHub }) => {
               ></iframe>
             </div>
             <div>
-              <h4 className="text-xs font-black text-slate-900 m-0 leading-snug">{activeVideoModal.title}</h4>
+              <h4 className="text-xs font-black text-slate-900 m-0 leading-snug break-words">{activeVideoModal.title}</h4>
               <p className="text-[10px] text-slate-400 m-0 mt-0.5">
                 Biên soạn: <b className="text-slate-700">{activeVideoModal.author}</b> • Năm {activeVideoModal.year} Kỳ {activeVideoModal.semester}
               </p>
