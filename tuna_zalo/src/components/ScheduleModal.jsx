@@ -3,6 +3,24 @@ import React, { useState, useEffect, useMemo } from "react";
 
 const API_BASE = "https://tuna-project.onrender.com/api";
 
+const getScheduleHeaders = () => {
+  const token = localStorage.getItem("token") || localStorage.getItem("user_token");
+  let userId = "B2300001";
+  try {
+    const user = JSON.parse(localStorage.getItem("user") || "{}");
+    userId = user.student_code || user.zalo_id || user.id || "B2300001";
+  } catch (e) {}
+
+  const headers = {
+    "Content-Type": "application/json",
+    "x-user-id": String(userId),
+  };
+  if (token && token !== "null" && token !== "undefined") {
+    headers["Authorization"] = `Bearer ${token}`;
+  }
+  return headers;
+};
+
 export const ScheduleModal = ({ isOpen, onClose }) => {
   const [viewMode, setViewMode] = useState("all");
   const [loading, setLoading] = useState(false);
@@ -23,7 +41,6 @@ export const ScheduleModal = ({ isOpen, onClose }) => {
   const [title, setTitle] = useState("");
   const [formDate, setFormDate] = useState(getLocalDateString());
   const [period, setPeriod] = useState("1 - 3");
-  const [time, setTime] = useState("07:30 - 09:50");
   const [room, setRoom] = useState("C201");
   const [teacher, setTeacher] = useState("");
   const [category, setCategory] = useState("study");
@@ -33,11 +50,12 @@ export const ScheduleModal = ({ isOpen, onClose }) => {
     setPendingNotice(null);
     try {
       const user = JSON.parse(localStorage.getItem("user") || "{}");
-      const studentCode = user.student_code || localStorage.getItem("tuna_user_id") || "";
+      const studentCode = user.student_code || localStorage.getItem("tuna_user_id") || "B2300001";
       const zaloId = user.zalo_id || "";
 
       const res = await fetch(
-        `${API_BASE}/schedules/student-schedule?studentCode=${encodeURIComponent(studentCode)}&zaloId=${encodeURIComponent(zaloId)}`
+        `${API_BASE}/schedules/student-schedule?studentCode=${encodeURIComponent(studentCode)}&zaloId=${encodeURIComponent(zaloId)}`,
+        { headers: getScheduleHeaders() }
       );
       const data = await res.json();
 
@@ -142,14 +160,10 @@ export const ScheduleModal = ({ isOpen, onClose }) => {
     e.preventDefault();
     if (!title.trim()) return;
 
-    const token = localStorage.getItem("token");
     try {
       const res = await fetch(`${API_BASE}/schedules`, {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${token}`,
-        },
+        headers: getScheduleHeaders(),
         body: JSON.stringify({
           title,
           date: formDate,
@@ -175,11 +189,10 @@ export const ScheduleModal = ({ isOpen, onClose }) => {
 
   const handleDelete = async (id) => {
     if (!window.confirm("Bạn muốn xóa tiết học/sự kiện này?")) return;
-    const token = localStorage.getItem("token");
     try {
       const res = await fetch(`${API_BASE}/schedules/${id}`, {
         method: "DELETE",
-        headers: { Authorization: `Bearer ${token}` },
+        headers: getScheduleHeaders(),
       });
       const data = await res.json();
       if (data.success) {
