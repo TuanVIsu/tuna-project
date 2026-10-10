@@ -1,7 +1,19 @@
 // src/admin/ManageUsers.jsx
-import React, { useState, useEffect, useRef, useCallback } from "react";
+import React, { useState, useEffect, useRef, useCallback, useMemo } from "react";
 
 const API_BASE = import.meta.env.VITE_API_URL || "https://tuna-project.onrender.com/api";
+
+// Hàm chuẩn hóa chuỗi tiếng Việt (bỏ dấu) để tìm kiếm tự nhiên
+const removeVietnameseTones = (str) => {
+  if (!str) return "";
+  return str
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/đ/g, "d")
+    .replace(/Đ/g, "D")
+    .toLowerCase()
+    .trim();
+};
 
 export const ManageUsers = () => {
   const [activeTab, setActiveTab] = useState("all"); // 'all' | 'pending'
@@ -15,16 +27,17 @@ export const ManageUsers = () => {
     classes: {},
   });
 
-  // Bộ lọc
+  // Thanh tìm kiếm ngôn ngữ tự nhiên & các bộ lọc
   const [searchTerm, setSearchTerm] = useState("");
   const [selectedMajor, setSelectedMajor] = useState("all");
   const [selectedCohort, setSelectedCohort] = useState("all");
+  const [selectedClass, setSelectedClass] = useState("all");
 
   // Phân trang
   const [currentPage, setCurrentPage] = useState(1);
   const [itemsPerPage, setItemsPerPage] = useState(8);
 
-  // Floating Action Menu
+  // Floating Action Menu & Modal Edit
   const [activeMenuData, setActiveMenuData] = useState(null);
   const [editingUser, setEditingUser] = useState(null);
   const menuDropdownRef = useRef(null);
@@ -42,7 +55,7 @@ export const ManageUsers = () => {
   });
 
   const getHeaders = useCallback(() => {
-    const token = localStorage.getItem("admin_token") || localStorage.getItem("token");
+    const token = localStorage.getItem("admin_token") || localStorage.getItem("token") || "";
     return {
       "Content-Type": "application/json",
       Authorization: `Bearer ${token}`,
@@ -83,15 +96,15 @@ export const ManageUsers = () => {
     fetchMetaOptions();
   }, [getHeaders]);
 
-  const safeFetchUsersApi = useCallback(async (endpoint, options = {}) => {
+  const safeFetchUsersApi = useCallback(async (endpoint, reqOptions = {}) => {
     try {
       let res = await fetch(`${API_BASE}/users${endpoint}`, {
-        ...options,
+        ...reqOptions,
         headers: getHeaders(),
       });
       if (res.status === 404) {
         res = await fetch(`${API_BASE}/admin/users${endpoint}`, {
-          ...options,
+          ...reqOptions,
           headers: getHeaders(),
         });
       }
@@ -101,7 +114,7 @@ export const ManageUsers = () => {
     }
   }, [getHeaders]);
 
-  // 2. Tải danh sách người dùng
+  // 2. Tải danh sách người dùng từ backend
   const fetchUsers = useCallback(async () => {
     setLoading(true);
     try {
@@ -109,6 +122,7 @@ export const ManageUsers = () => {
         search: searchTerm,
         major: selectedMajor,
         cohort: selectedCohort,
+        className: selectedClass,
       }).toString();
 
       const d = await safeFetchUsersApi(`?${q}`);
@@ -118,7 +132,7 @@ export const ManageUsers = () => {
     } finally {
       setLoading(false);
     }
-  }, [searchTerm, selectedMajor, selectedCohort, safeFetchUsersApi]);
+  }, [searchTerm, selectedMajor, selectedCohort, selectedClass, safeFetchUsersApi]);
 
   // 3. Tải danh sách chờ phê duyệt
   const fetchPendingUsers = useCallback(async () => {
@@ -135,7 +149,120 @@ export const ManageUsers = () => {
     fetchPendingUsers();
     setCurrentPage(1);
     setActiveMenuData(null);
-  }, [selectedMajor, selectedCohort, fetchUsers, fetchPendingUsers]);
+  }, [selectedMajor, selectedCohort, selectedClass, fetchUsers, fetchPendingUsers]);
+
+  // ===========================================================================
+  // BỘ BÓC TÁCH NGÔN NGỮ TỰ NHIÊN (NATURAL LANGUAGE PARSER)
+  // ===========================================================================
+  const parsedNL = useMemo(() => {
+    const raw = searchTerm.trim();
+    if (!raw) return null;
+
+    const normalized = removeVietnameseTones(raw);
+    let detectedCohort = null;
+    let detectedMajor = null;
+    let detectedStatus = null;
+
+    // Bóc tách Khóa (k20 -> k26, khoa 23,...)
+    const cohortMatch = normalized.match(/k\s*(\d{2})|khoa\s*(\d{2})/);
+    if (cohortMatch) {
+      const num = cohortMatch[1] || cohortMatch[2];
+      detectedCohort = `K${num}`;
+    }
+
+    // Bóc tách Ngành
+    if (normalized.includes("he thong thong tin") || normalized.includes("httt")) {
+      detectedMajor = "Hệ Thống Thông Tin";
+    } else if (normalized.includes("cong nghe thong tin") || normalized.includes("cntt")) {
+      detectedMajor = "Công Nghệ Thông Tin";
+    } else if (normalized.includes("ky thuat phan mem") || normalized.includes("phan mem") || normalized.includes("ktpm")) {
+      detectedMajor = "Kỹ Thuật Phần Mềm";
+    } else if (normalized.includes("an ninh mang") || normalized.includes("an ninh") || normalized.includes("anm")) {
+      detectedMajor = "An Ninh Mạng";
+    }
+
+    // Bóc tách Trạng thái
+    if (normalized.includes("cho duyet") || normalized.includes("chua duyet") || normalized.includes("pending")) {
+      detectedStatus = "pending";
+    } else if (normalized.includes("da vao lop") || normalized.includes("da duyet") || normalized.includes("approved")) {
+      detectedStatus = "approved";
+    } else if (normalized.includes("tu choi") || normalized.includes("rejected")) {
+      detectedStatus = "rejected";
+    } else if (normalized.includes("bi khoa") || normalized.includes("khoa tai khoan") || normalized.includes("blocked")) {
+      detectedStatus = "blocked";
+    } else if (normalized.includes("hoat dong") || normalized.includes("active")) {
+      detectedStatus = "active";
+    }
+
+    // Làm sạch từ khóa
+    let cleanedKeyword = normalized
+      .replace(/sinh vien|sv|danh sach|tim|ho so|tat ca|cho duyet|chua duyet|da duyet|da vao lop|bi khoa|hoat dong|tu choi/g, "")
+      .replace(/k\s*\d{2}|khoa\s*\d{2}/g, "")
+      .replace(/he thong thong tin|httt|cong nghe thong tin|cntt|ky thuat phan mem|ktpm|an ninh mang|anm/g, "")
+      .trim();
+
+    return {
+      cohort: detectedCohort,
+      major: detectedMajor,
+      status: detectedStatus,
+      keyword: cleanedKeyword,
+      hasEntities: !!(detectedCohort || detectedMajor || detectedStatus || cleanedKeyword),
+    };
+  }, [searchTerm]);
+
+  // Bộ lọc dữ liệu thông minh
+  const filteredUsers = useMemo(() => {
+    let source = activeTab === "pending" ? pendingUsers : users;
+
+    if (!parsedNL) {
+      return source.filter((u) => {
+        if (selectedMajor !== "all" && u.faculty !== selectedMajor) return false;
+        if (selectedCohort !== "all" && !String(u.className || u.studentCode || "").toUpperCase().includes(selectedCohort)) return false;
+        if (selectedClass !== "all" && !String(u.className || "").toLowerCase().includes(selectedClass.toLowerCase())) return false;
+        return true;
+      });
+    }
+
+    return source.filter((u) => {
+      if (parsedNL.cohort) {
+        const uClass = String(u.className || "").toUpperCase();
+        const uCode = String(u.studentCode || "").toUpperCase();
+        if (!uClass.includes(parsedNL.cohort) && !uCode.includes(parsedNL.cohort.replace("K", ""))) {
+          return false;
+        }
+      }
+
+      if (parsedNL.major) {
+        const uFaculty = removeVietnameseTones(u.faculty || "");
+        const targetFac = removeVietnameseTones(parsedNL.major);
+        if (!uFaculty.includes(targetFac)) return false;
+      }
+
+      if (parsedNL.status === "blocked" && u.isActive !== false) return false;
+      if (parsedNL.status === "active" && u.isActive === false) return false;
+      if (parsedNL.status === "pending" && (u.verificationStatus !== "pending" && u.isVerified)) return false;
+      if (parsedNL.status === "approved" && u.verificationStatus !== "approved" && !u.isVerified) return false;
+      if (parsedNL.status === "rejected" && u.verificationStatus !== "rejected") return false;
+
+      if (parsedNL.keyword) {
+        const normName = removeVietnameseTones(u.name || "");
+        const normEmail = removeVietnameseTones(u.email || u.zaloId || "");
+        const normCode = removeVietnameseTones(u.studentCode || "");
+        const normClass = removeVietnameseTones(u.className || "");
+
+        const isMatch = normName.includes(parsedNL.keyword) ||
+                        normEmail.includes(parsedNL.keyword) ||
+                        normCode.includes(parsedNL.keyword) ||
+                        normClass.includes(parsedNL.keyword);
+        if (!isMatch) return false;
+      }
+
+      if (selectedMajor !== "all" && u.faculty !== selectedMajor) return false;
+      if (selectedCohort !== "all" && !String(u.className || u.studentCode || "").toUpperCase().includes(selectedCohort)) return false;
+
+      return true;
+    });
+  }, [activeTab, pendingUsers, users, parsedNL, selectedMajor, selectedCohort, selectedClass]);
 
   // Duyệt / Từ chối vào lớp
   const handleVerify = async (userId, action) => {
@@ -173,7 +300,7 @@ export const ManageUsers = () => {
   };
 
   // Xóa tài khoản
-const handleDeleteUser = async (userId, name) => {
+  const handleDeleteUser = async (userId, name) => {
     setActiveMenuData(null);
     if (!window.confirm(`Xác nhận xóa vĩnh viễn tài khoản "${name}" khỏi cơ sở dữ liệu?`)) return;
 
@@ -183,7 +310,6 @@ const handleDeleteUser = async (userId, name) => {
       });
       if (d.success) {
         alert("Đã xóa sinh viên thành công!");
-        // Gọi lại cả 2 API để đồng bộ dữ liệu chuẩn xác từ PostgreSQL
         await Promise.all([fetchUsers(), fetchPendingUsers()]);
       } else {
         alert(d.message || "Không thể xóa sinh viên này!");
@@ -221,8 +347,7 @@ const handleDeleteUser = async (userId, name) => {
       });
       if (d.success) {
         setEditingUser(null);
-        fetchUsers();
-        fetchPendingUsers();
+        await Promise.all([fetchUsers(), fetchPendingUsers()]);
       } else {
         alert(d.message || "Cập nhật thất bại!");
       }
@@ -231,7 +356,6 @@ const handleDeleteUser = async (userId, name) => {
     }
   };
 
-  // Mở menu ba chấm
   const toggleActionMenu = (e, u) => {
     e.stopPropagation();
     if (activeMenuData && activeMenuData.user.id === u.id) {
@@ -254,42 +378,55 @@ const handleDeleteUser = async (userId, name) => {
     });
   };
 
-  const displayList = activeTab === "pending" ? pendingUsers : users;
-  const totalPages = Math.ceil(displayList.length / itemsPerPage) || 1;
-  const paginatedData = displayList.slice((currentPage - 1) * itemsPerPage, currentPage * itemsPerPage);
+  const totalPages = Math.ceil(filteredUsers.length / itemsPerPage) || 1;
+  const paginatedData = filteredUsers.slice((currentPage - 1) * itemsPerPage, currentPage * itemsPerPage);
 
   return (
-    <div className="d-flex flex-column gap-3 w-100">
-      {/* 1. Header Toolbar & Bộ lọc */}
-      <div className="p-3 bg-white rounded-4 shadow-sm border d-flex flex-column gap-2.5">
-        <div className="d-flex flex-wrap align-items-center justify-content-between gap-2">
-          <div>
-            <h6 className="fw-bold text-dark mb-0 d-flex align-items-center gap-2">
-              <i className="bi bi-people-fill text-primary fs-5"></i>
-              Quản Lý Sinh Viên & Phê Duyệt Vào Lớp
-            </h6>
-            <small className="text-muted" style={{ fontSize: "11.5px" }}>
-              Đồng bộ dữ liệu thời gian thực giữa Zalo Mini App và Cơ sở dữ liệu đào tạo
-            </small>
+    <div className="d-flex flex-column gap-3.5 w-100" style={{ color: "#1e293b" }}>
+      {/* 1. KHỐI THẺ CARD ĐIỀU KHIỂN & BỘ LỌC ĐỒNG BỘ */}
+      <div 
+        className="bg-white rounded-4 p-4 border shadow-sm mb-2"
+        style={{ borderColor: "#e2e8f0", boxShadow: "0 2px 8px rgba(0,0,0,0.02)" }}
+      >
+        <div className="d-flex flex-wrap align-items-center justify-content-between gap-2 mb-3 pb-1">
+          <div className="d-flex align-items-center gap-3">
+            <span
+              className="rounded-3 d-flex align-items-center justify-content-center text-white flex-shrink-0"
+              style={{
+                width: "40px",
+                height: "40px",
+                background: "linear-gradient(135deg, #185bf0 0%, #2563eb 100%)",
+              }}
+            >
+              <i className="bi bi-people-fill fs-5"></i>
+            </span>
+            <div>
+              <h6 className="fw-black text-dark mb-0 fs-6">
+                Quản Lý Sinh Viên & Phê Duyệt Vào Lớp
+              </h6>
+              <small className="text-secondary fw-medium" style={{ fontSize: "12px" }}>
+                Đồng bộ dữ liệu thời gian thực giữa Zalo Mini App và Cơ sở dữ liệu đào tạo
+              </small>
+            </div>
           </div>
 
-          <div className="p-1 bg-slate-100 rounded-pill border d-inline-flex gap-1 overflow-x-auto flex-nowrap">
+          <div className="p-1 bg-slate-100 rounded-pill border d-inline-flex gap-1 overflow-x-auto flex-nowrap" style={{ borderColor: "#e2e8f0" }}>
             <button
               onClick={() => { setActiveTab("all"); setCurrentPage(1); }}
-              className={`btn btn-sm rounded-pill px-3 py-1 fw-bold border-0 transition text-nowrap cursor-pointer ${
+              className={`btn btn-sm rounded-pill px-3.5 py-1.5 fw-bold border-0 transition text-nowrap cursor-pointer ${
                 activeTab === "all"
-                  ? "btn-primary text-white shadow-sm"
+                  ? "btn-primary text-white shadow-xs"
                   : "text-secondary bg-transparent hover:text-dark"
               }`}
-              style={{ fontSize: "12px" }}
+              style={{ fontSize: "12px", background: activeTab === "all" ? "#185bf0" : "transparent" }}
             >
               Tất cả sinh viên ({users.length})
             </button>
             <button
               onClick={() => { setActiveTab("pending"); setCurrentPage(1); }}
-              className={`btn btn-sm rounded-pill px-3 py-1 fw-bold border-0 transition position-relative text-nowrap cursor-pointer ${
+              className={`btn btn-sm rounded-pill px-3.5 py-1.5 fw-bold border-0 transition position-relative text-nowrap cursor-pointer ${
                 activeTab === "pending"
-                  ? "btn-warning text-dark shadow-sm"
+                  ? "btn-warning text-dark shadow-xs"
                   : "text-secondary bg-transparent hover:text-dark"
               }`}
               style={{ fontSize: "12px" }}
@@ -304,37 +441,52 @@ const handleDeleteUser = async (userId, name) => {
           </div>
         </div>
 
-        {/* Thanh tìm kiếm & bộ lọc */}
-        <div className="row g-2 pt-2 border-top">
-          <div className="col-12 col-md-5">
-            <label className="form-label text-uppercase text-secondary fw-bold mb-1" style={{ fontSize: "10px" }}>
-              Tìm Kiếm Sinh Viên
-            </label>
-            <div className="input-group input-group-sm">
-              <span className="input-group-text bg-white border-end-0 text-muted ps-2.5">
-                <i className="bi bi-search"></i>
+        {/* Thanh tìm kiếm ngôn ngữ tự nhiên & bộ lọc: Căn phẳng đáy */}
+        <div className="row g-2.5 pt-1 align-items-end">
+          {/* 1. Ô Tìm Kiếm Thông Minh */}
+          <div className="col-12 col-md-4">
+            <div className="d-flex justify-content-between align-items-center mb-1" style={{ minHeight: "15px" }}>
+              <label className="form-label text-uppercase text-secondary fw-bold mb-0 d-block" style={{ fontSize: "10px" }}>
+                Tìm kiếm thông minh (Tự nhiên)
+              </label>
+              {parsedNL?.hasEntities && (
+                <div className="d-flex gap-1">
+                  {parsedNL.cohort && <span className="badge bg-primary-subtle text-primary border border-primary-subtle px-1 py-0" style={{ fontSize: "9px" }}>{parsedNL.cohort}</span>}
+                  {parsedNL.major && <span className="badge bg-info-subtle text-info border border-info-subtle px-1 py-0" style={{ fontSize: "9px" }}>{parsedNL.major.split(" ").slice(-1)[0]}</span>}
+                  {parsedNL.status && <span className="badge bg-warning-subtle text-dark border border-warning-subtle px-1 py-0" style={{ fontSize: "9px" }}>{parsedNL.status}</span>}
+                </div>
+              )}
+            </div>
+            <div className="input-group input-group-sm" style={{ height: "32px" }}>
+              <span
+                className="input-group-text bg-white border-end-0 text-primary ps-2.5 d-flex align-items-center justify-content-center"
+                style={{ borderColor: "#e2e8f0", height: "32px", fontSize: "12px" }}
+              >
+                <i className="bi bi-stars"></i>
               </span>
               <input
                 type="text"
                 value={searchTerm}
                 onChange={(e) => setSearchTerm(e.target.value)}
-                onKeyDown={(e) => e.key === "Enter" && fetchUsers()}
-                placeholder="Tìm tên, Email, MSSV, lớp..."
+                placeholder="Nhấn vào đây để tìm kiếm..."
                 className="form-control form-control-sm rounded-end-3 bg-white border-start-0 shadow-none fw-semibold"
-                style={{ fontSize: "12px" }}
+                style={{ fontSize: "12px", borderColor: "#e2e8f0", height: "32px", lineHeight: "32px" }}
               />
             </div>
           </div>
 
-          <div className="col-6 col-md-4">
-            <label className="form-label text-uppercase text-secondary fw-bold mb-1" style={{ fontSize: "10px" }}>
-              Ngành Đào Tạo
-            </label>
+          {/* 2. Ngành Đào Tạo */}
+          <div className="col-6 col-md-3">
+            <div className="mb-1" style={{ minHeight: "15px" }}>
+              <label className="form-label text-uppercase text-secondary fw-bold mb-0 d-block text-truncate" style={{ fontSize: "10px" }}>
+                Ngành Đào Tạo
+              </label>
+            </div>
             <select
               value={selectedMajor}
               onChange={(e) => setSelectedMajor(e.target.value)}
-              className="form-select form-select-sm rounded-3 shadow-none fw-semibold"
-              style={{ fontSize: "12px" }}
+              className="form-select form-select-sm rounded-3 bg-white shadow-none fw-semibold"
+              style={{ fontSize: "12.5px", borderColor: "#e2e8f0", height: "32px" }}
             >
               <option value="all">Tất cả chuyên ngành</option>
               {options.majors.map((m) => (
@@ -345,15 +497,18 @@ const handleDeleteUser = async (userId, name) => {
             </select>
           </div>
 
-          <div className="col-4 col-md-2">
-            <label className="form-label text-uppercase text-secondary fw-bold mb-1" style={{ fontSize: "10px" }}>
-              Khóa Tuyển Sinh
-            </label>
+          {/* 3. Khóa Tuyển Sinh */}
+          <div className="col-6 col-md-2">
+            <div className="mb-1" style={{ minHeight: "15px" }}>
+              <label className="form-label text-uppercase text-secondary fw-bold mb-0 d-block" style={{ fontSize: "10px" }}>
+                Khóa Tuyển Sinh
+              </label>
+            </div>
             <select
               value={selectedCohort}
               onChange={(e) => setSelectedCohort(e.target.value)}
-              className="form-select form-select-sm rounded-3 shadow-none fw-semibold"
-              style={{ fontSize: "12px" }}
+              className="form-select form-select-sm rounded-3 bg-white shadow-none fw-semibold"
+              style={{ fontSize: "12.5px", borderColor: "#e2e8f0", height: "32px" }}
             >
               <option value="all">Tất cả khóa</option>
               {options.cohorts.map((c) => (
@@ -364,17 +519,37 @@ const handleDeleteUser = async (userId, name) => {
             </select>
           </div>
 
-          <div className="col-2 col-md-1 d-flex align-items-end">
+          {/* 4. Lớp Sinh Hoạt */}
+          <div className="col-8 col-md-2">
+            <div className="mb-1" style={{ minHeight: "15px" }}>
+              <label className="form-label text-uppercase text-secondary fw-bold mb-0 d-block" style={{ fontSize: "10px" }}>
+                Lớp Sinh Hoạt
+              </label>
+            </div>
+            <input
+              type="text"
+              value={selectedClass === "all" ? "" : selectedClass}
+              onChange={(e) => setSelectedClass(e.target.value.trim() || "all")}
+              placeholder="VD: HTTT0000"
+              className="form-control form-control-sm rounded-3 bg-white shadow-none fw-semibold font-monospace text-primary"
+              style={{ fontSize: "12.5px", borderColor: "#e2e8f0", height: "32px" }}
+            />
+          </div>
+
+          {/* 5. Nút Reset */}
+          <div className="col-4 col-md-1">
+            <div className="mb-1" style={{ minHeight: "15px" }}></div>
             <button
               onClick={() => {
                 setSearchTerm("");
                 setSelectedMajor("all");
                 setSelectedCohort("all");
+                setSelectedClass("all");
                 fetchUsers();
                 fetchPendingUsers();
               }}
-              className="btn btn-outline-secondary btn-sm w-100 fw-semibold rounded-3 shadow-none d-flex align-items-center justify-content-center cursor-pointer"
-              style={{ height: "31px", fontSize: "12px" }}
+              className="btn btn-outline-secondary btn-sm w-100 fw-bold rounded-3 shadow-none d-flex align-items-center justify-content-center cursor-pointer bg-white"
+              style={{ height: "32px", fontSize: "12px", borderColor: "#e2e8f0" }}
               title="Đặt lại bộ lọc"
             >
               <i className="bi bi-arrow-counterclockwise"></i>
@@ -383,20 +558,27 @@ const handleDeleteUser = async (userId, name) => {
         </div>
       </div>
 
-      {/* 2. Bảng Danh Sách Sinh Viên */}
-      <div className="rounded-4 p-4 shadow-sm bg-white border">
+      {/* 2. BẢNG DANH SÁCH SINH VIÊN */}
+      <div className="rounded-4 p-4 shadow-sm bg-white border" style={{ borderColor: "#e2e8f0" }}>
         <div className="d-flex justify-content-between align-items-center mb-3">
-          <span className={`badge px-3 py-1.5 rounded-pill fw-bold border ${
-            activeTab === "pending"
-              ? "bg-warning-subtle text-dark border-warning-subtle"
-              : "bg-primary-subtle text-primary border-primary-subtle"
-          }`}>
-            {activeTab === "pending"
-              ? `Hàng chờ phê duyệt (${pendingUsers.length} hồ sơ)`
-              : "Danh sách tất cả sinh viên"}
-          </span>
+          <div className="d-flex align-items-center gap-2">
+            <span className={`badge px-3 py-1.5 rounded-pill fw-bold border ${
+              activeTab === "pending"
+                ? "bg-warning-subtle text-dark border-warning-subtle"
+                : "bg-primary-subtle text-primary border-primary-subtle"
+            }`} style={{ fontSize: "11px" }}>
+              {activeTab === "pending"
+                ? `Hàng chờ phê duyệt (${pendingUsers.length} hồ sơ)`
+                : "Danh sách sinh viên"}
+            </span>
+            {searchTerm.trim() && (
+              <span className="text-secondary small">
+                Tìm thấy <b>{filteredUsers.length}</b> kết quả cho <i>"{searchTerm}"</i>
+              </span>
+            )}
+          </div>
           <small className="text-muted fw-semibold">
-            Tổng: <b>{displayList.length}</b> tài khoản
+            Tổng: <b>{filteredUsers.length}</b> tài khoản
           </small>
         </div>
 
@@ -406,11 +588,11 @@ const handleDeleteUser = async (userId, name) => {
               <tr style={{ fontSize: "11px", color: "#64748b", letterSpacing: "0.5px" }} className="text-uppercase">
                 <th className="ps-3" style={{ width: "260px" }}>Sinh Viên</th>
                 <th style={{ width: "160px" }}>MSSV / Lớp</th>
-                <th style={{ width: "180px" }}>Chuyên Ngành</th>
+                <th style={{ width: "170px" }}>Chuyên Ngành</th>
                 <th className="text-center" style={{ width: "90px" }}>Tín Chỉ</th>
                 <th className="text-center" style={{ width: "110px" }}>Chuỗi Học</th>
-                <th className="text-center" style={{ width: "130px" }}>Phê Duyệt</th>
-                <th className="text-center" style={{ width: "110px" }}>Trạng Thái</th>
+                <th className="text-center" style={{ width: "120px" }}>Phê Duyệt</th>
+                <th className="text-center" style={{ width: "100px" }}>Trạng Thái</th>
                 <th className="text-end pe-3" style={{ width: "70px" }}>Thao Tác</th>
               </tr>
             </thead>
@@ -424,7 +606,7 @@ const handleDeleteUser = async (userId, name) => {
                   <td colSpan={8} className="text-center py-5 text-muted">
                     {activeTab === "pending"
                       ? "Không có sinh viên nào đang chờ duyệt vào lớp."
-                      : "Không tìm thấy sinh viên nào phù hợp tiêu chí."}
+                      : "Không tìm thấy sinh viên nào phù hợp với yêu cầu tìm kiếm."}
                   </td>
                 </tr>
               ) : (
@@ -452,23 +634,29 @@ const handleDeleteUser = async (userId, name) => {
                       </div>
                     </td>
 
-    <td>
-  {u.studentCode ? (
-    <span
-      className="font-monospace fw-bold px-2 py-1 rounded-1 border d-inline-block"
-      style={{
-        fontSize: "11px",
-        backgroundColor: "#eff6ff",
-        color: "#1d4ed8",
-        borderColor: "#bfdbfe",
-      }}
-    >
-      {u.studentCode}
-    </span>
-  ) : (
-    <span className="badge bg-light text-muted border">Chưa có MSSV</span>
-  )}
-</td>
+                    <td>
+                      <div className="d-flex flex-column gap-1">
+                        {u.studentCode ? (
+                          <span
+                            className="font-monospace fw-bold px-2 py-0.5 rounded-1 border d-inline-block text-truncate"
+                            style={{
+                              fontSize: "11px",
+                              backgroundColor: "#eff6ff",
+                              color: "#1d4ed8",
+                              borderColor: "#bfdbfe",
+                              maxWidth: "110px",
+                            }}
+                          >
+                            {u.studentCode}
+                          </span>
+                        ) : (
+                          <span className="text-muted small">Chưa có MSSV</span>
+                        )}
+                        <span className="font-monospace text-secondary fw-bold" style={{ fontSize: "10.5px" }}>
+                          {u.className || "Chưa xếp lớp"}
+                        </span>
+                      </div>
+                    </td>
 
                     <td className="fw-semibold text-secondary">
                       {u.faculty || "Hệ Thống Thông Tin"}
@@ -496,45 +684,45 @@ const handleDeleteUser = async (userId, name) => {
                       )}
                     </td>
 
-<td className="text-center">
-  {u.verificationStatus === "approved" || (u.isVerified && u.verificationStatus !== "pending") ? (
-    <span
-      className="badge rounded-pill px-2.5 py-1 fw-bold"
-      style={{
-        background: "#ecfdf5",
-        color: "#059669",
-        border: "1px solid #a7f3d0",
-        fontSize: "11px",
-      }}
-    >
-      ✓ Đã vào lớp
-    </span>
-  ) : u.verificationStatus === "rejected" ? (
-    <span
-      className="badge rounded-pill px-2.5 py-1 fw-bold"
-      style={{
-        background: "#fef2f2",
-        color: "#dc2626",
-        border: "1px solid #fecaca",
-        fontSize: "11px",
-      }}
-    >
-      ✕ Bị từ chối
-    </span>
-  ) : (
-    <span
-      className="badge rounded-pill px-2.5 py-1 fw-bold"
-      style={{
-        background: "#fffbeb",
-        color: "#b45309",
-        border: "1px solid #fde68a",
-        fontSize: "11px",
-      }}
-    >
-      ⏳ Chờ duyệt
-    </span>
-  )}
-</td>
+                    <td className="text-center">
+                      {u.verificationStatus === "approved" || (u.isVerified && u.verificationStatus !== "pending") ? (
+                        <span
+                          className="badge rounded-pill px-2.5 py-1 fw-bold"
+                          style={{
+                            background: "#ecfdf5",
+                            color: "#059669",
+                            border: "1px solid #a7f3d0",
+                            fontSize: "11px",
+                          }}
+                        >
+                          ✓ Đã vào lớp
+                        </span>
+                      ) : u.verificationStatus === "rejected" ? (
+                        <span
+                          className="badge rounded-pill px-2.5 py-1 fw-bold"
+                          style={{
+                            background: "#fef2f2",
+                            color: "#dc2626",
+                            border: "1px solid #fecaca",
+                            fontSize: "11px",
+                          }}
+                        >
+                          ✕ Bị từ chối
+                        </span>
+                      ) : (
+                        <span
+                          className="badge rounded-pill px-2.5 py-1 fw-bold"
+                          style={{
+                            background: "#fffbeb",
+                            color: "#b45309",
+                            border: "1px solid #fde68a",
+                            fontSize: "11px",
+                          }}
+                        >
+                          ⏳ Chờ duyệt
+                        </span>
+                      )}
+                    </td>
 
                     <td className="text-center">
                       <span
@@ -569,7 +757,7 @@ const handleDeleteUser = async (userId, name) => {
 
         {/* 3. Thanh Phân Trang */}
         {!loading && (
-          <div className="d-flex flex-wrap justify-content-between align-items-center pt-3 mt-2 border-top gap-2">
+          <div className="d-flex flex-wrap justify-content-between align-items-center pt-3 mt-2 border-top gap-2" style={{ borderColor: "#f1f5f9" }}>
             <div className="d-flex align-items-center gap-2">
               <small className="text-muted fw-bold">Hiển thị:</small>
               <select
@@ -578,8 +766,8 @@ const handleDeleteUser = async (userId, name) => {
                   setItemsPerPage(Number(e.target.value));
                   setCurrentPage(1);
                 }}
-                className="form-select form-select-sm fw-bold border rounded-2 py-0 px-2 cursor-pointer"
-                style={{ width: "65px", height: "28px", fontSize: "11.5px" }}
+                className="form-select form-select-sm fw-bold border rounded-2 py-0 px-2 cursor-pointer shadow-none"
+                style={{ width: "65px", height: "28px", fontSize: "11.5px", borderColor: "#e2e8f0" }}
               >
                 <option value={5}>5</option>
                 <option value={8}>8</option>
@@ -587,8 +775,8 @@ const handleDeleteUser = async (userId, name) => {
                 <option value={25}>25</option>
               </select>
               <small className="text-muted" style={{ fontSize: "12px" }}>
-                (Dòng <b>{displayList.length ? (currentPage - 1) * itemsPerPage + 1 : 0}</b> -{" "}
-                <b>{Math.min(currentPage * itemsPerPage, displayList.length)}</b> / <b>{displayList.length}</b> tài khoản)
+                (Dòng <b>{filteredUsers.length ? (currentPage - 1) * itemsPerPage + 1 : 0}</b> -{" "}
+                <b>{Math.min(currentPage * itemsPerPage, filteredUsers.length)}</b> / <b>{filteredUsers.length}</b> tài khoản)
               </small>
             </div>
 
@@ -650,7 +838,7 @@ const handleDeleteUser = async (userId, name) => {
             right: `${activeMenuData.right}px`,
           }}
         >
-          {!activeMenuData.user.isVerified && (
+          {(!activeMenuData.user.isVerified || activeMenuData.user.verificationStatus === "pending") && (
             <>
               <button
                 type="button"
@@ -705,12 +893,12 @@ const handleDeleteUser = async (userId, name) => {
         </div>
       )}
 
-      {/* 5. Modal Sửa Hồ Sơ */}
+      {/* 5. MODAL SỬA HỒ SƠ */}
       {editingUser && (
         <div className="modal show d-block p-2 p-sm-3" style={{ backgroundColor: "rgba(15, 23, 42, 0.55)", zIndex: 1055 }}>
           <div className="modal-dialog modal-dialog-centered" style={{ maxWidth: "460px" }}>
             <div className="modal-content border-0 shadow-lg rounded-4 overflow-hidden bg-white">
-              <div className="d-flex align-items-center justify-content-between px-4 pt-4 pb-2">
+              <div className="d-flex align-items-center justify-content-between px-4 pt-4 pb-2 border-bottom" style={{ borderColor: "#f1f5f9" }}>
                 <h6 className="fw-bold mb-0 text-dark">Cập Nhật Hồ Sơ Sinh Viên</h6>
                 <button
                   type="button"
@@ -739,7 +927,7 @@ const handleDeleteUser = async (userId, name) => {
 
                   <div>
                     <label className="form-label text-uppercase text-secondary fw-bold mb-1" style={{ fontSize: "10px" }}>
-                      Email Xác Thực OTP (.ctuet.edu.vn)
+                      Email OTP (.ctuet.edu.vn)
                     </label>
                     <input
                       type="email"
@@ -804,10 +992,10 @@ const handleDeleteUser = async (userId, name) => {
                     </div>
                   </div>
 
-                  <div className="p-3 bg-light rounded-3 border d-flex flex-column gap-2 mt-1">
+                  <div className="p-3 bg-light rounded-3 border d-flex flex-column gap-2 mt-1" style={{ borderColor: "#f1f5f9" }}>
                     <div className="form-check form-switch mb-0">
                       <input
-                        className="form-check-input"
+                        className="form-check-input cursor-pointer"
                         type="checkbox"
                         id="modalVerifySwitch"
                         checked={editFormData.isVerified}
@@ -827,7 +1015,7 @@ const handleDeleteUser = async (userId, name) => {
 
                     <div className="form-check form-switch mb-0">
                       <input
-                        className="form-check-input"
+                        className="form-check-input cursor-pointer"
                         type="checkbox"
                         id="modalActiveSwitch"
                         checked={editFormData.isActive}

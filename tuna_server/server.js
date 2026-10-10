@@ -16,13 +16,11 @@ const pool = require('./config/db');
 // TỰ ĐỘNG MIGRATION CÁC CỘT QUAN TRỌNG KHI SERVER KHỞI ĐỘNG
 (async () => {
   try {
-    // 1. Đảm bảo bảng users có cột email
     await pool.query(`
       ALTER TABLE users 
       ADD COLUMN IF NOT EXISTS email VARCHAR(255);
     `);
     
-    // 2. Đảm bảo bảng user_documents có cột user_id
     await pool.query(`
       CREATE TABLE IF NOT EXISTS user_documents (
         id VARCHAR(255) PRIMARY KEY,
@@ -39,7 +37,6 @@ const pool = require('./config/db');
       ADD COLUMN IF NOT EXISTS user_id VARCHAR(255);
     `);
 
-    // 3. Đảm bảo bảng community_messages có các cột tính năng mới
     await pool.query(`
       ALTER TABLE community_messages 
       ADD COLUMN IF NOT EXISTS reply_to JSONB,
@@ -53,7 +50,7 @@ const pool = require('./config/db');
   }
 })();
 
-// Hàm kiểm tra nguồn gốc truy cập linh hoạt
+// Hàm kiểm tra nguồn gốc truy cập
 const isOriginAllowed = (origin) => {
   if (!origin) return true;
   if (/^http:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(origin)) return true;
@@ -75,7 +72,7 @@ const io = new Server(server, {
 
 app.set('io', io);
 
-// 2. Cấu hình CORS cho Express
+// 2. Cấu hình CORS chuẩn cho Express (ĐẶT ĐẦU TIÊN)
 const corsOptions = {
   origin: function (origin, callback) {
     callback(null, true);
@@ -94,6 +91,7 @@ const corsOptions = {
 };
 
 app.use(cors(corsOptions));
+
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 
@@ -116,7 +114,7 @@ app.get('/', (req, res) => {
 </html>`);
 });
 
-// ROUTE HEALTH CHECK CHỐNG NGỦ CHO RENDER
+// Route Health check
 app.get('/health', (req, res) => {
   res.status(200).json({
     status: 'ok',
@@ -125,30 +123,27 @@ app.get('/health', (req, res) => {
   });
 });
 
-// Route xác thực file tĩnh dự phòng cho Zalo
 app.get('/zalo_verifierP-IV4eNt3abC-gXHi-qJRsJ-jbY8Y6m1E34s.html', (req, res) => {
   res.setHeader('Content-Type', 'text/html; charset=utf-8');
   res.send('zalo-platform-site-verification: P-IV4eNt3abC-gXHi-qJRsJ-jbY8Y6m1E34s.html');
 });
 
-// Route tiếp nhận Webhook từ Zalo Mini App
 app.post('/api/webhook/zalo', (req, res) => {
   const eventData = req.body;
   console.log('📬 Nhận sự kiện Webhook từ Zalo:', JSON.stringify(eventData, null, 2));
   res.status(200).json({ success: true, message: 'Webhook received' });
 });
 
-// Thư mục uploads tĩnh
 const uploadDir = path.join(__dirname, 'uploads');
 if (!fs.existsSync(uploadDir)) {
   fs.mkdirSync(uploadDir, { recursive: true });
 }
 app.use('/uploads', express.static(uploadDir));
 
-// KÍCH HOẠT SOCKET CHAT REALTIME
+// Kích hoạt Socket
 require('./sockets/chat.socket')(io);
 
-// Đăng ký toàn bộ các module Routes
+// Đăng ký toàn bộ Router
 const aiRouter = require('./routes/ai.routes');
 const schedulesRouter = require('./routes/schedules.routes');
 const streakRouter = require('./routes/streak.routes');
@@ -164,25 +159,24 @@ app.use('/api/exams', require('./routes/exams.routes'));
 app.use('/api/community', require('./routes/community.routes'));
 app.use('/api/admin/community', require('./routes/community.routes'));
 
-// Mount Users routes cho cả /api/users và /api/admin/users
+// Users
 app.use('/api/admin/users', usersRoutes);
 app.use('/api/users', usersRoutes);
 
 app.use('/api/admin/staff', require('./routes/staff.routes'));
 app.use('/api/curriculum', require('./routes/curriculum.routes'));
 
-// Mount module Streak & Leaderboard
+// Streak
 app.use('/api/streak', streakRouter);
 app.use('/api', streakRouter);
 
-// Mount schedules
+// Schedules
 app.use('/api/schedules', schedulesRouter);
 app.use('/api', schedulesRouter);
 
-// Mount AI
+// AI Router (Mount đầy đủ các tiền tố)
 app.use('/api/admin/ai', aiRouter);
 app.use('/api/ai', aiRouter);
-app.use('/api', aiRouter);
 
 // Middleware xử lý lỗi toàn cục
 app.use((err, req, res, next) => {
@@ -193,7 +187,6 @@ app.use((err, req, res, next) => {
   });
 });
 
-// Khởi động Server
 const PORT = process.env.PORT || 5000;
 server.listen(PORT, () => {
   console.log(`🚀 Tuna Server đang chạy mượt mà tại port ${PORT}`);

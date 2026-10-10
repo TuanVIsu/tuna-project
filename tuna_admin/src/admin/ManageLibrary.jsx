@@ -501,7 +501,7 @@ export const ManageLibrary = () => {
     <div className="d-flex flex-column gap-3 w-100 pb-5">
       {/* 1. Header Toolbar */}
       <div className="d-flex flex-wrap justify-content-between align-items-center gap-2 bg-white p-3 rounded-4 shadow-sm border">
-        <div className="d-flex align-items-center gap-2.5">
+        <div className="d-flex align-items-center gap-3">
           <div
             className="rounded-3 d-flex align-items-center justify-content-center text-white shadow-sm flex-shrink-0"
             style={{ width: "42px", height: "42px", background: "linear-gradient(135deg, #185bf0 0%, #7c3aed 100%)" }}

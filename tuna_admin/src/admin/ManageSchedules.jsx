@@ -1,5 +1,5 @@
 // src/admin/ManageSchedules.jsx
-import React, { useState, useEffect, useRef } from "react";
+import React, { useState, useEffect, useRef, useCallback } from "react";
 
 const API_BASE = import.meta.env.VITE_API_URL || "https://tuna-project.onrender.com/api";
 
@@ -7,16 +7,17 @@ export const ManageSchedules = () => {
   const [schedules, setSchedules] = useState([]);
   const [loading, setLoading] = useState(false);
 
-  // Danh mục nạp trực tiếp từ bảng faculty_majors & academic_cohorts
+  // Danh mục động từ database
   const [options, setOptions] = useState({
     majors: [],
     cohorts: [],
     classes: {},
   });
 
-  // Bộ lọc
+  // Bộ lọc dữ liệu
   const [filterMajor, setFilterMajor] = useState("");
   const [filterCohort, setFilterCohort] = useState("");
+  const [filterClass, setFilterClass] = useState("all");
   const [filterYear, setFilterYear] = useState("4");
   const [filterSemester, setFilterSemester] = useState("1");
   const [filterType, setFilterType] = useState("all");
@@ -41,7 +42,22 @@ export const ManageSchedules = () => {
 
   const getTodayStr = () => new Date().toISOString().split("T")[0];
 
-  // Form State tinh gọn
+  // Helper: Tự động tạo mã lớp chuẩn theo Ngành & Khóa (Zero Hardcode)
+  const generateClassName = useCallback((major, cohort) => {
+    if (!major || !cohort) return "HTTT2311";
+    const prefix = major.includes("Hệ Thống") ? "HTTT" 
+                 : major.includes("Công Nghệ") ? "CNTT" 
+                 : major.includes("Phần Mềm") ? "KTPM" 
+                 : major.includes("An Ninh") ? "ANM" : "CNTT";
+    const cleanCohort = String(cohort).replace(/[^0-9]/g, "");
+    return `${prefix}${cleanCohort}11`;
+  }, []);
+
+  const getCalculatedSemesterIndex = (year, sem) => {
+    return (Number(year) - 1) * 3 + Number(sem);
+  };
+
+  // Form State
   const [formData, setFormData] = useState({
     facultyMajor: "",
     cohort: "",
@@ -63,10 +79,10 @@ export const ManageSchedules = () => {
     note: "",
   });
 
-  const getHeaders = () => ({
+  const getHeaders = useCallback(() => ({
     "Content-Type": "application/json",
-    Authorization: `Bearer ${localStorage.getItem("admin_token")}`,
-  });
+    Authorization: `Bearer ${localStorage.getItem("admin_token") || localStorage.getItem("token") || ""}`,
+  }), []);
 
   useEffect(() => {
     const handleOutsideClick = (e) => {
@@ -100,14 +116,12 @@ export const ManageSchedules = () => {
             classes: d.data.classes || {},
           });
 
-          // Tự động gán lựa chọn đầu tiên làm mặc định cho bộ lọc nếu chưa có
-          if (loadedMajors.length > 0) {
-            setFilterMajor((prev) => prev || loadedMajors[0].majorName);
+          if (loadedMajors.length > 0 && !filterMajor) {
+            setFilterMajor(loadedMajors[0].majorName);
           }
-          if (loadedCohorts.length > 0) {
-            // Ưu tiên chọn K23 nếu có, không thì lấy khóa đầu tiên
+          if (loadedCohorts.length > 0 && !filterCohort) {
             const hasK23 = loadedCohorts.find((c) => c === "K23");
-            setFilterCohort((prev) => prev || hasK23 || loadedCohorts[0]);
+            setFilterCohort(hasK23 || loadedCohorts[0]);
           }
         }
       } catch (e) {
@@ -115,16 +129,17 @@ export const ManageSchedules = () => {
       }
     };
     fetchMetaOptions();
-  }, []);
+  }, [getHeaders, filterMajor, filterCohort]);
 
   // 2. Tải thời khóa biểu từ academic_schedules
-  const fetchSchedules = async () => {
+  const fetchSchedules = useCallback(async () => {
     if (!filterMajor || !filterCohort) return;
     setLoading(true);
     try {
       const q = new URLSearchParams({
         major: filterMajor,
         cohort: filterCohort,
+        className: filterClass,
         year: filterYear,
         semester: filterSemester,
         type: filterType,
@@ -138,19 +153,15 @@ export const ManageSchedules = () => {
     } finally {
       setLoading(false);
     }
-  };
+  }, [filterMajor, filterCohort, filterClass, filterYear, filterSemester, filterType, getHeaders]);
 
   useEffect(() => {
     fetchSchedules();
     setCurrentPage(1);
     setActiveMenuData(null);
-  }, [filterMajor, filterCohort, filterYear, filterSemester, filterType]);
+  }, [fetchSchedules]);
 
-  const getCalculatedSemesterIndex = (year, sem) => {
-    return (Number(year) - 1) * 3 + Number(sem);
-  };
-
-  // Nạp môn từ Khung CTĐT
+  // 3. Nạp môn từ Khung CTĐT theo đúng mã lớp động
   const loadCurriculumSubjects = async (cls, semIdx) => {
     setLoadingCurriculum(true);
     try {
@@ -181,6 +192,7 @@ export const ManageSchedules = () => {
     }
   };
 
+  // 4. Mở Modal Xếp Lịch: Tự động bắt đúng Lớp theo Ngành/Khóa đã chọn
   const handleOpenScheduleModal = () => {
     setActiveMenuData(null);
     setEditingItem(null);
@@ -188,7 +200,7 @@ export const ManageSchedules = () => {
 
     const defaultMajor = filterMajor || options.majors[0]?.majorName || "Hệ Thống Thông Tin";
     const defaultCohort = filterCohort || options.cohorts[0] || "K23";
-    const targetClass = defaultCohort.includes("25") ? "HTTT2511" : "HTTT2311";
+    const targetClass = filterClass !== "all" ? filterClass : generateClassName(defaultMajor, defaultCohort);
     const semIndex = getCalculatedSemesterIndex(filterYear, filterSemester);
 
     setFormData({
@@ -240,7 +252,7 @@ export const ManageSchedules = () => {
     setFormData({
       facultyMajor: item.facultyMajor,
       cohort: item.cohort,
-      className: item.className || "",
+      className: item.className || generateClassName(item.facultyMajor, item.cohort),
       academicYear: item.academicYear,
       semester: item.semester,
       semesterIndex: item.semesterIndex || getCalculatedSemesterIndex(item.academicYear, item.semester),
@@ -279,6 +291,7 @@ export const ManageSchedules = () => {
     });
   };
 
+  // 5. Submit form có kiểm tra hợp lệ
   const handleSubmit = async (e) => {
     e.preventDefault();
     if (!formData.subjectName.trim()) {
@@ -287,6 +300,10 @@ export const ManageSchedules = () => {
     }
     if (!formData.specificDate) {
       alert("Vui lòng chọn ngày diễn ra!");
+      return;
+    }
+    if (Number(formData.startPeriod) > Number(formData.endPeriod)) {
+      alert("Lỗi: Tiết bắt đầu không được lớn hơn tiết kết thúc!");
       return;
     }
 
@@ -352,41 +369,57 @@ export const ManageSchedules = () => {
   const totalPages = Math.ceil(schedules.length / itemsPerPage) || 1;
   const paginatedData = schedules.slice((currentPage - 1) * itemsPerPage, currentPage * itemsPerPage);
 
-  return (
-    <div className="d-flex flex-column gap-3 w-100">
-      {/* 1. Header Toolbar & Bộ lọc */}
-      <div className="p-3 bg-white rounded-4 shadow-sm border d-flex flex-column gap-2.5">
-        <div className="d-flex flex-wrap align-items-center justify-content-between gap-2">
-          <div>
-            <h6 className="fw-bold text-dark mb-0 d-flex align-items-center gap-2">
-              <i className="bi bi-calendar3-range-fill text-primary fs-5"></i>
-              Thời Khóa Biểu Theo Lớp & Chuyên Ngành
-            </h6>
-            <small className="text-muted" style={{ fontSize: "11.5px" }}>
-              Đồng bộ lịch học, ngày diễn ra và thời khóa biểu cùng khung CTĐT
-            </small>
+return (
+    <div className="d-flex flex-column gap-3.5 w-100" style={{ color: "#1e293b" }}>
+      {/* 1. KHỐI THẺ CARD ĐIỀU KHIỂN & BỘ LỌC (ĐỒNG BỘ 100% VỚI MANAGE CURRICULUM & USERS) */}
+      <div 
+        className="bg-white rounded-4 p-4 border shadow-sm mb-2"
+        style={{ borderColor: "#e2e8f0", boxShadow: "0 2px 8px rgba(0,0,0,0.02)" }}
+      >
+        {/* Hàng 1: Tiêu đề trang & Nút hành động */}
+        <div className="d-flex flex-wrap align-items-center justify-content-between gap-2 mb-3 pb-1">
+          <div className="d-flex align-items-center gap-3">
+            <span
+              className="rounded-3 d-flex align-items-center justify-content-center text-white flex-shrink-0"
+              style={{
+                width: "40px",
+                height: "40px",
+                background: "linear-gradient(135deg, #185bf0 0%, #0d9488 100%)",
+              }}
+            >
+              <i className="bi bi-calendar3-range-fill fs-5"></i>
+            </span>
+            <div>
+              <h6 className="fw-black text-dark mb-0 fs-6">
+                Thời Khóa Biểu Theo Lớp & Chuyên Ngành
+              </h6>
+              <small className="text-secondary fw-medium" style={{ fontSize: "12px" }}>
+                Đồng bộ lịch học, ngày diễn ra và thời khóa biểu cùng khung CTĐT
+              </small>
+            </div>
           </div>
 
           <button
             onClick={handleOpenScheduleModal}
-            className="btn btn-primary rounded-pill px-3.5 py-1.5 fw-bold shadow-sm d-flex align-items-center gap-1.5 border-0 text-white"
-            style={{ fontSize: "12.5px", background: "linear-gradient(180deg, #185bf0 0%, #1546cd 100%)" }}
+            className="btn btn-primary rounded-pill px-3.5 py-2 fw-bold shadow-xs d-flex align-items-center gap-1.5 border-0 text-white cursor-pointer"
+            style={{ fontSize: "12.5px", background: "linear-gradient(135deg, #185bf0 0%, #1546cd 100%)" }}
           >
             <i className="bi bi-plus-circle-fill fs-6"></i>
             <span>Xếp Lịch Học / Thi</span>
           </button>
         </div>
 
-        {/* Thanh lọc dữ liệu */}
-        <div className="row g-2 pt-2 border-top">
-          {/* Dropdown Ngành lấy từ bảng faculty_majors */}
+        {/* Hàng 2: Bộ lọc các trường */}
+        <div className="row g-2.5 pt-1">
           <div className="col-12 col-md-3">
-            <label className="form-label text-uppercase text-secondary fw-bold mb-1" style={{ fontSize: "10px" }}>Ngành Đào Tạo</label>
+            <label className="form-label text-uppercase text-secondary fw-bold mb-1" style={{ fontSize: "10px" }}>
+              Ngành Đào Tạo
+            </label>
             <select
               value={filterMajor}
               onChange={(e) => setFilterMajor(e.target.value)}
-              className="form-select form-select-sm rounded-3 shadow-none fw-semibold"
-              style={{ fontSize: "12px" }}
+              className="form-select form-select-sm rounded-3 bg-white shadow-none fw-semibold"
+              style={{ fontSize: "12.5px", borderColor: "#e2e8f0" }}
             >
               {options.majors.map((m, idx) => (
                 <option key={idx} value={m.majorName}>
@@ -396,14 +429,15 @@ export const ManageSchedules = () => {
             </select>
           </div>
 
-          {/* Dropdown Khóa lấy từ bảng academic_cohorts */}
           <div className="col-6 col-md-2">
-            <label className="form-label text-uppercase text-secondary fw-bold mb-1" style={{ fontSize: "10px" }}>Khóa Tuyển Sinh</label>
+            <label className="form-label text-uppercase text-secondary fw-bold mb-1" style={{ fontSize: "10px" }}>
+              Khóa Tuyển Sinh
+            </label>
             <select
               value={filterCohort}
               onChange={(e) => setFilterCohort(e.target.value)}
-              className="form-select form-select-sm rounded-3 shadow-none fw-semibold"
-              style={{ fontSize: "12px" }}
+              className="form-select form-select-sm rounded-3 bg-white shadow-none fw-semibold"
+              style={{ fontSize: "12.5px", borderColor: "#e2e8f0" }}
             >
               {options.cohorts.map((c, idx) => (
                 <option key={idx} value={c}>{c}</option>
@@ -412,12 +446,31 @@ export const ManageSchedules = () => {
           </div>
 
           <div className="col-6 col-md-2">
-            <label className="form-label text-uppercase text-secondary fw-bold mb-1" style={{ fontSize: "10px" }}>Năm Học</label>
+            <label className="form-label text-uppercase text-secondary fw-bold mb-1" style={{ fontSize: "10px" }}>
+              Lớp Sinh Hoạt
+            </label>
+            <select
+              value={filterClass}
+              onChange={(e) => setFilterClass(e.target.value)}
+              className="form-select form-select-sm rounded-3 bg-white shadow-none fw-semibold font-monospace text-primary"
+              style={{ fontSize: "12.5px", borderColor: "#e2e8f0" }}
+            >
+              <option value="all">Tất cả các lớp</option>
+              <option value={generateClassName(filterMajor, filterCohort)}>
+                {generateClassName(filterMajor, filterCohort)}
+              </option>
+            </select>
+          </div>
+
+          <div className="col-4 col-md-1">
+            <label className="form-label text-uppercase text-secondary fw-bold mb-1" style={{ fontSize: "10px" }}>
+              Năm Học
+            </label>
             <select
               value={filterYear}
               onChange={(e) => setFilterYear(e.target.value)}
-              className="form-select form-select-sm rounded-3 shadow-none fw-semibold"
-              style={{ fontSize: "12px" }}
+              className="form-select form-select-sm rounded-3 bg-white shadow-none fw-semibold"
+              style={{ fontSize: "12.5px", borderColor: "#e2e8f0" }}
             >
               <option value="1">Năm 1</option>
               <option value="2">Năm 2</option>
@@ -426,13 +479,15 @@ export const ManageSchedules = () => {
             </select>
           </div>
 
-          <div className="col-6 col-md-2">
-            <label className="form-label text-uppercase text-secondary fw-bold mb-1" style={{ fontSize: "10px" }}>Học Kỳ</label>
+          <div className="col-4 col-md-2">
+            <label className="form-label text-uppercase text-secondary fw-bold mb-1" style={{ fontSize: "10px" }}>
+              Học Kỳ
+            </label>
             <select
               value={filterSemester}
               onChange={(e) => setFilterSemester(e.target.value)}
-              className="form-select form-select-sm rounded-3 shadow-none fw-semibold"
-              style={{ fontSize: "12px" }}
+              className="form-select form-select-sm rounded-3 bg-white shadow-none fw-semibold"
+              style={{ fontSize: "12.5px", borderColor: "#e2e8f0" }}
             >
               <option value="1">Kỳ 1</option>
               <option value="2">Kỳ 2</option>
@@ -440,13 +495,15 @@ export const ManageSchedules = () => {
             </select>
           </div>
 
-          <div className="col-6 col-md-3">
-            <label className="form-label text-uppercase text-secondary fw-bold mb-1" style={{ fontSize: "10px" }}>Phân Loại</label>
+          <div className="col-4 col-md-2">
+            <label className="form-label text-uppercase text-secondary fw-bold mb-1" style={{ fontSize: "10px" }}>
+              Phân Loại
+            </label>
             <select
               value={filterType}
               onChange={(e) => setFilterType(e.target.value)}
-              className="form-select form-select-sm rounded-3 shadow-none fw-semibold"
-              style={{ fontSize: "12px" }}
+              className="form-select form-select-sm rounded-3 bg-white shadow-none fw-semibold"
+              style={{ fontSize: "12.5px", borderColor: "#e2e8f0" }}
             >
               <option value="all">Tất cả</option>
               <option value="study">Lý thuyết</option>
@@ -458,34 +515,35 @@ export const ManageSchedules = () => {
       </div>
 
       {/* 2. Bảng Danh Sách */}
-      <div className="rounded-4 p-4 shadow-sm bg-white border">
+      <div className="rounded-4 p-4 shadow-sm bg-white border" style={{ borderColor: "#f1f5f9" }}>
         <div className="d-flex justify-content-between align-items-center mb-3">
-          <span className="badge bg-primary-subtle text-primary border border-primary-subtle px-3 py-1.5 rounded-pill fw-bold">
+          <span className="badge bg-primary-subtle text-primary border border-primary-subtle px-3 py-1.5 rounded-pill fw-bold" style={{ fontSize: "11px" }}>
             {filterMajor || "Hệ Thống Thông Tin"} • Khóa {filterCohort || "K23"} • Năm {filterYear} (Kỳ {filterSemester} - HK {getCalculatedSemesterIndex(filterYear, filterSemester)})
           </span>
           <small className="text-muted fw-semibold">Tổng: <b>{schedules.length}</b> tiết học/lịch thi</small>
         </div>
 
-        <div className="table-responsive" style={{ minHeight: "240px" }}>
+        <div className="table-responsive" style={{ minHeight: "260px" }}>
           <table className="table table-hover align-middle mb-0 text-nowrap" style={{ minWidth: "860px" }}>
             <thead className="table-light">
               <tr style={{ fontSize: "11px", color: "#64748b", letterSpacing: "0.5px" }} className="text-uppercase">
                 <th style={{ width: "50px", textAlign: "center" }}>STT</th>
                 <th>Môn Học & Mã Học Phần</th>
+                <th>Lớp</th>
                 <th>Phân Loại</th>
                 <th>Ngày Diễn Ra</th>
                 <th>Tiết Học</th>
-                <th>Phòng Học</th>
+                <th>Phòng</th>
                 <th>Giảng Viên</th>
                 <th className="text-end pe-3" style={{ width: "80px" }}>Thao Tác</th>
               </tr>
             </thead>
             <tbody style={{ fontSize: "13px" }}>
               {loading ? (
-                <tr><td colSpan={8} className="text-center py-5 text-muted">Đang nạp dữ liệu...</td></tr>
+                <tr><td colSpan={9} className="text-center py-5 text-muted">Đang nạp dữ liệu...</td></tr>
               ) : paginatedData.length === 0 ? (
                 <tr>
-                  <td colSpan={8} className="text-center py-5 text-muted">
+                  <td colSpan={9} className="text-center py-5 text-muted">
                     Không có lịch học/thi cho tiêu chí đã chọn. Bấm <b>"Xếp Lịch Học / Thi"</b> để tạo lịch mới.
                   </td>
                 </tr>
@@ -508,6 +566,11 @@ export const ManageSchedules = () => {
                             </span>
                           )}
                         </div>
+                      </td>
+                      <td>
+                        <span className="badge bg-light text-primary border font-monospace px-2 py-0.5 fw-bold" style={{ fontSize: "11px" }}>
+                          {item.className || generateClassName(item.facultyMajor, item.cohort)}
+                        </span>
                       </td>
                       <td>
                         <span
@@ -554,7 +617,7 @@ export const ManageSchedules = () => {
 
         {/* 3. Phân trang */}
         {!loading && (
-          <div className="d-flex flex-wrap justify-content-between align-items-center pt-3 mt-2 border-top gap-2">
+          <div className="d-flex flex-wrap justify-content-between align-items-center pt-3 mt-2 border-top gap-2" style={{ borderColor: "#f1f5f9" }}>
             <small className="text-muted" style={{ fontSize: "12px" }}>
               Hiển thị <b>{schedules.length ? (currentPage - 1) * itemsPerPage + 1 : 0}</b> -{" "}
               <b>{Math.min(currentPage * itemsPerPage, schedules.length)}</b> / <b>{schedules.length}</b> bản ghi
@@ -565,7 +628,6 @@ export const ManageSchedules = () => {
                 className="btn btn-sm btn-light border px-2 py-1 rounded-2 shadow-none"
                 disabled={currentPage === 1}
                 onClick={() => setCurrentPage(1)}
-                title="Trang đầu"
               >
                 <i className="bi bi-chevron-double-left small"></i>
               </button>
@@ -573,7 +635,6 @@ export const ManageSchedules = () => {
                 className="btn btn-sm btn-light border px-2 py-1 rounded-2 shadow-none"
                 disabled={currentPage === 1}
                 onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
-                title="Trang trước"
               >
                 <i className="bi bi-chevron-left small"></i>
               </button>
@@ -586,7 +647,6 @@ export const ManageSchedules = () => {
                 className="btn btn-sm btn-light border px-2 py-1 rounded-2 shadow-none"
                 disabled={currentPage === totalPages}
                 onClick={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
-                title="Trang sau"
               >
                 <i className="bi bi-chevron-right small"></i>
               </button>
@@ -594,7 +654,6 @@ export const ManageSchedules = () => {
                 className="btn btn-sm btn-light border px-2 py-1 rounded-2 shadow-none"
                 disabled={currentPage === totalPages}
                 onClick={() => setCurrentPage(totalPages)}
-                title="Trang cuối"
               >
                 <i className="bi bi-chevron-double-right small"></i>
               </button>
@@ -603,7 +662,7 @@ export const ManageSchedules = () => {
         )}
       </div>
 
-      {/* 4. Floating Action Menu */}
+      {/* 4. Action Dropdown Menu */}
       {activeMenuData && (
         <div
           ref={menuDropdownRef}
@@ -621,7 +680,7 @@ export const ManageSchedules = () => {
           <button
             type="button"
             onClick={() => handleOpenEdit(activeMenuData.item)}
-            className="dropdown-item d-flex align-items-center gap-2 px-3 py-1.5 text-dark border-0 bg-transparent"
+            className="dropdown-item d-flex align-items-center gap-2 px-3 py-1.5 text-dark border-0 bg-transparent cursor-pointer"
           >
             <i className="bi bi-pencil-fill text-primary" style={{ fontSize: "11px" }}></i>
             <span>Chỉnh sửa</span>
@@ -630,7 +689,7 @@ export const ManageSchedules = () => {
           <button
             type="button"
             onClick={() => handleDelete(activeMenuData.item)}
-            className="dropdown-item d-flex align-items-center gap-2 px-3 py-1.5 text-danger border-0 bg-transparent"
+            className="dropdown-item d-flex align-items-center gap-2 px-3 py-1.5 text-danger border-0 bg-transparent cursor-pointer"
           >
             <i className="bi bi-trash3-fill text-danger" style={{ fontSize: "11px" }}></i>
             <span>Xóa tiết học</span>
@@ -638,7 +697,7 @@ export const ManageSchedules = () => {
         </div>
       )}
 
-      {/* 5. MODAL XẾP LỊCH: CHỈ CẦN NGÀY DIỄN RA */}
+      {/* 5. MODAL XẾP LỊCH */}
       {showScheduleModal && (
         <div className="modal show d-block p-2 p-sm-3" style={{ backgroundColor: "rgba(15, 23, 42, 0.55)", zIndex: 1065 }}>
           <div className="modal-dialog modal-dialog-centered" style={{ maxWidth: "500px" }}>
@@ -673,7 +732,7 @@ export const ManageSchedules = () => {
               <form onSubmit={handleSubmit}>
                 <div className="modal-body px-4 py-3 d-flex flex-column gap-3">
                   {!editingItem && (
-                    <div className="p-1 bg-slate-100 rounded-pill border d-flex gap-1">
+                    <div className="p-1 bg-slate-100 rounded-pill border d-flex gap-1" style={{ borderColor: "#f1f5f9" }}>
                       <button
                         type="button"
                         onClick={() => setEntryMode("from_curriculum")}
@@ -720,7 +779,7 @@ export const ManageSchedules = () => {
                         </div>
                       ) : curriculumSubjects.length === 0 ? (
                         <div className="alert alert-warning p-2 small mb-0 rounded-3">
-                          Chưa có học phần nào trong khung CTĐT kỳ này. Bạn có thể chọn <b>"Tự Nhập Môn Ngoài Khung"</b>.
+                          Chưa có học phần nào trong khung CTĐT kỳ này của lớp {formData.className}. Bạn có thể chọn <b>"Tự Nhập Môn Ngoài Khung"</b>.
                         </div>
                       ) : (
                         <select
@@ -800,8 +859,8 @@ export const ManageSchedules = () => {
                     </div>
                   )}
 
-                  {/* THỜI GIAN VÀ TIẾT HỌC: CHỈ CẦN NGÀY DIỄN RA */}
-                  <div className="pt-2 border-top d-flex flex-column gap-2">
+                  {/* THỜI GIAN VÀ TIẾT HỌC */}
+                  <div className="pt-2 border-top d-flex flex-column gap-2" style={{ borderColor: "#f1f5f9" }}>
                     <div className="row g-2">
                       <div className="col-6">
                         <label className="form-label text-uppercase text-secondary fw-bold mb-1" style={{ fontSize: "10px" }}>
@@ -855,7 +914,7 @@ export const ManageSchedules = () => {
                   </div>
 
                   {/* PHÒNG HỌC & GIẢNG VIÊN */}
-                  <div className="pt-2 border-top">
+                  <div className="pt-2 border-top" style={{ borderColor: "#f1f5f9" }}>
                     <div className="row g-2">
                       <div className="col-6">
                         <label className="form-label text-uppercase text-secondary fw-bold mb-1" style={{ fontSize: "10px" }}>Phòng Học *</label>

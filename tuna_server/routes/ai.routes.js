@@ -1,33 +1,79 @@
 // routes/ai.routes.js
 const express = require('express');
 const router = express.Router();
+const crypto = require('crypto');
 const pool = require('../config/db');
 const { generateContentWithFallback } = require('../utils/gemini');
 
-// Đường dẫn service Python WRR trên Render
+// Đường dẫn service Python SWRR trên Render
 const WRR_SERVICE_URL = process.env.WRR_SERVICE_URL || 'https://tuna-wrr-service.onrender.com';
 
-// Helper: Kiểm tra hạn mức token trong ngày của một user
-const checkUserTokenLimit = async (userId) => {
+// Helper trích xuất User ID thực tế từ Header / Body / Query
+const extractUserId = (req) => {
+  return String(
+    req.headers['x-user-id'] ||
+    req.body?.userId ||
+    req.query?.userId ||
+    req.user?.email ||
+    req.user?.id ||
+    req.body?.email ||
+    'guest_user'
+  ).trim();
+};
+
+// Helper: Tự động khởi tạo hoặc lấy cấu hình AI từ CSDL
+const getOrCreateAiSettings = async () => {
   try {
     const settingsRes = await pool.query(
-      `SELECT daily_token_limit_per_user, enable_ai_global FROM system_ai_settings ORDER BY id DESC LIMIT 1`
+      `SELECT id, daily_token_limit_per_user, enable_ai_global, cache_ttl_hours, max_questions_per_gen 
+       FROM system_ai_settings 
+       ORDER BY id DESC LIMIT 1`
     );
-    const settings = settingsRes.rows[0] || { daily_token_limit_per_user: 15000, enable_ai_global: true };
+    if (settingsRes.rows.length > 0) {
+      return settingsRes.rows[0];
+    }
+
+    // Nếu chưa có dòng nào, tự động tạo cấu hình mặc định ban đầu
+    const insertRes = await pool.query(
+      `INSERT INTO system_ai_settings (enable_ai_global, daily_token_limit_per_user, cache_ttl_hours, max_questions_per_gen)
+       VALUES (TRUE, 15000, 24, 5)
+       RETURNING id, daily_token_limit_per_user, enable_ai_global, cache_ttl_hours, max_questions_per_gen`
+    );
+    return insertRes.rows[0];
+  } catch (err) {
+    console.error("Lỗi khởi tạo cấu hình AI:", err.message);
+    return {
+      id: 1,
+      daily_token_limit_per_user: 15000,
+      enable_ai_global: true,
+      cache_ttl_hours: 24,
+      max_questions_per_gen: 5,
+    };
+  }
+};
+
+// Helper: Kiểm tra Gateway bật/tắt & Hạn mức token trong ngày
+const checkUserTokenLimit = async (userId) => {
+  try {
+    const settings = await getOrCreateAiSettings();
 
     if (!settings.enable_ai_global) {
-      return { allowed: false, reason: 'Hệ thống AI đang tạm thời khóa bởi Quản trị viên!' };
+      return { 
+        allowed: false, 
+        reason: 'Gateway Gemini AI đang tạm dừng bởi Quản trị viên để bảo trì hệ thống!' 
+      };
     }
 
     const todayUsageRes = await pool.query(
       `SELECT COALESCE(SUM(total_tokens), 0)::BIGINT AS used_today 
        FROM ai_token_logs 
-       WHERE user_id = $1 AND created_at >= CURRENT_DATE`,
+       WHERE (LOWER(user_id) = LOWER($1) OR user_id = $1) 
+         AND created_at >= CURRENT_DATE`,
       [userId]
     );
 
-    const usedToday = parseInt(todayUsageRes.rows[0]?.used_today || 0);
-    const limit = parseInt(settings.daily_token_limit_per_user || 15000);
+    const usedToday = parseInt(todayUsageRes.rows[0]?.used_today || 0, 10);
+    const limit = parseInt(settings.daily_token_limit_per_user || 15000, 10);
 
     if (usedToday >= limit) {
       return { 
@@ -38,45 +84,21 @@ const checkUserTokenLimit = async (userId) => {
 
     return { allowed: true, settings, usedToday };
   } catch (err) {
-    console.error("Lỗi kiểm tra hạn mức AI:", err);
-    return { allowed: true };
+    console.error("Lỗi kiểm tra hạn mức AI:", err.message);
+    return { allowed: true, settings: { cache_ttl_hours: 24, max_questions_per_gen: 5 } };
   }
 };
 
-// Thuật toán Smooth Weighted Round Robin (SWRR) dự phòng bằng JS
-const fallbackSWRR = (items, totalSlots) => {
-  if (!items || items.length === 0) return [];
-  const validItems = items.map(it => ({
-    subject: it.subject,
-    weight: Math.max(1, Math.round(Number(it.weight || 1) * 10)),
-    currentWeight: 0
-  }));
-
-  const totalWeight = validItems.reduce((acc, cur) => acc + cur.weight, 0);
-  const schedule = [];
-
-  for (let i = 0; i < totalSlots; i++) {
-    for (const item of validItems) {
-      item.currentWeight += item.weight;
-    }
-    const best = validItems.reduce((prev, current) => 
-      (prev.currentWeight > current.currentWeight) ? prev : current
-    );
-    schedule.push(best.subject);
-    best.currentWeight -= totalWeight;
-  }
-  return schedule;
-};
-
 // =============================================================================
-// 1. APIS QUẢN TRỊ ADMIN (ManageAI.jsx)
+// 1. APIS QUẢN TRỊ ADMIN (AdminDashboard & ManageAI)
 // =============================================================================
 
-// GET /api/ai/stats - Lấy thống kê sử dụng AI
-router.get('/stats', async (req, res) => {
+// GET: Lấy thống kê sử dụng AI cho Admin Dashboard (Hỗ trợ đa endpoint)
+router.get(['/stats', '/admin/stats', '/admin/ai/stats'], async (req, res) => {
   try {
-    const [settingsRes, statsRes, featuresRes, topUsersRes, recentTasksRes, cacheCountRes] = await Promise.all([
-      pool.query(`SELECT * FROM system_ai_settings ORDER BY id DESC LIMIT 1`),
+    const settings = await getOrCreateAiSettings();
+
+    const [statsRes, todayStatsRes, featuresRes, topUsersRes, recentTasksRes, cacheCountRes] = await Promise.all([
       pool.query(`
         SELECT 
           COALESCE(SUM(total_tokens), 0)::BIGINT AS total_tokens,
@@ -85,6 +107,14 @@ router.get('/stats', async (req, res) => {
           COALESCE(SUM(cost_usd), 0)::NUMERIC(10, 4) AS total_cost_usd,
           COUNT(*)::INT AS total_requests
         FROM ai_token_logs
+      `),
+      pool.query(`
+        SELECT 
+          COALESCE(SUM(total_tokens), 0)::BIGINT AS daily_tokens,
+          COALESCE(SUM(cost_usd), 0)::NUMERIC(10, 4) AS daily_cost,
+          COUNT(*)::INT AS daily_requests
+        FROM ai_token_logs
+        WHERE created_at >= CURRENT_DATE
       `),
       pool.query(`
         SELECT 
@@ -106,7 +136,7 @@ router.get('/stats', async (req, res) => {
           COALESCE(SUM(l.total_tokens), 0)::BIGINT AS total_tokens,
           COALESCE(SUM(l.cost_usd), 0)::NUMERIC(10, 4) AS total_cost
         FROM ai_token_logs l
-        LEFT JOIN users u ON l.user_id = u.student_code OR l.user_id = u.zalo_id
+        LEFT JOIN users u ON l.user_id = u.student_code OR l.user_id = u.zalo_id OR LOWER(l.user_id) = LOWER(u.email)
         GROUP BY l.user_id, u.name, u.student_code, u.class_name
         ORDER BY total_tokens DESC
         LIMIT 6
@@ -122,25 +152,21 @@ router.get('/stats', async (req, res) => {
         FROM ai_tasks
         ORDER BY created_at DESC
         LIMIT 8
-      `),
+      `).catch(() => ({ rows: [] })),
       pool.query(`SELECT COUNT(*)::INT AS total FROM ai_cached_outputs`).catch(() => ({ rows: [{ total: 0 }] }))
     ]);
 
-    const settings = settingsRes.rows[0] || {
-      daily_token_limit_per_user: 15000,
-      max_questions_per_gen: 5,
-      enable_ai_global: true,
-      cache_ttl_hours: 24,
-    };
+    const todayStats = todayStatsRes.rows[0] || { daily_tokens: 0, daily_cost: 0, daily_requests: 0 };
 
     res.json({
       success: true,
       settings,
       stats: statsRes.rows[0],
+      today: todayStats,
       features: featuresRes.rows,
       topUsers: topUsersRes.rows,
       recentTasks: recentTasksRes.rows,
-      cachedTotal: cacheCountRes.rows[0]?.total || 0
+      cachedTotal: cacheCountRes.rows[0]?.total || 0,
     });
   } catch (err) {
     console.error("Lỗi lấy dữ liệu thống kê AI:", err);
@@ -148,191 +174,144 @@ router.get('/stats', async (req, res) => {
   }
 });
 
-// PUT /api/ai/settings - Lưu cấu hình vào CSDL
-router.put('/settings', async (req, res) => {
-  try {
-    const { daily_token_limit_per_user, max_questions_per_gen, enable_ai_global, cache_ttl_hours } = req.body;
+// POST: Bật / Tắt Gateway AI (Xử lý dứt điểm lỗi "Không thể chuyển trạng thái AI")
+// routes/ai.routes.js
+// Đoạn route toggle & settings:
 
-    const checkExists = await pool.query(`SELECT id FROM system_ai_settings LIMIT 1`);
-    if (checkExists.rows.length === 0) {
-      await pool.query(
-        `INSERT INTO system_ai_settings (daily_token_limit_per_user, max_questions_per_gen, enable_ai_global, cache_ttl_hours)
-         VALUES ($1, $2, $3, $4)`,
-        [daily_token_limit_per_user, max_questions_per_gen, enable_ai_global, cache_ttl_hours]
-      );
-    } else {
-      await pool.query(
-        `UPDATE system_ai_settings
-         SET daily_token_limit_per_user = $1,
-             max_questions_per_gen = $2,
-             enable_ai_global = $3,
-             cache_ttl_hours = $4,
-             updated_at = CURRENT_TIMESTAMP
-         WHERE id = $5`,
-        [daily_token_limit_per_user, max_questions_per_gen, enable_ai_global, cache_ttl_hours, checkExists.rows[0].id]
-      );
-    }
+router.post(['/toggle', '/admin/toggle-ai', '/admin/ai/toggle'], async (req, res) => {
+  const { enabled } = req.body;
+  try {
+    const isEnabled = Boolean(enabled);
+    const settings = await getOrCreateAiSettings();
 
     await pool.query(
-      `INSERT INTO admin_audit_logs (actor_id, actor_name, actor_role, action, target, details)
-       VALUES ($1, $2, $3, $4, $5, $6)`,
-      ['admin_root', 'Quản Trị Viên', 'super_admin', 'CẬP NHẬT CẤU HÌNH AI', 'system_ai_settings', `Cập nhật hạn mức ${daily_token_limit_per_user} tokens/ngày, Trạng thái: ${enable_ai_global ? 'Bật' : 'Tắt'}`]
-    ).catch(() => {});
+      `UPDATE system_ai_settings 
+       SET enable_ai_global = $1, updated_at = CURRENT_TIMESTAMP 
+       WHERE id = $2`,
+      [isEnabled, settings.id]
+    );
 
-    res.json({ success: true, message: 'Đã cập nhật chính sách hạn mức AI vào CSDL thành công!' });
+    res.json({
+      success: true,
+      enabled: isEnabled,
+      message: isEnabled ? 'Đã kích hoạt Gateway Gemini AI!' : 'Đã tạm dừng Gateway Gemini AI!',
+    });
   } catch (err) {
+    console.error("Lỗi toggle AI:", err);
     res.status(500).json({ success: false, message: err.message });
   }
 });
 
-// POST /api/ai/clear-cache - Làm sạch bộ nhớ đệm
-router.post('/clear-cache', async (req, res) => {
+// PUT: Lưu cấu hình hạn mức vào CSDL (Hỗ trợ đa endpoint)
+router.put(['/settings', '/admin/settings', '/admin/ai/settings'], async (req, res) => {
+  try {
+    const { daily_token_limit_per_user, max_questions_per_gen, enable_ai_global, cache_ttl_hours } = req.body;
+    const settings = await getOrCreateAiSettings();
+
+    await pool.query(
+      `UPDATE system_ai_settings
+       SET daily_token_limit_per_user = $1,
+           max_questions_per_gen = $2,
+           enable_ai_global = $3,
+           cache_ttl_hours = $4,
+           updated_at = CURRENT_TIMESTAMP
+       WHERE id = $5`,
+      [
+        Number(daily_token_limit_per_user) || 15000,
+        Number(max_questions_per_gen) || 5,
+        enable_ai_global !== false,
+        Number(cache_ttl_hours) || 24,
+        settings.id
+      ]
+    );
+
+    await pool.query(
+      `INSERT INTO admin_audit_logs (actor_name, actor_role, action, details)
+       VALUES ($1, $2, $3, $4)`,
+      [
+        'Quản trị viên', 
+        'super_admin', 
+        'CẬP NHẬT CẤU HÌNH AI', 
+        `Hạn mức: ${daily_token_limit_per_user} tokens/ngày, TTL Cache: ${cache_ttl_hours}h`
+      ]
+    ).catch(() => {});
+
+    res.json({ success: true, message: 'Đã cập nhật chính sách hạn mức AI thành công!' });
+  } catch (err) {
+    console.error("Lỗi cập nhật settings AI:", err);
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+// POST: Làm sạch bộ nhớ đệm
+router.post(['/clear-cache', '/admin/clear-cache', '/admin/ai/clear-cache'], async (req, res) => {
   try {
     const delRes = await pool.query(`DELETE FROM ai_cached_outputs`);
     
     await pool.query(
-      `INSERT INTO admin_audit_logs (actor_id, actor_name, actor_role, action, target, details)
-       VALUES ($1, $2, $3, $4, $5, $6)`,
-      ['admin_root', 'Quản Trị Viên', 'super_admin', 'XÓA CACHE AI', 'ai_cached_outputs', `Đã dọn sạch ${delRes.rowCount || 0} bản ghi bộ nhớ đệm.`]
+      `INSERT INTO admin_audit_logs (actor_name, actor_role, action, details)
+       VALUES ($1, $2, $3, $4)`,
+      ['Quản trị viên', 'super_admin', 'XÓA CACHE AI', `Đã dọn sạch ${delRes.rowCount || 0} bản ghi bộ nhớ đệm.`]
     ).catch(() => {});
 
     res.json({ success: true, message: `Đã dọn dẹp ${delRes.rowCount || 0} bản ghi bộ nhớ đệm AI!` });
   } catch (err) {
+    console.error("Lỗi xóa cache:", err);
     res.status(500).json({ success: false, message: err.message });
   }
 });
 
 // =============================================================================
-// 2. APIS SINH DỮ LIỆU & TOKEN GATEWAY (Gemini, Python WRR, CSDL)
+// 2. APIS SINH NỘI DUNG VỚI CACHE 24H & GHI NHẬN TOKEN
 // =============================================================================
 
-// POST /api/ai/schedule/wrr - Cầu nối gọi Python Service phân bổ ca học thông minh
-router.post(['/schedule/wrr', '/ai/schedule/wrr'], async (req, res) => {
-  try {
-    const payload = req.body || {};
-    
-    // 1. Cố gắng chuyển tiếp request sang Python Flask Service (wrr_service.py)
-    try {
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 6000); // 6s timeout phòng trường hợp Render cold start
-
-      const pyRes = await fetch(`${WRR_SERVICE_URL}/api/schedule/wrr`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload),
-        signal: controller.signal
-      });
-      clearTimeout(timeoutId);
-
-      if (pyRes.ok) {
-        const pyData = await pyRes.json();
-        return res.json(pyData);
-      }
-    } catch (netErr) {
-      console.warn("⚠️ Không kết nối được Python Service, chuyển sang thuật toán Fallback JS:", netErr.message);
-    }
-
-    // 2. Fallback dự phòng bằng Node.js nếu Python service đang spin-up
-    const subjectsData = payload.subjects || [];
-    const totalDays = parseInt(payload.total_days || 28);
-    const goalLevel = payload.goal_level || 'KhaGioi';
-    const currentGpa = parseFloat(payload.current_gpa || 3.0);
-
-    const targetGpa = goalLevel === 'HocBong' ? 3.7 : goalLevel === 'KhaGioi' ? 3.2 : 2.2;
-    const gpaGap = Math.max(0.0, targetGpa - currentGpa);
-    const effortBoost = 1.0 + Math.min(0.8, gpaGap * 0.7);
-
-    let slotsPerDay = 1;
-    if (goalLevel === 'HocBong' || gpaGap >= 0.6) slotsPerDay = 3;
-    else if (goalLevel === 'KhaGioi') slotsPerDay = 2;
-
-    const processedItems = subjectsData.map(item => {
-      const credits = Number(item.credits || 3);
-      const attempts = Number(item.quiz_total || 0);
-      const corrects = Number(item.quiz_correct || 0);
-      const isNearExam = Boolean(item.is_near_exam);
-      const userLevel = item.user_level || 'medium';
-
-      const selfScore = userLevel === 'weak' ? 1.4 : userLevel === 'good' ? 0.3 : 0.6;
-      const quizWeakness = attempts > 0 ? (1.0 - (corrects / attempts)) : 0.5;
-      const examUrgency = isNearExam ? 1.6 : 0.5;
-      const weaknessAmplifier = userLevel === 'weak' ? 1.3 : 1.0;
-
-      const rawWeight = (
-        (credits * 0.7) +
-        (selfScore * 2.2 * weaknessAmplifier) +
-        (quizWeakness * 2.5) +
-        (examUrgency * 1.5)
-      ) * effortBoost;
-
-      return {
-        subject: item.subject_name || item.subject,
-        weight: Number(rawWeight.toFixed(2))
-      };
-    });
-
-    const totalSlots = totalDays * slotsPerDay;
-    const allocatedSubjects = fallbackSWRR(processedItems, totalSlots);
-
-    const dailySchedulePlan = [];
-    let idx = 0;
-    for (let day = 0; day < totalDays; day++) {
-      const dayTasks = [];
-      for (let slot = 0; slot < slotsPerDay; slot++) {
-        const sub = allocatedSubjects[idx] || (processedItems[0]?.subject || 'Môn đại cương');
-        idx++;
-        let taskType = 'doc_study';
-        let title = `Nghiên cứu giáo trình: ${sub}`;
-
-        if (slot === 1) {
-          taskType = 'quiz';
-          title = `Luyện đề trắc nghiệm: ${sub}`;
-        } else if (slot === 2) {
-          taskType = 'flashcard';
-          title = `Ôn thuật ngữ then chốt: ${sub}`;
-        }
-
-        dayTasks.push({
-          subject: sub,
-          task_type: taskType,
-          title: title,
-          slot_index: slot
-        });
-      }
-      dailySchedulePlan.push(dayTasks);
-    }
-
-    return res.json({
-      success: true,
-      source: 'nodejs_fallback',
-      gpa_gap: Number(gpaGap.toFixed(2)),
-      slots_per_day: slotsPerDay,
-      weights: processedItems,
-      schedule_plan: dailySchedulePlan
-    });
-
-  } catch (err) {
-    console.error("Lỗi API schedule/wrr:", err);
-    res.status(500).json({ success: false, error: err.message });
-  }
-});
-
-// POST /api/ai/generate - Sinh nội dung trực tiếp qua Gemini
+// POST /api/ai/generate - Sinh nội dung trực tiếp qua Gemini (Có Cache & ghi Task)
 router.post('/generate', async (req, res) => {
-  const { prompt, isJson, userId = 'anonymous', featureType = 'test_api' } = req.body;
+  const { prompt, isJson, featureType = 'chat_assistant', docName = 'Yêu cầu trực tiếp' } = req.body;
+  const userId = extractUserId(req);
+
   try {
     const limitCheck = await checkUserTokenLimit(userId);
     if (!limitCheck.allowed) {
       return res.status(403).json({ success: false, error: limitCheck.reason });
     }
 
+    const ttlHours = limitCheck.settings?.cache_ttl_hours || 24;
+    const promptHash = crypto.createHash('md5').update((prompt || '').trim()).digest('hex');
+
+    // 1. KIỂM TRA BỘ ĐỆM CACHE 24H
+    const cacheRes = await pool.query(
+      `SELECT output_text 
+       FROM ai_cached_outputs 
+       WHERE prompt_hash = $1 
+         AND created_at >= NOW() - INTERVAL '1 hour' * $2 
+       LIMIT 1`,
+      [promptHash, ttlHours]
+    ).catch(() => ({ rows: [] }));
+
+    if (cacheRes.rows.length > 0) {
+      // Ghi task hoàn tất từ cache
+      await pool.query(
+        `INSERT INTO ai_tasks (feature_id, doc_name, status, error_message, created_at)
+         VALUES ($1, $2, 'done', 'Phản hồi từ Cache 24h', CURRENT_TIMESTAMP)`,
+        [featureType, docName]
+      ).catch(() => {});
+
+      return res.json({ 
+        success: true, 
+        text: cacheRes.rows[0].output_text,
+        cached: true 
+      });
+    }
+
     if (!process.env.GEMINI_API_KEY) {
-      return res.status(500).json({ success: false, error: 'Chưa cấu hình GEMINI_API_KEY trong file .env!' });
+      return res.status(500).json({ success: false, error: 'Chưa cấu hình GEMINI_API_KEY!' });
     }
 
     const config = { temperature: 0.2, maxOutputTokens: 8192 };
     if (isJson) config.responseMimeType = 'application/json';
 
+    // 2. GỌI GEMINI NẾU KHÔNG CÓ TRONG CACHE
     const text = await generateContentWithFallback(prompt, config);
 
     const promptTokensEst = Math.round((prompt || '').length / 4);
@@ -340,6 +319,7 @@ router.post('/generate', async (req, res) => {
     const totalTokensEst = promptTokensEst + compTokensEst;
     const costUsd = Number(((totalTokensEst / 1000000) * 0.35).toFixed(6));
 
+    // 3. LƯU BẢN GHI TOKEN VÀ CACHE VÀO CSDL
     await pool.query(
       `INSERT INTO ai_token_logs (user_id, feature_type, prompt_tokens, completion_tokens, total_tokens, cost_usd)
        VALUES ($1, $2, $3, $4, $5, $6)`,
@@ -347,39 +327,53 @@ router.post('/generate', async (req, res) => {
     ).catch(() => {});
 
     await pool.query(
-      `INSERT INTO ai_tasks (id, feature_id, doc_name, status, result_data)
-       VALUES ($1, $2, $3, $4, $5)`,
-      [`task_${Date.now()}`, featureType, 'Yêu cầu trực tiếp', 'done', JSON.stringify({ total_tokens: totalTokensEst })]
+      `INSERT INTO ai_cached_outputs (prompt_hash, prompt_text, output_text, created_at)
+       VALUES ($1, $2, $3, CURRENT_TIMESTAMP)
+       ON CONFLICT (prompt_hash) DO UPDATE SET output_text = EXCLUDED.output_text, created_at = CURRENT_TIMESTAMP`,
+      [promptHash, prompt, text]
     ).catch(() => {});
 
-    res.json({ success: true, text });
+    // 4. GHI NHẬN VÀO BẢNG AI_TASKS ĐỂ DASHBOARD HIỂN THỊ
+    await pool.query(
+      `INSERT INTO ai_tasks (feature_id, doc_name, status, error_message, created_at)
+       VALUES ($1, $2, 'done', 'Xử lý thành công', CURRENT_TIMESTAMP)`,
+      [featureType, docName]
+    ).catch(() => {});
+
+    res.json({ success: true, text, cached: false });
   } catch (error) {
     console.error('❌ Lỗi Gemini API:', error.message);
+
+    await pool.query(
+      `INSERT INTO ai_tasks (feature_id, doc_name, status, error_message, created_at)
+       VALUES ($1, $2, 'error', $3, CURRENT_TIMESTAMP)`,
+      [featureType, docName, error.message]
+    ).catch(() => {});
+
     res.status(500).json({ success: false, error: error.message });
   }
 });
 
-// POST /api/daily-quiz/generate hoặc /api/ai/daily-quiz/generate
+// POST /api/ai/daily-quiz/generate - Tạo câu hỏi trắc nghiệm & flashcard
 router.post(['/daily-quiz/generate', '/ai/daily-quiz/generate'], async (req, res) => {
-  let { subject, targetGoal = 'KhaGioi', dailyPace = 15, userId = 'B2300001' } = req.body;
+  let { subject, targetGoal = 'KhaGioi', dailyPace = 15 } = req.body;
+  const userId = extractUserId(req);
 
   if (!subject || subject === 'undefined' || subject.trim() === '') {
     subject = 'Cơ sở dữ liệu căn bản';
   }
 
   try {
-    const sysSettings = await pool.query(
-      `SELECT max_questions_per_gen, enable_ai_global FROM system_ai_settings ORDER BY id DESC LIMIT 1`
-    ).catch(() => ({ rows: [] }));
-
-    if (sysSettings.rows.length > 0 && !sysSettings.rows[0].enable_ai_global) {
-      return res.status(403).json({ success: false, error: 'Hệ thống AI đang tạm đóng để bảo trì ngân sách!' });
+    const limitCheck = await checkUserTokenLimit(userId);
+    if (!limitCheck.allowed) {
+      return res.status(403).json({ success: false, error: limitCheck.reason });
     }
 
-    const maxQuestions = sysSettings.rows[0]?.max_questions_per_gen || 5;
+    const maxQuestions = limitCheck.settings?.max_questions_per_gen || 5;
     const numQuestions = Math.min(dailyPace >= 30 ? 5 : 3, maxQuestions);
     const difficulty = targetGoal === 'HocBong' ? 'Nâng cao' : 'Căn bản';
 
+    // 1. ƯU TIÊN LẤY TỪ NGÂN HÀNG CÂU HỎI TRONG CSDL (Zero Token Cost)
     const dbQuiz = await pool.query(
       `SELECT question, options, answer, explain 
        FROM question_bank 
@@ -389,17 +383,56 @@ router.post(['/daily-quiz/generate', '/ai/daily-quiz/generate'], async (req, res
     ).catch(() => ({ rows: [] }));
 
     if (dbQuiz.rows && dbQuiz.rows.length >= numQuestions) {
+      await pool.query(
+        `INSERT INTO ai_tasks (feature_id, doc_name, status, error_message, created_at)
+         VALUES ('daily_quiz', $1, 'done', 'Lấy từ Ngân hàng câu hỏi (Zero Token)', CURRENT_TIMESTAMP)`,
+        [subject]
+      ).catch(() => {});
+
       return res.json({
         success: true,
-        source: 'database',
+        source: 'database_bank',
         subject,
-        questions: dbQuiz.rows,
+        questions: dbQuiz.rows.map(q => ({
+          ...q,
+          options: typeof q.options === 'string' ? JSON.parse(q.options) : q.options
+        })),
         flashcards: [
-          { front: `Thuật ngữ: ${subject}`, back: `Khái niệm và ứng dụng thực tiễn của ${subject}.` }
+          { front: `Thuật ngữ: ${subject}`, back: `Định nghĩa và nguyên lý cốt lõi của ${subject}.` }
         ],
       });
     }
 
+    // 2. KIỂM TRA BỘ ĐỆM CACHE 24H
+    const cacheKey = `quiz_${subject}_${difficulty}_${numQuestions}`;
+    const cacheHash = crypto.createHash('md5').update(cacheKey).digest('hex');
+    const ttlHours = limitCheck.settings?.cache_ttl_hours || 24;
+
+    const cacheRes = await pool.query(
+      `SELECT output_text FROM ai_cached_outputs 
+       WHERE prompt_hash = $1 AND created_at >= NOW() - INTERVAL '1 hour' * $2 LIMIT 1`,
+      [cacheHash, ttlHours]
+    ).catch(() => ({ rows: [] }));
+
+    if (cacheRes.rows.length > 0) {
+      const parsedCache = JSON.parse(cacheRes.rows[0].output_text || '{}');
+
+      await pool.query(
+        `INSERT INTO ai_tasks (feature_id, doc_name, status, error_message, created_at)
+         VALUES ('daily_quiz', $1, 'done', 'Phản hồi từ Cache 24h', CURRENT_TIMESTAMP)`,
+        [subject]
+      ).catch(() => {});
+
+      return res.json({
+        success: true,
+        source: 'cache_24h',
+        subject,
+        questions: parsedCache.questions || [],
+        flashcards: parsedCache.flashcards || [],
+      });
+    }
+
+    // 3. GỌI GEMINI NẾU CSDL VÀ CACHE ĐỀU CHƯA CÓ
     const prompt = `Bạn là giảng viên đại học. Hãy tạo đúng ${numQuestions} câu hỏi trắc nghiệm và 2 thẻ ghi nhớ (flashcards) cho môn học "${subject}" ở mức độ [${difficulty}].
 YÊU CẦU: Trả về duy nhất một chuỗi JSON hợp lệ không có markdown:
 {
@@ -424,28 +457,60 @@ YÊU CẦU: Trả về duy nhất một chuỗi JSON hợp lệ không có markd
     const parsed = JSON.parse(cleanJson || '{}');
 
     const generatedQuestions = parsed.questions || [];
-    if (Array.isArray(generatedQuestions) && generatedQuestions.length > 0) {
-      for (const q of generatedQuestions) {
-        await pool.query(
-          `INSERT INTO question_bank (subject, difficulty, question, options, answer, explain, usage_count)
-           VALUES ($1, $2, $3, $4, $5, $6, 1)`,
-          [subject, difficulty, q.question, JSON.stringify(q.options), (q.answer || 'A').charAt(0).toUpperCase(), q.explain || '']
-        ).catch(() => {});
-      }
+    const generatedFlashcards = parsed.flashcards || [];
+
+    // Lưu vào ngân hàng câu hỏi để tái sử dụng
+    for (const q of generatedQuestions) {
+      await pool.query(
+        `INSERT INTO question_bank (subject, difficulty, question, options, answer, explain, usage_count)
+         VALUES ($1, $2, $3, $4, $5, $6, 1)`,
+        [subject, difficulty, q.question, JSON.stringify(q.options), (q.answer || 'A').charAt(0).toUpperCase(), q.explain || '']
+      ).catch(() => {});
     }
+
+    // Ghi cache 24h
+    await pool.query(
+      `INSERT INTO ai_cached_outputs (prompt_hash, prompt_text, output_text, created_at)
+       VALUES ($1, $2, $3, CURRENT_TIMESTAMP)
+       ON CONFLICT (prompt_hash) DO UPDATE SET output_text = EXCLUDED.output_text, created_at = CURRENT_TIMESTAMP`,
+      [cacheHash, cacheKey, JSON.stringify({ questions: generatedQuestions, flashcards: generatedFlashcards })]
+    ).catch(() => {});
+
+    // Ghi token logs
+    const totalTokensEst = Math.round((prompt.length + textOutput.length) / 4);
+    const costUsd = Number(((totalTokensEst / 1000000) * 0.35).toFixed(6));
+    await pool.query(
+      `INSERT INTO ai_token_logs (user_id, feature_type, prompt_tokens, completion_tokens, total_tokens, cost_usd)
+       VALUES ($1, 'daily_quiz', $2, $3, $4, $5)`,
+      [userId, Math.round(prompt.length / 4), Math.round(textOutput.length / 4), totalTokensEst, costUsd]
+    ).catch(() => {});
+
+    // Ghi task thành công
+    await pool.query(
+      `INSERT INTO ai_tasks (feature_id, doc_name, status, error_message, created_at)
+       VALUES ('daily_quiz', $1, 'done', 'Sinh mới thành công từ Gemini AI', CURRENT_TIMESTAMP)`,
+      [subject]
+    ).catch(() => {});
 
     res.json({
       success: true,
-      source: 'gemini-ai',
+      source: 'gemini_ai',
       subject,
       questions: generatedQuestions,
-      flashcards: parsed.flashcards || [],
+      flashcards: generatedFlashcards,
     });
   } catch (err) {
     console.error("Lỗi daily-quiz:", err.message);
+
+    await pool.query(
+      `INSERT INTO ai_tasks (feature_id, doc_name, status, error_message, created_at)
+       VALUES ('daily_quiz', $1, 'error', $2, CURRENT_TIMESTAMP)`,
+      [subject, err.message]
+    ).catch(() => {});
+
     res.status(500).json({
       success: false,
-      error: `Không thể tạo bài tập lúc này: ${err.message}`
+      error: `Không thể tạo bài tập: ${err.message}`
     });
   }
 });

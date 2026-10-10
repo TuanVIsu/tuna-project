@@ -292,7 +292,7 @@ export const ManageCommunity = () => {
       {/* 1. Header Toolbar Tối Giản, Gọn Gàng */}
       <div className="card border rounded-4 bg-white shadow-xs p-3 w-100" style={{ borderColor: "#e2e8f0" }}>
         <div className="d-flex flex-wrap align-items-center justify-content-between gap-2.5">
-          <div className="d-flex align-items-center gap-2.5">
+          <div className="d-flex align-items-center gap-3">
             <span
               className="rounded-3 d-flex align-items-center justify-content-center text-white flex-shrink-0"
               style={{

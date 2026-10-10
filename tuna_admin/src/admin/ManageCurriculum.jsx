@@ -1,46 +1,27 @@
 // src/admin/ManageCurriculum.jsx
-import React, { useState, useEffect, useRef } from "react";
+import React, { useState, useEffect, useRef, useCallback } from "react";
 
 const API_BASE = import.meta.env.VITE_API_URL || "https://tuna-project.onrender.com/api";
 
-const DEFAULT_MAJORS = [
-  "Hệ Thống Thông Tin",
-  "Công Nghệ Thông Tin",
-  "Kỹ Thuật Phần Mềm",
-  "An Ninh Mạng",
-];
-const DEFAULT_COHORTS = ["K25", "K24", "K23", "K22", "K21"];
-
-const DEFAULT_CLASS_MAP = {
-  "Hệ Thống Thông Tin_K25": ["HTTT2511"],
-  "Hệ Thống Thông Tin_K24": ["HTTT2411"],
-  "Hệ Thống Thông Tin_K23": ["HTTT2311"],
-  "Hệ Thống Thông Tin_K22": ["HTTT2211"],
-  "Công Nghệ Thông Tin_K25": ["CNTT2511"],
-  "Công Nghệ Thông Tin_K24": ["CNTT2411"],
-  "Công Nghệ Thông Tin_K23": ["CNTT2311"],
-  "Kỹ Thuật Phần Mềm_K25": ["KTPM2511"],
-  "An Ninh Mạng_K25": ["ANM2511"],
-};
-
 export const ManageCurriculum = () => {
-  const [majors, setMajors] = useState(DEFAULT_MAJORS);
-  const [cohorts, setCohorts] = useState(DEFAULT_COHORTS);
-  const [selectedMajor, setSelectedMajor] = useState("Hệ Thống Thông Tin");
-  const [selectedCohort, setSelectedCohort] = useState("K25");
-  const [selectedClass, setSelectedClass] = useState("HTTT2511");
-  const [availableClasses, setAvailableClasses] = useState(["HTTT2511"]);
+  // 1. Dữ liệu Danh mục động từ CSDL (Không gán cứng)
+  const [majors, setMajors] = useState([]);
+  const [cohorts, setCohorts] = useState([]);
+  const [availableClasses, setAvailableClasses] = useState(["all"]);
 
-  // Phân tầng Năm và Học kỳ
+  const [selectedMajor, setSelectedMajor] = useState("");
+  const [selectedCohort, setSelectedCohort] = useState("");
+  const [selectedClass, setSelectedClass] = useState("all");
+
+  // Phân tầng Năm và Học kỳ (Mô hình 3 HK/năm)
   const [selectedYearTab, setSelectedYearTab] = useState(1);
   const [selectedSemester, setSelectedSemester] = useState(1);
   const [curriculumList, setCurriculumList] = useState([]);
-  const [allProgramList, setAllProgramList] = useState([]);
   const [loading, setLoading] = useState(false);
   const [searchTerm, setSearchTerm] = useState("");
   const [uploading, setUploading] = useState(false);
 
-  // Modal
+  // Modal Thêm / Sửa
   const [showModal, setShowModal] = useState(false);
   const [editingItem, setEditingItem] = useState(null);
   const fileInputRef = useRef(null);
@@ -54,47 +35,46 @@ export const ManageCurriculum = () => {
     prerequisite: "",
   });
 
-  const getHeaders = () => ({
+  const getHeaders = useCallback(() => ({
     "Content-Type": "application/json",
-    Authorization: `Bearer ${localStorage.getItem("admin_token")}`,
-  });
+    Authorization: `Bearer ${localStorage.getItem("admin_token") || localStorage.getItem("token") || ""}`,
+  }), []);
 
+  // 2. Nạp danh mục Ngành, Khóa, Lớp 100% từ CSDL qua /curriculum/meta-options
   useEffect(() => {
-    const fetchOptions = async () => {
+    const fetchMetaOptions = async () => {
       try {
         const res = await fetch(`${API_BASE}/curriculum/meta-options`, { headers: getHeaders() });
         const d = await res.json();
         if (d.success && d.data) {
-          if (d.data.majors?.length) setMajors(d.data.majors);
-          if (d.data.cohorts?.length) setCohorts(d.data.cohorts);
+          const mList = d.data.majors || [];
+          const cList = d.data.cohorts || [];
+          const clsList = d.data.classes || [];
+
+          setMajors(mList);
+          setCohorts(cList);
+
+          if (mList.length > 0 && !selectedMajor) {
+            setSelectedMajor(mList[0]);
+          }
+          if (cList.length > 0 && !selectedCohort) {
+            setSelectedCohort(cList[0]);
+          }
+
+          setAvailableClasses(["all", ...clsList]);
         }
-      } catch (err) {}
+      } catch (err) {
+        console.error("Lỗi nạp meta-options:", err);
+      }
     };
-    fetchOptions();
-  }, []);
+    fetchMetaOptions();
+  }, [getHeaders, selectedMajor, selectedCohort]);
 
-  useEffect(() => {
-    const key = `${selectedMajor}_${selectedCohort}`;
-    const dynamicClasses = DEFAULT_CLASS_MAP[key] || [
-      `${selectedMajor.split(" ").map((w) => w[0]).join("")}${selectedCohort.replace("K", "")}11`,
-    ];
-
-    setAvailableClasses(["all", ...dynamicClasses]);
-    if (!dynamicClasses.includes(selectedClass) && selectedClass !== "all") {
-      setSelectedClass(dynamicClasses[0] || "all");
-    }
-  }, [selectedMajor, selectedCohort]);
-
-  const fetchCurriculum = async () => {
+  // 3. Tải danh sách môn học từ CSDL theo bộ lọc
+  const fetchCurriculum = useCallback(async () => {
+    if (!selectedMajor || !selectedCohort) return;
     setLoading(true);
     try {
-      const qAll = new URLSearchParams({
-        major: selectedMajor,
-        cohort: selectedCohort,
-        className: selectedClass,
-        semester: "all",
-      }).toString();
-
       const qSem = new URLSearchParams({
         major: selectedMajor,
         cohort: selectedCohort,
@@ -102,25 +82,23 @@ export const ManageCurriculum = () => {
         semester: selectedSemester,
       }).toString();
 
-      const [resAll, resSem] = await Promise.all([
-        fetch(`${API_BASE}/curriculum?${qAll}`, { headers: getHeaders() }),
-        fetch(`${API_BASE}/curriculum?${qSem}`, { headers: getHeaders() }),
-      ]);
-
-      const [dAll, dSem] = await Promise.all([resAll.json(), resSem.json()]);
-      if (dAll.success) setAllProgramList(dAll.data || []);
-      if (dSem.success) setCurriculumList(dSem.data || []);
+      const res = await fetch(`${API_BASE}/curriculum?${qSem}`, { headers: getHeaders() });
+      const d = await res.json();
+      if (d.success) {
+        setCurriculumList(d.data || []);
+      }
     } catch (e) {
       console.error("Lỗi nạp CTĐT:", e);
     } finally {
       setLoading(false);
     }
-  };
+  }, [selectedMajor, selectedCohort, selectedClass, selectedSemester, getHeaders]);
 
   useEffect(() => {
     fetchCurriculum();
-  }, [selectedMajor, selectedCohort, selectedClass, selectedSemester]);
+  }, [fetchCurriculum]);
 
+  // Điều hướng kỳ và tab năm tương ứng
   const handleSelectSemester = (sem) => {
     setSelectedSemester(sem);
     if (sem <= 3) setSelectedYearTab(1);
@@ -129,6 +107,7 @@ export const ManageCurriculum = () => {
     else setSelectedYearTab(4);
   };
 
+  // Nạp file Excel kế hoạch đào tạo
   const handleFileUpload = async (e) => {
     const file = e.target.files[0];
     if (!file) return;
@@ -140,12 +119,12 @@ export const ManageCurriculum = () => {
     try {
       const res = await fetch(`${API_BASE}/curriculum/upload-excel`, {
         method: "POST",
-        headers: { Authorization: `Bearer ${localStorage.getItem("admin_token")}` },
+        headers: { Authorization: `Bearer ${localStorage.getItem("admin_token") || localStorage.getItem("token") || ""}` },
         body: data,
       });
       const resData = await res.json();
       if (resData.success) {
-        alert("Thành công: " + resData.message);
+        alert(resData.message || "Đã nạp thành công kế hoạch đào tạo từ Excel!");
         fetchCurriculum();
       } else {
         alert("Lỗi: " + resData.message);
@@ -158,6 +137,7 @@ export const ManageCurriculum = () => {
     }
   };
 
+  // Lưu môn học (Thêm mới hoặc Cập nhật)
   const handleSave = async (e) => {
     e.preventDefault();
     try {
@@ -169,13 +149,9 @@ export const ManageCurriculum = () => {
         ...formData,
         major_name: selectedMajor,
         cohort: selectedCohort,
-        class_name:
-          selectedClass === "all"
-            ? `${selectedMajor.split(" ").map((w) => w[0]).join("")}${selectedCohort.replace("K", "")}11`
-            : selectedClass,
+        class_name: selectedClass === "all" ? null : selectedClass,
         semester_index: selectedSemester,
         semester_name: `Học kỳ ${selectedSemester}`,
-        academic_year: getAcademicYearLabel(selectedSemester),
       };
 
       const res = await fetch(url, { method, headers: getHeaders(), body: JSON.stringify(payload) });
@@ -185,7 +161,7 @@ export const ManageCurriculum = () => {
         setEditingItem(null);
         fetchCurriculum();
       } else {
-        alert(d.message);
+        alert(d.message || "Không thể lưu môn học");
       }
     } catch (err) {
       alert("Lỗi kết nối máy chủ");
@@ -199,16 +175,8 @@ export const ManageCurriculum = () => {
       const d = await res.json();
       if (d.success) fetchCurriculum();
     } catch (e) {
-      alert("Lỗi khi xóa");
+      alert("Lỗi khi xóa môn học");
     }
-  };
-
-  const getAcademicYearLabel = (sem) => {
-    if (sem <= 3) return "Năm 1 (2025-2026)";
-    if (sem <= 6) return "Năm 2 (2026-2027)";
-    if (sem <= 9) return "Năm 3 (2027-2028)";
-    if (sem <= 12) return "Năm 4 (2028-2029)";
-    return "Tốt nghiệp (2029-2030)";
   };
 
   const filteredList = curriculumList.filter(
@@ -229,17 +197,21 @@ export const ManageCurriculum = () => {
   };
 
   return (
-    <div className="d-flex flex-column gap-3.5 w-100 pb-5">
-      {/* 1. KHỐI ĐIỀU KHIỂN & BỘ LỌC TRUNG TÂM */}
-      <div className="bg-white border rounded-4 p-4 shadow-sm d-flex flex-column gap-3.5">
-        {/* Hàng 1: Tiêu đề & Nút thao tác (Cách ly hoàn toàn, không chèn ép) */}
-        <div className="d-flex flex-column flex-md-row align-items-md-center justify-content-between gap-3">
+    <div className="w-100 d-flex flex-column pb-5" style={{ color: "#1e293b" }}>
+      
+      {/* 1. KHỐI ĐIỀU KHIỂN & BỘ LỌC TRUNG TÂM (Đã bổ sung mb-4 tạo khoảng cách rõ ràng) */}
+      <div 
+        className="bg-white rounded-4 p-4 border shadow-sm mb-4"
+        style={{ borderColor: "#f1f5f9", boxShadow: "0 4px 16px rgba(0,0,0,0.03)" }}
+      >
+        {/* Hàng 1: Tiêu đề & Nút thao tác */}
+        <div className="d-flex flex-column flex-md-row align-items-md-center justify-content-between gap-3 mb-3">
           <div className="d-flex align-items-center gap-3">
             <div
               className="rounded-3 d-flex align-items-center justify-content-center text-white flex-shrink-0 shadow-sm"
               style={{
-                width: "44px",
-                height: "44px",
+                width: "40px",
+                height: "40px",
                 background: "linear-gradient(135deg, #185bf0 0%, #0d9488 100%)",
               }}
             >
@@ -247,10 +219,10 @@ export const ManageCurriculum = () => {
             </div>
             <div>
               <div className="d-flex align-items-center gap-2">
-                <h6 className="fw-bold text-dark mb-0 fs-6">
+                <h5 className="fw-black text-dark mb-0 fs-6">
                   Kế Hoạch Khung Đào Tạo
-                </h6>
-                <span className="badge rounded-pill bg-primary-subtle text-primary border border-primary-subtle px-2 py-0.5" style={{ fontSize: "10px" }}>
+                </h5>
+                <span className="badge rounded-pill bg-primary-subtle text-primary border border-primary-subtle px-2.5 py-1" style={{ fontSize: "10.5px" }}>
                   Mô hình 3 HK/Năm
                 </span>
               </div>
@@ -265,13 +237,13 @@ export const ManageCurriculum = () => {
             <button
               onClick={() => fileInputRef.current?.click()}
               disabled={uploading}
-              className="btn btn-sm btn-outline-success rounded-pill px-3 py-1.5 fw-bold d-flex align-items-center gap-1.5"
+              className="btn btn-sm btn-outline-success rounded-pill px-3 py-2 fw-bold d-flex align-items-center gap-1.5 shadow-2xs"
               style={{ fontSize: "12px" }}
             >
               {uploading ? (
                 <>
                   <span className="spinner-border spinner-border-sm"></span>
-                  <span>Đang nạp...</span>
+                  <span>Đang nạp file...</span>
                 </>
               ) : (
                 <>
@@ -294,7 +266,7 @@ export const ManageCurriculum = () => {
                 });
                 setShowModal(true);
               }}
-              className="btn btn-sm btn-primary rounded-pill px-3 py-1.5 fw-bold text-white border-0 shadow-xs d-flex align-items-center gap-1.5"
+              className="btn btn-sm btn-primary rounded-pill px-3.5 py-2 fw-bold text-white border-0 shadow-xs d-flex align-items-center gap-1.5"
               style={{ fontSize: "12px", background: "#185bf0" }}
             >
               <i className="bi bi-plus-lg"></i>
@@ -303,8 +275,8 @@ export const ManageCurriculum = () => {
           </div>
         </div>
 
-        {/* Hàng 2: Bộ lọc 3 cấp (Ngành - Khóa - Lớp) chia cột chuẩn Responsive */}
-        <div className="row g-2.5 pt-3 border-top">
+        {/* Hàng 2: Bộ lọc 3 cấp lấy 100% từ CSDL */}
+        <div className="row g-2.5 pt-3 border-top" style={{ borderColor: "#f1f5f9" }}>
           <div className="col-12 col-md-5">
             <label className="form-label text-uppercase text-secondary fw-bold mb-1" style={{ fontSize: "10px" }}>
               Ngành Đào Tạo
@@ -313,7 +285,7 @@ export const ManageCurriculum = () => {
               value={selectedMajor}
               onChange={(e) => setSelectedMajor(e.target.value)}
               className="form-select form-select-sm rounded-3 fw-semibold bg-light border shadow-none"
-              style={{ fontSize: "12px" }}
+              style={{ fontSize: "12.5px" }}
             >
               {majors.map((m) => (
                 <option key={m} value={m}>{m}</option>
@@ -329,7 +301,7 @@ export const ManageCurriculum = () => {
               value={selectedCohort}
               onChange={(e) => setSelectedCohort(e.target.value)}
               className="form-select form-select-sm rounded-3 fw-semibold bg-light border shadow-none"
-              style={{ fontSize: "12px" }}
+              style={{ fontSize: "12.5px" }}
             >
               {cohorts.map((c) => (
                 <option key={c} value={c}>Khóa {c}</option>
@@ -345,7 +317,7 @@ export const ManageCurriculum = () => {
               value={selectedClass}
               onChange={(e) => setSelectedClass(e.target.value)}
               className="form-select form-select-sm rounded-3 fw-semibold bg-light border shadow-none font-monospace text-primary"
-              style={{ fontSize: "12px" }}
+              style={{ fontSize: "12.5px" }}
             >
               {availableClasses.map((cls) => (
                 <option key={cls} value={cls}>
@@ -356,14 +328,14 @@ export const ManageCurriculum = () => {
           </div>
         </div>
 
-        {/* Hàng 3: Điều hướng Năm học và Học kỳ (Cách nhau rõ ràng, không tràn mép) */}
-        <div className="pt-3 border-top d-flex flex-column flex-lg-row align-items-lg-center justify-content-between gap-2.5">
+        {/* Hàng 3: Điều hướng Năm và Kỳ */}
+        <div className="pt-3 border-top d-flex flex-column flex-lg-row align-items-lg-center justify-content-between gap-3" style={{ borderColor: "#f1f5f9" }}>
           {/* Chọn Năm */}
           <div className="d-flex align-items-center gap-2">
-            <span className="text-secondary small fw-bold text-uppercase" style={{ fontSize: "10.5px" }}>
-              Năm:
+            <span className="text-secondary small fw-bold text-uppercase" style={{ fontSize: "11px" }}>
+              NĂM:
             </span>
-            <div className="p-1 bg-light rounded-pill border d-inline-flex gap-1">
+            <div className="p-1 bg-light rounded-pill border d-inline-flex gap-1" style={{ borderColor: "#f1f5f9" }}>
               {[
                 { id: 1, label: "Năm 1" },
                 { id: 2, label: "Năm 2" },
@@ -392,10 +364,10 @@ export const ManageCurriculum = () => {
             </div>
           </div>
 
-          {/* Chọn Kỳ trong năm */}
+          {/* Chọn Kỳ */}
           <div className="d-flex align-items-center gap-2 overflow-x-auto">
-            <span className="text-secondary small fw-bold text-uppercase" style={{ fontSize: "10.5px" }}>
-              Kỳ:
+            <span className="text-secondary small fw-bold text-uppercase" style={{ fontSize: "11px" }}>
+              KỲ:
             </span>
             <div className="d-flex align-items-center gap-1.5 flex-nowrap">
               {semestersInYear[selectedYearTab].map((sem) => {
@@ -404,7 +376,7 @@ export const ManageCurriculum = () => {
                   <button
                     key={sem}
                     onClick={() => handleSelectSemester(sem)}
-                    className={`btn btn-sm rounded-pill px-3 py-1 fw-bold transition text-nowrap ${
+                    className={`btn btn-sm rounded-pill px-3 py-1.5 fw-bold transition text-nowrap border-0 ${
                       isActive
                         ? "btn-dark text-white shadow-xs"
                         : "btn-light text-secondary border bg-white"
@@ -420,35 +392,38 @@ export const ManageCurriculum = () => {
         </div>
       </div>
 
-      {/* 2. KHỐI BẢNG DỮ LIỆU & CHỈ SỐ NHANH */}
-      <div className="bg-white border rounded-4 p-4 shadow-sm d-flex flex-column gap-3">
-        {/* Header bảng: Tóm tắt chỉ số & Thanh tìm kiếm */}
-        <div className="d-flex flex-column flex-md-row justify-content-between align-items-md-center gap-2.5 pb-2">
+      {/* 2. KHỐI BẢNG DỮ LIỆU HỌC PHẦN (Cách biệt độc lập, không dính sát viền) */}
+      <div 
+        className="bg-white rounded-4 p-4 border shadow-sm d-flex flex-column gap-3"
+        style={{ borderColor: "#f1f5f9", boxShadow: "0 4px 16px rgba(0,0,0,0.03)" }}
+      >
+        {/* Header bảng: Huy hiệu thông tin & Thanh tìm kiếm */}
+        <div className="d-flex flex-column flex-md-row justify-content-between align-items-md-center gap-3 pb-2">
           <div className="d-flex align-items-center gap-2 flex-wrap">
             <span
-              className="badge rounded-pill px-3 py-1.5 fw-bold text-white shadow-2xs d-inline-flex align-items-center gap-1.5"
-              style={{ background: "#185bf0", fontSize: "11.5px" }}
+              className="badge rounded-pill px-3 py-2 fw-bold text-white shadow-2xs d-inline-flex align-items-center gap-1.5"
+              style={{ background: "#185bf0", fontSize: "12px" }}
             >
               <i className="bi bi-mortarboard-fill"></i>
               Học kỳ {selectedSemester} ({filteredList.length} môn)
             </span>
 
-            <span className="badge rounded-pill bg-light text-dark border px-2.5 py-1.5 fw-bold" style={{ fontSize: "11px" }}>
+            <span className="badge rounded-pill bg-light text-dark border px-3 py-2 fw-bold" style={{ fontSize: "11.5px" }}>
               Tổng: <b className="text-primary">{semCredits}</b> tín chỉ
             </span>
 
-            <span className="badge rounded-pill bg-success-subtle text-success border border-success-subtle px-2.5 py-1.5 fw-semibold" style={{ fontSize: "11px" }}>
+            <span className="badge rounded-pill bg-success-subtle text-success border border-success-subtle px-3 py-2 fw-bold" style={{ fontSize: "11.5px" }}>
               Bắt buộc: {mandatoryCount}
             </span>
 
             {electiveCount > 0 && (
-              <span className="badge rounded-pill bg-warning-subtle text-amber-900 border border-warning-subtle px-2.5 py-1.5 fw-semibold" style={{ fontSize: "11px" }}>
+              <span className="badge rounded-pill bg-warning-subtle text-amber-900 border border-warning-subtle px-3 py-2 fw-bold" style={{ fontSize: "11.5px" }}>
                 Tự chọn: {electiveCount}
               </span>
             )}
           </div>
 
-          <div className="input-group input-group-sm" style={{ maxWidth: "240px" }}>
+          <div className="input-group input-group-sm" style={{ maxWidth: "260px" }}>
             <span className="input-group-text bg-light border-end-0 text-muted ps-2.5">
               <i className="bi bi-search"></i>
             </span>
@@ -458,27 +433,27 @@ export const ManageCurriculum = () => {
               value={searchTerm}
               onChange={(e) => setSearchTerm(e.target.value)}
               className="form-control bg-light border-start-0 fw-semibold"
-              style={{ fontSize: "11.5px" }}
+              style={{ fontSize: "12px" }}
             />
           </div>
         </div>
 
-        {/* Bảng dữ liệu môn học */}
-        <div className="table-responsive" style={{ minHeight: "240px" }}>
+        {/* Bảng dữ liệu */}
+        <div className="table-responsive" style={{ minHeight: "260px" }}>
           <table className="table table-hover align-middle mb-0 text-nowrap">
             <thead className="table-light">
-              <tr style={{ fontSize: "11px", color: "#64748b", letterSpacing: "0.5px" }} className="text-uppercase">
+              <tr style={{ fontSize: "11.5px", color: "#64748b", letterSpacing: "0.5px" }} className="text-uppercase">
                 <th className="ps-3 text-center" style={{ width: "50px" }}>STT</th>
                 <th style={{ width: "110px" }}>Mã HP</th>
                 <th>Tên Học Phần</th>
                 <th className="text-center" style={{ width: "120px" }}>Cấu Trúc Giờ</th>
-                <th className="text-center" style={{ width: "85px" }}>Số TC</th>
+                <th className="text-center" style={{ width: "90px" }}>Số TC</th>
                 <th className="text-center" style={{ width: "110px" }}>Tính Chất</th>
                 <th>Học Phần Điều Kiện</th>
                 <th className="text-end pe-3" style={{ width: "80px" }}>Thao Tác</th>
               </tr>
             </thead>
-            <tbody style={{ fontSize: "12.5px" }}>
+            <tbody style={{ fontSize: "13px" }}>
               {loading ? (
                 <tr>
                   <td colSpan={8} className="text-center py-5 text-muted">
@@ -496,7 +471,7 @@ export const ManageCurriculum = () => {
                 </tr>
               ) : (
                 filteredList.map((item, index) => (
-                  <tr key={item.id}>
+                  <tr key={item.id} style={{ transition: "background-color 0.15s" }}>
                     <td className="ps-3 fw-bold text-muted text-center" style={{ fontSize: "11px" }}>
                       #{index + 1}
                     </td>
@@ -521,7 +496,7 @@ export const ManageCurriculum = () => {
                     </td>
                     <td className="text-center">
                       <span
-                        className={`badge rounded-pill px-2 py-0.5 fw-semibold ${
+                        className={`badge rounded-pill px-2.5 py-1 fw-bold ${
                           item.subject_type === "elective"
                             ? "bg-warning-subtle text-amber-900 border border-warning-subtle"
                             : "bg-primary-subtle text-primary border border-primary-subtle"
@@ -544,7 +519,7 @@ export const ManageCurriculum = () => {
                       )}
                     </td>
                     <td className="text-end pe-3">
-                      <div className="d-flex align-items-center justify-content-end gap-1">
+                      <div className="d-flex align-items-center justify-content-end gap-1.5">
                         <button
                           onClick={() => {
                             setEditingItem(item);
@@ -559,18 +534,18 @@ export const ManageCurriculum = () => {
                             setShowModal(true);
                           }}
                           className="btn btn-sm btn-light rounded-circle border p-0 d-inline-flex align-items-center justify-content-center"
-                          style={{ width: "28px", height: "28px" }}
+                          style={{ width: "30px", height: "30px" }}
                           title="Chỉnh sửa"
                         >
-                          <i className="bi bi-pencil-fill text-primary" style={{ fontSize: "10.5px" }}></i>
+                          <i className="bi bi-pencil-fill text-primary" style={{ fontSize: "11px" }}></i>
                         </button>
                         <button
                           onClick={() => handleDelete(item.id, item.subject_name)}
                           className="btn btn-sm btn-light rounded-circle border p-0 d-inline-flex align-items-center justify-content-center"
-                          style={{ width: "28px", height: "28px" }}
+                          style={{ width: "30px", height: "30px" }}
                           title="Xóa"
                         >
-                          <i className="bi bi-trash3-fill text-danger" style={{ fontSize: "10.5px" }}></i>
+                          <i className="bi bi-trash3-fill text-danger" style={{ fontSize: "11px" }}></i>
                         </button>
                       </div>
                     </td>
@@ -582,7 +557,7 @@ export const ManageCurriculum = () => {
         </div>
 
         {/* Footer chú thích */}
-        <div className="pt-2.5 border-top d-flex flex-wrap align-items-center justify-content-between gap-2 text-muted" style={{ fontSize: "11px" }}>
+        <div className="pt-3 border-top d-flex flex-wrap align-items-center justify-content-between gap-2 text-muted" style={{ fontSize: "11.5px", borderColor: "#f1f5f9" }}>
           <div className="d-flex align-items-center gap-2 flex-wrap">
             <i className="bi bi-info-circle text-primary"></i>
             <b>Ký hiệu điều kiện:</b>
@@ -599,7 +574,7 @@ export const ManageCurriculum = () => {
       {/* 3. MODAL THÊM / SỬA HỌC PHẦN */}
       {showModal && (
         <div className="modal show d-block p-2 p-sm-3" style={{ backgroundColor: "rgba(15, 23, 42, 0.55)", zIndex: 1065 }}>
-          <div className="modal-dialog modal-dialog-centered" style={{ maxWidth: "420px" }}>
+          <div className="modal-dialog modal-dialog-centered" style={{ maxWidth: "440px" }}>
             <div className="modal-content border-0 shadow-lg rounded-4 overflow-hidden bg-white">
               <div className="d-flex align-items-center justify-content-between px-4 pt-4 pb-2">
                 <h6 className="fw-bold mb-0 text-dark">
