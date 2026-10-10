@@ -1,36 +1,42 @@
 // src/components/AcademicSurveyModal.jsx
-import React, { useState, useEffect, useCallback } from "react";
+import React, { useState, useEffect, useCallback, useMemo } from "react";
 
 const API_BASE = "https://tuna-project.onrender.com/api";
 
-const DEFAULT_FALLBACK_SUBJECTS = {
-  "Hệ Thống Thông Tin": [
-    { subjectName: "Cơ sở dữ liệu", credits: 3 },
-    { subjectName: "Phân tích và thiết kế HTTT", credits: 3 },
-    { subjectName: "Hệ quản trị CSDL", credits: 3 },
-    { subjectName: "Khai phá dữ liệu", credits: 3 },
-  ],
-  "Công Nghệ Thông Tin": [
-    { subjectName: "Cấu trúc dữ liệu và giải thuật", credits: 3 },
-    { subjectName: "Lập trình hướng đối tượng", credits: 3 },
-    { subjectName: "Mạng máy tính", credits: 3 },
-    { subjectName: "Hệ điều hành", credits: 3 },
-  ],
-  "Kỹ Thuật Phần Mềm": [
-    { subjectName: "Nhập môn công nghệ phần mềm", credits: 3 },
-    { subjectName: "Kiểm thử phần mềm", credits: 3 },
-    { subjectName: "Kiến trúc và thiết kế phần mềm", credits: 3 },
-  ],
-  "An Ninh Mạng": [
-    { subjectName: "An toàn thông tin", credits: 3 },
-    { subjectName: "Mật mã học cơ sở", credits: 3 },
-    { subjectName: "Phòng thủ mạng máy tính", credits: 3 },
-  ],
-};
-
 export const AcademicSurveyModal = ({ isOpen, onSave, onDismiss }) => {
-  const [major, setMajor] = useState("Hệ Thống Thông Tin");
-  const [year, setYear] = useState(1);
+  // 1. Tự động tính toán Khóa và Năm học theo MSSV / Email
+  const { detectedYear, detectedCohort, detectedMajor } = useMemo(() => {
+    let studentCode = "";
+    let faculty = "Hệ Thống Thông Tin";
+
+    try {
+      const u = JSON.parse(localStorage.getItem("user") || localStorage.getItem("user_info") || "{}");
+      studentCode = u.student_code || u.email || "";
+      if (u.faculty) faculty = u.faculty;
+    } catch (e) {}
+
+    if (!studentCode) {
+      studentCode = localStorage.getItem("tuna_user_id") || localStorage.getItem("user_email") || "";
+    }
+
+    const match = String(studentCode).match(/(?:20)?(2[0-6])\d{5}/) || String(studentCode).match(/K?(2[0-6])/i);
+    const admissionYearShort = match ? parseInt(match[1], 10) : 23;
+    const admissionYearFull = 2000 + admissionYearShort; // 2023
+
+    const currentYear = new Date().getFullYear(); // 2026
+    let calcYear = currentYear - admissionYearFull + 1; // 2026 - 2023 + 1 = 4
+    if (calcYear < 1) calcYear = 1;
+    if (calcYear > 4) calcYear = 4;
+
+    return {
+      detectedYear: calcYear,
+      detectedCohort: `K${admissionYearShort}`,
+      detectedMajor: faculty,
+    };
+  }, []);
+
+  const [major, setMajor] = useState(detectedMajor);
+  const [year, setYear] = useState(detectedYear);
   const [semester, setSemester] = useState(1);
 
   const [dbSubjects, setDbSubjects] = useState([]);
@@ -50,11 +56,13 @@ export const AcademicSurveyModal = ({ isOpen, onSave, onDismiss }) => {
 
   const majors = ["Hệ Thống Thông Tin", "Công Nghệ Thông Tin", "Kỹ Thuật Phần Mềm", "An Ninh Mạng"];
 
-  const fetchSubjectsFromDB = useCallback(async (selectedMajor, selectedYear, selectedSem) => {
+  // 2. Tải trực tiếp môn học từ CSDL PostgreSQL (Không gán cứng)
+  const fetchSubjectsFromDB = useCallback(async (selectedMajor, selectedYear, selectedSem, selectedCohort) => {
     setIsLoadingSubjects(true);
     try {
+      const cohortParam = selectedCohort || detectedCohort;
       const res = await fetch(
-        `${API_BASE}/curriculum?major=${encodeURIComponent(selectedMajor)}&year=${selectedYear}&semester=${selectedSem}`,
+        `${API_BASE}/curriculum?major=${encodeURIComponent(selectedMajor)}&year=${selectedYear}&semester=${selectedSem}&cohort=${encodeURIComponent(cohortParam)}`,
         {
           headers: {
             "Content-Type": "application/json",
@@ -65,7 +73,7 @@ export const AcademicSurveyModal = ({ isOpen, onSave, onDismiss }) => {
       const json = await res.json();
       if (json.success && Array.isArray(json.data) && json.data.length > 0) {
         const normalized = json.data.map((item) => ({
-          subjectName: item.subject_name || item.subjectName || item.title || "Môn học đại cương",
+          subjectName: item.subject_name || item.subjectName || "Môn học chuyên ngành",
           credits: item.credits || 3,
         }));
 
@@ -78,55 +86,38 @@ export const AcademicSurveyModal = ({ isOpen, onSave, onDismiss }) => {
         });
         setSubjectLevels(init);
       } else {
-        // Fallback danh sách môn nền tảng khi CSDL chưa có dữ liệu của kỳ này
-        const fallback = DEFAULT_FALLBACK_SUBJECTS[selectedMajor] || DEFAULT_FALLBACK_SUBJECTS["Hệ Thống Thông Tin"];
-        setDbSubjects(fallback);
-        const init = {};
-        fallback.forEach((item) => {
-          init[item.subjectName] = "medium";
-        });
-        setSubjectLevels(init);
+        setDbSubjects([]);
+        setSubjectLevels({});
       }
     } catch (err) {
-      console.warn("Lỗi nạp môn học, dùng danh mục dự phòng:", err.message);
-      const fallback = DEFAULT_FALLBACK_SUBJECTS[selectedMajor] || DEFAULT_FALLBACK_SUBJECTS["Hệ Thống Thông Tin"];
-      setDbSubjects(fallback);
-      const init = {};
-      fallback.forEach((item) => {
-        init[item.subjectName] = "medium";
-      });
-      setSubjectLevels(init);
+      console.error("Lỗi nạp môn học từ CSDL:", err.message);
+      setDbSubjects([]);
+      setSubjectLevels({});
     } finally {
       setIsLoadingSubjects(false);
     }
-  }, []);
+  }, [detectedCohort]);
 
   useEffect(() => {
     if (!isOpen) return;
 
-    let initMajor = major;
-    try {
-      const userCached = localStorage.getItem("user_info") || localStorage.getItem("user");
-      if (userCached) {
-        const u = JSON.parse(userCached);
-        if (u.faculty) {
-          initMajor = u.faculty;
-          setMajor(u.faculty);
-        }
-      }
+    let initMajor = detectedMajor;
+    let initYear = detectedYear;
+    let initSem = 1;
 
+    try {
       const saved = localStorage.getItem("user_academic_profile");
       if (saved && saved !== "undefined") {
         const parsed = JSON.parse(saved);
-        if (parsed.major) setMajor(parsed.major);
-        if (parsed.year) setYear(parsed.year);
-        if (parsed.semester) setSemester(parsed.semester);
+        if (parsed.major) { initMajor = parsed.major; setMajor(parsed.major); }
+        if (parsed.year) { initYear = parsed.year; setYear(parsed.year); }
+        if (parsed.semester) { initSem = parsed.semester; setSemester(parsed.semester); }
         if (parsed.currentGpa !== undefined) setCurrentGpa(parsed.currentGpa);
         if (parsed.targetGoal) setTargetGoal(parsed.targetGoal);
         if (parsed.dailyPace) setDailyPace(parsed.dailyPace);
         if (parsed.reminderTime) setReminderTime(parsed.reminderTime);
 
-        fetchSubjectsFromDB(parsed.major || initMajor, parsed.year || year, parsed.semester || semester).then(() => {
+        fetchSubjectsFromDB(initMajor, initYear, initSem, detectedCohort).then(() => {
           if (parsed.subjectLevels) {
             const cleanLevels = {};
             Object.keys(parsed.subjectLevels).forEach((k) => {
@@ -143,11 +134,14 @@ export const AcademicSurveyModal = ({ isOpen, onSave, onDismiss }) => {
       console.error("Lỗi đọc academic profile:", e);
     }
 
-    fetchSubjectsFromDB(initMajor, year, semester);
-  }, [isOpen, fetchSubjectsFromDB]);
+    setMajor(initMajor);
+    setYear(initYear);
+    setSemester(initSem);
+    fetchSubjectsFromDB(initMajor, initYear, initSem, detectedCohort);
+  }, [isOpen, detectedMajor, detectedYear, detectedCohort, fetchSubjectsFromDB]);
 
   const handleSelectFramework = (newMajor, newYear, newSemester) => {
-    fetchSubjectsFromDB(newMajor, newYear, newSemester);
+    fetchSubjectsFromDB(newMajor, newYear, newSemester, detectedCohort);
   };
 
   if (!isOpen) return null;
@@ -193,6 +187,7 @@ export const AcademicSurveyModal = ({ isOpen, onSave, onDismiss }) => {
 
     const studyPlan = {
       major,
+      cohort: detectedCohort,
       year: Number(year),
       semester: Number(semester),
       subjects: selectedSubs,
@@ -243,7 +238,7 @@ export const AcademicSurveyModal = ({ isOpen, onSave, onDismiss }) => {
         </div>
       )}
 
-      {/* Header Bar 2 tầng né Capsule Zalo */}
+      {/* Header Bar */}
       <div className="bg-[#0045ce] text-white sticky-top shadow-xs select-none flex-shrink-0">
         <div style={{ height: "max(var(--sat, 0px), 38px)", width: "100%" }} />
 
@@ -261,7 +256,7 @@ export const AcademicSurveyModal = ({ isOpen, onSave, onDismiss }) => {
                 Kế hoạch & Lộ trình học tập
               </h6>
               <span className="text-blue-100/80 text-[11px] font-medium block truncate mt-0.5">
-                Thiết lập mục tiêu & thuật toán phân bổ ca tự học
+                Đồng bộ Khóa {detectedCohort} • {major}
               </span>
             </div>
           </div>
@@ -308,12 +303,18 @@ export const AcademicSurveyModal = ({ isOpen, onSave, onDismiss }) => {
           </div>
         </div>
 
-        {/* Khối 2: Năm & Kỳ */}
+        {/* Khối 2: Năm & Kỳ (Tự chọn Năm 4 cho Khóa 23) */}
         <div className="bg-white rounded-3xl p-3.5 border border-slate-200/80 shadow-xs space-y-2">
-          <label className="font-extrabold text-slate-900 text-xs flex items-center gap-1.5 m-0">
-            <span className="w-5 h-5 rounded-full bg-blue-100 text-[#0045ce] flex items-center justify-center text-[10.5px] font-black">2</span>
-            Thời điểm học hiện tại:
-          </label>
+          <div className="flex items-center justify-between">
+            <label className="font-extrabold text-slate-900 text-xs flex items-center gap-1.5 m-0">
+              <span className="w-5 h-5 rounded-full bg-blue-100 text-[#0045ce] flex items-center justify-center text-[10.5px] font-black">2</span>
+              Thời điểm học hiện tại:
+            </label>
+            <span className="text-[10px] font-bold text-blue-700 bg-blue-50 px-2 py-0.5 rounded-full border border-blue-200">
+              Khóa: {detectedCohort}
+            </span>
+          </div>
+
           <div className="grid grid-cols-2 gap-2 pt-1">
             <div>
               <label className="font-bold text-slate-500 mb-1 block text-[10.5px]">Năm học</label>
@@ -329,7 +330,7 @@ export const AcademicSurveyModal = ({ isOpen, onSave, onDismiss }) => {
                 <option value={1}>Năm 1</option>
                 <option value={2}>Năm 2</option>
                 <option value={3}>Năm 3</option>
-                <option value={4}>Năm 4</option>
+                <option value={4}>Năm 4 (Hiện tại)</option>
               </select>
             </div>
             <div>
@@ -358,13 +359,17 @@ export const AcademicSurveyModal = ({ isOpen, onSave, onDismiss }) => {
               <span className="w-5 h-5 rounded-full bg-blue-100 text-[#0045ce] flex items-center justify-center text-[10.5px] font-black">3</span>
               Môn học cần ôn tập ({Object.keys(subjectLevels).filter((k) => k !== "undefined").length} môn đã chọn):
             </label>
-            <span className="text-[10px] text-slate-400 font-bold">CTĐT</span>
+            <span className="text-[10px] text-slate-400 font-bold">CTĐT {detectedCohort}</span>
           </div>
 
           {isLoadingSubjects ? (
             <div className="py-6 text-center text-xs font-bold text-slate-400">
               <span className="spinner-border spinner-border-sm text-[#0045ce] me-2"></span>
-              Đang tải danh sách môn...
+              Đang tải môn học từ CSDL...
+            </div>
+          ) : dbSubjects.length === 0 ? (
+            <div className="p-4 text-center text-xs text-slate-400 font-bold bg-slate-50 rounded-2xl border border-dashed border-slate-200">
+              Chưa có môn học trong CSDL cho học kỳ này. Bạn có thể tự thêm môn bên dưới.
             </div>
           ) : (
             <div className="space-y-2 max-h-56 overflow-y-auto pr-1">

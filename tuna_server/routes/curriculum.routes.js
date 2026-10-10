@@ -10,41 +10,71 @@ const upload = multer({ storage: multer.memoryStorage() });
 // =============================================================================
 // 1. ROUTE LẤY DANH MỤC NGÀNH, KHÓA, LỚP (METADATA DÙNG CHO BỘ LỌC)
 // =============================================================================
+// =============================================================================
+// 1. ROUTE LẤY DANH MỤC NGÀNH, KHÓA, LỚP ĐỘNG 100% TỪ CƠ SỞ DỮ LIỆU
+// =============================================================================
 router.get('/meta-options', async (req, res) => {
   try {
     const [majorsRes, cohortsRes, classesRes] = await Promise.all([
-      pool.query(`SELECT DISTINCT major_name FROM faculty_majors ORDER BY major_name ASC`),
-      pool.query(`SELECT DISTINCT cohort_code FROM academic_cohorts ORDER BY cohort_code DESC`),
-      pool.query(`SELECT DISTINCT class_name FROM curriculum_plans WHERE class_name IS NOT NULL AND class_name <> '' ORDER BY class_name ASC`)
+      // Lấy danh sách ngành thực tế đã có trong CSDL
+      pool.query(`
+        SELECT DISTINCT major_name 
+        FROM faculty_majors 
+        WHERE major_name IS NOT NULL AND major_name <> ''
+        ORDER BY major_name ASC
+      `).catch(() => ({ rows: [] })),
+
+      // Lấy danh sách khóa thực tế từ bảng cấu hình hoặc bảng kế hoạch
+      pool.query(`
+        SELECT DISTINCT cohort_code 
+        FROM academic_cohorts 
+        WHERE cohort_code IS NOT NULL AND cohort_code <> ''
+        ORDER BY cohort_code DESC
+      `).catch(() => ({ rows: [] })),
+
+      // Lấy toàn bộ danh sách lớp thực tế đã nạp từ các file Excel vào curriculum_plans
+      pool.query(`
+        SELECT DISTINCT class_name 
+        FROM curriculum_plans 
+        WHERE class_name IS NOT NULL AND class_name <> '' 
+        ORDER BY class_name ASC
+      `).catch(() => ({ rows: [] }))
     ]);
+
+    // Trích xuất danh sách mảng chuỗi động
+    const majors = majorsRes.rows.map(r => r.major_name);
+    const cohorts = cohortsRes.rows.map(r => r.cohort_code);
+    const classes = classesRes.rows.map(r => r.class_name);
 
     res.json({
       success: true,
       data: {
-        majors: majorsRes.rows.map(r => r.major_name),
-        cohorts: cohortsRes.rows.map(r => r.cohort_code),
-        classes: classesRes.rows.map(r => r.class_name)
+        majors,
+        cohorts,
+        classes // Trả về chính xác các lớp có trong CSDL (ví dụ: HTTT2311, HTTT2511,...), nếu chưa có lớp nào thì trả về []
       }
     });
   } catch (error) {
-    // Fallback danh mục mặc định nếu chưa khởi tạo bảng danh mục
-    res.json({
-      success: true,
+    console.error("Lỗi truy vấn meta-options:", error.message);
+    // Khi có lỗi xảy ra, trả về mảng rỗng chứ không gán cứng bất kỳ lớp nào
+    res.status(500).json({
+      success: false,
+      message: error.message,
       data: {
-        majors: ["Hệ Thống Thông Tin", "Công Nghệ Thông Tin", "Kỹ Thuật Phần Mềm", "An Ninh Mạng"],
-        cohorts: ["K25", "K24", "K23", "K22", "K21"],
-        classes: ["HTTT2511"]
+        majors: [],
+        cohorts: [],
+        classes: []
       }
     });
   }
 });
 
 // =============================================================================
-// 2. ROUTE LẤY DANH SÁCH HỌC PHẦN THEO BỘ LỌC (LỚP, NGÀNH, KHÓA, KỲ)
+// 2. ROUTE LẤY DANH SÁCH HỌC PHẦN (QUY ĐỔI NĂM + KỲ SANG SEMESTER_INDEX)
 // =============================================================================
 router.get('/', async (req, res) => {
   try {
-    const { className, major, cohort, semester } = req.query;
+    const { className, major, cohort, semester, year } = req.query;
     let query = `SELECT * FROM curriculum_plans WHERE 1=1`;
     const params = [];
 
@@ -57,22 +87,49 @@ router.get('/', async (req, res) => {
       query += ` AND major_name ILIKE $${params.length}`;
     }
 
-    // Nhận diện linh hoạt cả 'K25' và '2025'
+    // Nhận diện linh hoạt Khóa: K23, 23, K25, 2025...
     if (cohort && cohort !== 'all') {
       const cleanCohort = cohort.replace(/[^0-9]/g, '');
       params.push(`%${cleanCohort}%`);
-      query += ` AND (cohort ILIKE $${params.length} OR cohort ILIKE '20' || $${params.length})`;
+      query += ` AND (cohort ILIKE $${params.length} OR cohort ILIKE '20' || $${params.length} OR cohort IS NULL)`;
     }
 
-    // Lọc theo học kỳ (1 -> 13) hoặc 'all'
-    if (semester && semester !== 'all') {
-      params.push(parseInt(semester));
+    // TÍNH TOÁN SEMESTER_INDEX:
+    // Nếu truyền cả year và semester (mô hình 3 HK/năm):
+    // Năm 1, Kỳ 1 -> index 1 | Năm 4, Kỳ 1 -> index (4-1)*3 + 1 = 10
+    let targetSemIndex = null;
+    if (year && semester && semester !== 'all') {
+      const y = parseInt(year);
+      const s = parseInt(semester);
+      if (!isNaN(y) && !isNaN(s)) {
+        targetSemIndex = (y - 1) * 3 + s;
+      }
+    } else if (semester && semester !== 'all') {
+      targetSemIndex = parseInt(semester);
+    }
+
+    if (targetSemIndex !== null && !isNaN(targetSemIndex)) {
+      params.push(targetSemIndex);
       query += ` AND semester_index = $${params.length}`;
     }
 
     query += ` ORDER BY semester_index ASC, id ASC`;
-    const result = await pool.query(query, params);
-    res.json({ success: true, data: result.rows });
+    let result = await pool.query(query, params);
+
+    // Fallback thông minh: Nếu kỳ cụ thể chưa có môn (ví dụ K23 kỳ 10 chưa nhập excel),
+    // lấy danh sách môn học của chính chuyên ngành đó để sinh viên vẫn có môn ôn tập
+    if (result.rows.length === 0 && major && major !== 'all') {
+      const fallbackQuery = `
+        SELECT * FROM curriculum_plans 
+        WHERE major_name ILIKE $1 
+        ORDER BY semester_index DESC, id ASC 
+        LIMIT 10
+      `;
+      const fallbackRes = await pool.query(fallbackQuery, [`%${major.trim()}%`]);
+      result = fallbackRes;
+    }
+
+    res.json({ success: true, total: result.rows.length, data: result.rows });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }
@@ -189,7 +246,7 @@ router.post('/upload-excel', upload.single('file'), async (req, res) => {
 });
 
 // =============================================================================
-// 4. ROUTE THÊM MỚI HỌC PHẦN THỦ CÔNG VÀO KỲ
+// 4. ROUTE THÊM MỚI HỌC PHẦN THỦ CÔNG
 // =============================================================================
 router.post('/subject', async (req, res) => {
   try {
