@@ -7,18 +7,19 @@ const { authenticateToken } = require('../middlewares/auth');
 // Đường dẫn service Python WRR trên Render
 const WRR_SERVICE_URL = process.env.WRR_SERVICE_URL || 'https://tuna-wrr-service.onrender.com';
 
-// Helper trích xuất Email / Định danh động từ Header hoặc query/body (Không gán cứng mã nào)
+// Helper trích xuất Email / Định danh động nhất quán (Ưu tiên đúng người dùng hiện tại)
 const extractUserEmail = (req) => {
-  return String(
-    req.headers['x-user-id'] || 
-    req.user?.email || 
-    req.query.identifier ||
-    req.query.userId || 
-    req.query.email || 
-    req.body?.userId || 
-    req.body?.email || 
-    'guest_user'
+  const val = (
+    req.body?.userId ||
+    req.query?.userId ||
+    req.headers['x-user-id'] ||
+    req.query?.identifier ||
+    req.user?.email ||
+    req.body?.email ||
+    req.query?.email ||
+    ''
   ).trim();
+  return val || 'guest_user';
 };
 
 // =============================================================================
@@ -297,14 +298,13 @@ router.delete('/admin/:id', authenticateToken, async (req, res) => {
 });
 
 // =============================================================================
-// 4. DÀNH CHO ZALO MINI APP (LẤY LỊCH HỌC SINH VIÊN - KIỂM TRA CHẶT CHẼ PHÊ DUYỆT)
+// 4. DÀNH CHO ZALO MINI APP (LẤY LỊCH HỌC SINH VIÊN - KIỂM TRA PHÊ DUYỆT)
 // =============================================================================
 router.get('/student-schedule', async (req, res) => {
   const { studentCode, zaloId, identifier, month, year } = req.query;
   const currentIdentity = (identifier || studentCode || zaloId || extractUserEmail(req) || '').trim();
 
   try {
-    // Nếu không có định danh người dùng
     if (!currentIdentity || currentIdentity === 'guest_user') {
       return res.json({
         success: true,
@@ -315,7 +315,6 @@ router.get('/student-schedule', async (req, res) => {
       });
     }
 
-    // 1. Tìm thông tin người dùng trong CSDL
     const userRes = await pool.query(
       `SELECT id, zalo_id, faculty, class_name, student_code, email,
               COALESCE(is_verified, false) AS "isVerified",
@@ -341,7 +340,6 @@ router.get('/student-schedule', async (req, res) => {
 
     const user = userRes.rows[0];
 
-    // 2. CHẶN NẾU CHƯA ĐƯỢC DUYỆT (PENDING HOẶC REJECTED)
     if (user.verificationStatus === 'rejected') {
       return res.json({
         success: true,
@@ -362,7 +360,6 @@ router.get('/student-schedule', async (req, res) => {
       });
     }
 
-    // 3. ĐÃ ĐƯỢC DUYỆT (APPROVED) -> NẠP LỊCH HỌC CHÍNH THỨC
     const facultyMajor = user.faculty || 'Hệ Thống Thông Tin';
     const className = user.class_name;
     const cohortMatch = (className || '').match(/K?(\d{2})/i) || (user.student_code || '').match(/(\d{2})/);
@@ -451,7 +448,7 @@ router.get(['/curriculum', '/curriculum-subjects', '/curriculum/subjects'], asyn
 });
 
 // =============================================================================
-// 6. LỘ TRÌNH THÍCH ỨNG (TIMELINES & THUẬT TOÁN SWRR - ĐẦY ĐỦ CRUD)
+// 6. LỘ TRÌNH THÍCH ỨNG (TIMELINES & THUẬT TOÁN SWRR - ĐỒNG BỘ CHUẨN XÁC)
 // =============================================================================
 router.get(['/timelines', '/api/timelines'], async (req, res) => {
   const currentUserId = extractUserEmail(req);
@@ -465,7 +462,7 @@ router.get(['/timelines', '/api/timelines'], async (req, res) => {
              title, description, duration_minutes AS "durationMinutes",
              is_completed AS "isCompleted", action_target AS "actionTarget"
       FROM learning_timelines
-      WHERE user_id = $1
+      WHERE (LOWER(user_id) = LOWER($1) OR user_id = $1)
     `;
     const params = [currentUserId];
 
@@ -557,7 +554,7 @@ router.post(['/generate-wrr-plan', '/timelines/generate-wrr-plan'], async (req, 
   const currentUserId = extractUserEmail(req);
   const {
     facultyMajor = 'Hệ Thống Thông Tin',
-    year = 1,
+    year = 4,
     semester = 1,
     subjects = [],
     subjectLevels = {},
@@ -568,35 +565,47 @@ router.post(['/generate-wrr-plan', '/timelines/generate-wrr-plan'], async (req, 
   } = req.body;
 
   const pace = Number(dailyPace) || 15;
-  const start = startDate ? new Date(startDate) : new Date();
 
   try {
     let targetSubjects = Array.isArray(subjects) && subjects.length > 0 ? subjects : [];
+    
+    // Nếu chưa chọn môn, tự động tìm các môn của đúng chuyên ngành từ curriculum_plans hoặc curriculum_subjects
     if (targetSubjects.length === 0) {
-      const currRes = await pool.query(
-        `SELECT subject_name FROM curriculum_subjects 
-         WHERE faculty_major = $1 AND academic_year = $2 AND semester = $3`,
-        [facultyMajor, Number(year) || 1, Number(semester) || 1]
+      const planRes = await pool.query(
+        `SELECT DISTINCT subject_name FROM curriculum_plans 
+         WHERE major_name ILIKE $1 LIMIT 4`,
+        [`%${facultyMajor}%`]
       ).catch(() => ({ rows: [] }));
-      targetSubjects = currRes.rows.map((r) => r.subject_name);
+
+      if (planRes.rows.length > 0) {
+        targetSubjects = planRes.rows.map((r) => r.subject_name);
+      } else {
+        const currRes = await pool.query(
+          `SELECT subject_name FROM curriculum_subjects 
+           WHERE faculty_major ILIKE $1 
+           LIMIT 4`,
+          [`%${facultyMajor}%`]
+        ).catch(() => ({ rows: [] }));
+        targetSubjects = currRes.rows.map((r) => r.subject_name);
+      }
     }
 
     if (targetSubjects.length === 0) {
-      targetSubjects = ['Cơ sở dữ liệu (Database)', 'Cấu trúc dữ liệu và giải thuật'];
+      targetSubjects = ['Cơ sở dữ liệu', 'Phân tích và thiết kế HTTT'];
     }
 
     const payloadSubjects = [];
 
     for (const sub of targetSubjects) {
       const subInfo = await pool.query(
-        `SELECT credits, difficulty_base FROM curriculum_subjects WHERE subject_name ILIKE $1 LIMIT 1`,
+        `SELECT credits FROM curriculum_plans WHERE subject_name ILIKE $1 LIMIT 1`,
         [`%${sub}%`]
       ).catch(() => ({ rows: [] }));
       const credits = subInfo.rows[0]?.credits || 3;
 
       const quizRes = await pool.query(
         `SELECT COUNT(*) as total, COUNT(*) FILTER (WHERE is_correct = true) as correct
-         FROM quiz_answer_attempts WHERE user_id = $1 AND subject ILIKE $2`,
+         FROM quiz_answer_attempts WHERE (LOWER(user_id) = LOWER($1) OR user_id = $1) AND subject ILIKE $2`,
         [currentUserId, `%${sub}%`]
       ).catch(() => ({ rows: [{ total: 0, correct: 0 }] }));
 
@@ -641,18 +650,19 @@ router.post(['/generate-wrr-plan', '/timelines/generate-wrr-plan'], async (req, 
         pyData = await pyResponse.json();
       }
     } catch (e) {
-      console.warn("⚠️ Gọi Python Microservice thất bại, kích hoạt Fallback:", e.message);
+      console.warn("⚠️ Gọi Python Microservice thất bại, kích hoạt Fallback local SWRR:", e.message);
       pyData = {
         success: true,
         weights: payloadSubjects.map((s) => ({ subject: s.subject_name, weight: 1.0 })),
         slots_per_day: 2,
-        schedule_plan: Array(28).fill([
-          { subject: payloadSubjects[0]?.subject_name || 'Cơ sở dữ liệu', task_type: 'doc_study', title: 'Ôn tập kiến thức nền tảng' },
-          { subject: payloadSubjects[1]?.subject_name || 'Lập trình', task_type: 'quiz', title: 'Luyện tập câu hỏi trắc nghiệm' },
+        schedule_plan: Array(28).fill(null).map((_, dIdx) => [
+          { subject: payloadSubjects[dIdx % payloadSubjects.length]?.subject_name, task_type: 'doc_study', title: `Nghiên cứu giáo trình: ${payloadSubjects[dIdx % payloadSubjects.length]?.subject_name}` },
+          { subject: payloadSubjects[(dIdx + 1) % payloadSubjects.length]?.subject_name, task_type: 'quiz', title: `Luyện đề trắc nghiệm: ${payloadSubjects[(dIdx + 1) % payloadSubjects.length]?.subject_name}` },
         ]),
       };
     }
 
+    // Cập nhật bảng trọng số
     for (const w of (pyData?.weights || [])) {
       await pool.query(
         `INSERT INTO subject_learning_weights 
@@ -664,13 +674,30 @@ router.post(['/generate-wrr-plan', '/timelines/generate-wrr-plan'], async (req, 
       ).catch(() => {});
     }
 
-    await pool.query(`DELETE FROM learning_timelines WHERE user_id = $1`, [currentUserId]).catch(() => {});
+    // Xóa lịch cũ của đúng người dùng này
+    await pool.query(`DELETE FROM learning_timelines WHERE LOWER(user_id) = LOWER($1) OR user_id = $1`, [currentUserId]).catch(() => {});
     const insertedRows = [];
 
+    // Chuyển đổi mốc ngày chính xác theo giờ địa phương (tránh lỗi lệch múi giờ UTC)
+    let startYear, startMonth, startDay;
+    if (startDate && /^\d{4}-\d{2}-\d{2}$/.test(startDate)) {
+      const parts = startDate.split('-').map(Number);
+      startYear = parts[0];
+      startMonth = parts[1] - 1;
+      startDay = parts[2];
+    } else {
+      const now = new Date();
+      startYear = now.getFullYear();
+      startMonth = now.getMonth();
+      startDay = now.getDate();
+    }
+
     for (let dayIdx = 0; dayIdx < (pyData?.schedule_plan?.length || 0); dayIdx++) {
-      const targetDate = new Date(start);
-      targetDate.setDate(start.getDate() + dayIdx);
-      const dateStr = targetDate.toISOString().split('T')[0];
+      const curDate = new Date(startYear, startMonth, startDay + dayIdx);
+      const yStr = curDate.getFullYear();
+      const mStr = String(curDate.getMonth() + 1).padStart(2, '0');
+      const dStr = String(curDate.getDate()).padStart(2, '0');
+      const dateStr = `${yStr}-${mStr}-${dStr}`;
 
       const dayTasks = pyData.schedule_plan[dayIdx] || [];
       const availableTimeSlots = ['07:45 - 08:30', '12:00 - 12:45', '18:30 - 19:15', '20:00 - 20:45'];
@@ -708,7 +735,10 @@ router.post(['/generate-wrr-plan', '/timelines/generate-wrr-plan'], async (req, 
             pace,
             actionTarget,
           ]
-        ).catch(() => ({ rows: [] }));
+        ).catch((e) => {
+          console.error("Lỗi insert timeline:", e.message);
+          return { rows: [] };
+        });
 
         if (insertRes.rows && insertRes.rows[0]) {
           insertedRows.push(insertRes.rows[0]);
@@ -737,7 +767,7 @@ router.post(['/generate-wrr-plan', '/timelines/generate-wrr-plan'], async (req, 
 router.get('/streak/:userId', async (req, res) => {
   const currentUserId = req.params.userId || extractUserEmail(req);
   try {
-    const query = `SELECT * FROM user_streaks WHERE user_id = $1`;
+    const query = `SELECT * FROM user_streaks WHERE LOWER(user_id) = LOWER($1) OR user_id = $1`;
     const result = await pool.query(query, [currentUserId]).catch(() => ({ rows: [] }));
 
     if (result.rows.length === 0) {
@@ -755,7 +785,7 @@ router.get('/streak/:userId', async (req, res) => {
 
       if (diffDays > 1) {
         await pool.query(
-          `UPDATE user_streaks SET current_streak = 0, updated_at = CURRENT_TIMESTAMP WHERE user_id = $1`,
+          `UPDATE user_streaks SET current_streak = 0, updated_at = CURRENT_TIMESTAMP WHERE LOWER(user_id) = LOWER($1) OR user_id = $1`,
           [currentUserId]
         ).catch(() => {});
         streakData.current_streak = 0;
@@ -777,7 +807,7 @@ router.get('/streak/:userId', async (req, res) => {
 router.post('/streak/complete', async (req, res) => {
   const currentUserId = req.body?.userId || extractUserEmail(req);
   try {
-    const checkQuery = `SELECT * FROM user_streaks WHERE user_id = $1`;
+    const checkQuery = `SELECT * FROM user_streaks WHERE LOWER(user_id) = LOWER($1) OR user_id = $1`;
     const checkResult = await pool.query(checkQuery, [currentUserId]).catch(() => ({ rows: [] }));
 
     const today = new Date();
@@ -814,9 +844,9 @@ router.post('/streak/complete', async (req, res) => {
             xp_points = COALESCE(xp_points, 0) + 20,
             last_completed_date = $3, 
             updated_at = CURRENT_TIMESTAMP
-        WHERE user_id = $4 RETURNING *;
+        WHERE id = $4 RETURNING *;
       `;
-      const updateResult = await pool.query(updateQuery, [newStreak, newLongest, todayStr, currentUserId]).catch(() => ({ rows: [] }));
+      const updateResult = await pool.query(updateQuery, [newStreak, newLongest, todayStr, streakRecord.id]).catch(() => ({ rows: [] }));
       return res.json({ success: true, streak: updateResult.rows[0] });
     }
   } catch (error) {
