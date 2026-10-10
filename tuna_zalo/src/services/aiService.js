@@ -42,6 +42,17 @@ export const getAuthHeaders = () => {
 
 const getCommonHeaders = () => getAuthHeaders();
 
+// Khóa cache LocalStorage độc lập theo từng Email người dùng
+const getDocCacheKey = () => {
+  const userId = getCurrentUserId();
+  return `tuna_cached_docs_${userId}`;
+};
+
+const getTaskCacheKey = () => {
+  const userId = getCurrentUserId();
+  return `tuna_cached_tasks_${userId}`;
+};
+
 // 2. HELPER FETCH & PARSE JSON AN TOÀN
 const fetchWithTimeout = async (url, options = {}, timeoutMs = 60000) => {
   const controller = new AbortController();
@@ -79,8 +90,9 @@ export const computeContentHash = async (content) => {
   return hashArray.map((b) => b.toString(16).padStart(2, "0")).join("");
 };
 
-// ==================== QUẢN LÝ TÀI LIỆU ====================
+// ==================== QUẢN LÝ TÀI LIỆU (ĐỘC LẬP THEO TÀI KHOẢN) ====================
 export const fetchDocumentsFromDB = async () => {
+  const cacheKey = getDocCacheKey();
   try {
     const res = await fetchWithTimeout(`${API_BASE}/documents`, {
       headers: getCommonHeaders(),
@@ -88,23 +100,24 @@ export const fetchDocumentsFromDB = async () => {
     if (res.ok) {
       const json = await parseJsonResponse(res);
       if (json.success && Array.isArray(json.data)) {
-        localStorage.setItem("tuna_cached_docs", JSON.stringify(json.data));
+        localStorage.setItem(cacheKey, JSON.stringify(json.data));
         return json.data;
       }
     }
   } catch (e) {
-    console.warn("Dùng cache tài liệu do không kết nối được DB:", e.message);
+    console.warn("Dùng cache tài liệu theo user:", e.message);
   }
-  const local = localStorage.getItem("tuna_cached_docs");
+  const local = localStorage.getItem(cacheKey);
   return local ? JSON.parse(local) : [];
 };
 
 export const saveDocumentToDB = async (doc) => {
+  const cacheKey = getDocCacheKey();
   try {
-    const local = localStorage.getItem("tuna_cached_docs");
+    const local = localStorage.getItem(cacheKey);
     const list = local ? JSON.parse(local) : [];
     const updated = [doc, ...list.filter((d) => d.id !== doc.id)];
-    localStorage.setItem("tuna_cached_docs", JSON.stringify(updated));
+    localStorage.setItem(cacheKey, JSON.stringify(updated));
   } catch (e) {}
 
   try {
@@ -117,11 +130,12 @@ export const saveDocumentToDB = async (doc) => {
 };
 
 export const deleteDocumentFromDB = async (id) => {
+  const cacheKey = getDocCacheKey();
   try {
-    const local = localStorage.getItem("tuna_cached_docs");
+    const local = localStorage.getItem(cacheKey);
     if (local) {
       const list = JSON.parse(local).filter((d) => d.id !== id);
-      localStorage.setItem("tuna_cached_docs", JSON.stringify(list));
+      localStorage.setItem(cacheKey, JSON.stringify(list));
     }
   } catch (e) {}
 
@@ -133,38 +147,40 @@ export const deleteDocumentFromDB = async (id) => {
   } catch (e) {}
 };
 
-// ==================== QUẢN LÝ LỊCH SỬ TÁC VỤ ====================
+// ==================== QUẢN LÝ LỊCH SỬ TÁC VỤ (ĐỘC LẬP THEO TÀI KHOẢN) ====================
 export const fetchTasksFromDB = async () => {
+  const cacheKey = getTaskCacheKey();
   try {
     const res = await fetchWithTimeout(`${API_BASE}/tasks`, {
       headers: getCommonHeaders(),
     }, 10000);
 
     if (res.status === 401) {
-      const local = localStorage.getItem("tuna_cached_tasks");
+      const local = localStorage.getItem(cacheKey);
       return local ? JSON.parse(local) : [];
     }
 
     if (res.ok) {
       const json = await parseJsonResponse(res);
       if (json.success && Array.isArray(json.data)) {
-        localStorage.setItem("tuna_cached_tasks", JSON.stringify(json.data));
+        localStorage.setItem(cacheKey, JSON.stringify(json.data));
         return json.data;
       }
     }
   } catch (e) {
     console.warn("Dùng cache tasks:", e.message);
   }
-  const local = localStorage.getItem("tuna_cached_tasks");
+  const local = localStorage.getItem(cacheKey);
   return local ? JSON.parse(local) : [];
 };
 
 export const saveTaskToDB = async (task) => {
+  const cacheKey = getTaskCacheKey();
   try {
-    const local = localStorage.getItem("tuna_cached_tasks");
+    const local = localStorage.getItem(cacheKey);
     const list = local ? JSON.parse(local) : [];
     const updated = [task, ...list.filter((t) => t.id !== task.id)];
-    localStorage.setItem("tuna_cached_tasks", JSON.stringify(updated));
+    localStorage.setItem(cacheKey, JSON.stringify(updated));
   } catch (e) {}
 
   try {
@@ -177,11 +193,12 @@ export const saveTaskToDB = async (task) => {
 };
 
 export const deleteTaskFromDB = async (id) => {
+  const cacheKey = getTaskCacheKey();
   try {
-    const local = localStorage.getItem("tuna_cached_tasks");
+    const local = localStorage.getItem(cacheKey);
     if (local) {
       const list = JSON.parse(local).filter((d) => d.id !== id);
-      localStorage.setItem("tuna_cached_tasks", JSON.stringify(list));
+      localStorage.setItem(cacheKey, JSON.stringify(list));
     }
   } catch (e) {}
 
@@ -194,8 +211,9 @@ export const deleteTaskFromDB = async (id) => {
 };
 
 export const clearAllTasksFromDB = async () => {
+  const cacheKey = getTaskCacheKey();
   try {
-    localStorage.removeItem("tuna_cached_tasks");
+    localStorage.removeItem(cacheKey);
     await fetchWithTimeout(`${API_BASE}/tasks`, { 
       method: "DELETE",
       headers: getCommonHeaders(),

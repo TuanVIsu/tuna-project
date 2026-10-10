@@ -492,45 +492,45 @@ export const ManageUsers = () => {
                       )}
                     </td>
 
-                    <td className="text-center">
-                      {u.isVerified ? (
-                        <span
-                          className="badge rounded-pill px-2.5 py-1 fw-bold"
-                          style={{
-                            background: "#ecfdf5",
-                            color: "#059669",
-                            border: "1px solid #a7f3d0",
-                            fontSize: "11px",
-                          }}
-                        >
-                          ✓ Đã vào lớp
-                        </span>
-                      ) : u.verificationStatus === "rejected" ? (
-                        <span
-                          className="badge rounded-pill px-2.5 py-1 fw-bold"
-                          style={{
-                            background: "#fef2f2",
-                            color: "#dc2626",
-                            border: "1px solid #fecaca",
-                            fontSize: "11px",
-                          }}
-                        >
-                          ✕ Bị từ chối
-                        </span>
-                      ) : (
-                        <span
-                          className="badge rounded-pill px-2.5 py-1 fw-bold"
-                          style={{
-                            background: "#fffbeb",
-                            color: "#b45309",
-                            border: "1px solid #fde68a",
-                            fontSize: "11px",
-                          }}
-                        >
-                          ⏳ Chờ duyệt
-                        </span>
-                      )}
-                    </td>
+<td className="text-center">
+  {u.verificationStatus === "approved" || (u.isVerified && u.verificationStatus !== "pending") ? (
+    <span
+      className="badge rounded-pill px-2.5 py-1 fw-bold"
+      style={{
+        background: "#ecfdf5",
+        color: "#059669",
+        border: "1px solid #a7f3d0",
+        fontSize: "11px",
+      }}
+    >
+      ✓ Đã vào lớp
+    </span>
+  ) : u.verificationStatus === "rejected" ? (
+    <span
+      className="badge rounded-pill px-2.5 py-1 fw-bold"
+      style={{
+        background: "#fef2f2",
+        color: "#dc2626",
+        border: "1px solid #fecaca",
+        fontSize: "11px",
+      }}
+    >
+      ✕ Bị từ chối
+    </span>
+  ) : (
+    <span
+      className="badge rounded-pill px-2.5 py-1 fw-bold"
+      style={{
+        background: "#fffbeb",
+        color: "#b45309",
+        border: "1px solid #fde68a",
+        fontSize: "11px",
+      }}
+    >
+      ⏳ Chờ duyệt
+    </span>
+  )}
+</td>
 
                     <td className="text-center">
                       <span

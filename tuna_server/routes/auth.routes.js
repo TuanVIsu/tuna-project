@@ -148,11 +148,12 @@ router.post('/verify-otp', async (req, res) => {
 
     let finalUser = null;
 
+// Trong routes/auth.routes.js -> router.post('/verify-otp')
     if (existing.rows.length > 0) {
+      // Tài khoản đã có: giữ nguyên trạng thái xác thực cũ của họ, chỉ cập nhật email nếu cần
       const updateRes = await pool.query(
         `UPDATE users 
-         SET is_verified = TRUE, 
-             email = $1, 
+         SET email = $1, 
              name = COALESCE($2, name), 
              student_code = $3 
          WHERE id = $4 
@@ -161,9 +162,10 @@ router.post('/verify-otp', async (req, res) => {
       );
       finalUser = updateRes.rows[0];
     } else {
+      // Tài khoản MỚI: BẮT BUỘC để is_verified = FALSE và verification_status = 'pending'
       const insertRes = await pool.query(
-        `INSERT INTO users (zalo_id, student_code, email, name, role, is_verified)
-         VALUES ($1, $2, $3, $4, $5, TRUE) 
+        `INSERT INTO users (zalo_id, student_code, email, name, role, is_verified, verification_status)
+         VALUES ($1, $2, $3, $4, $5, FALSE, 'pending') 
          RETURNING *`,
         [generatedZaloId, cleanCode, cleanEmail, name || `Thành viên ${cleanCode}`, assignedRole]
       );

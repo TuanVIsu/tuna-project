@@ -25,8 +25,8 @@ router.post('/link', async (req, res) => {
     );
 
     let updateRes;
+// Trong routes/student.routes.js -> router.post('/link')
     if (existingCheck.rows.length > 0) {
-      // Đã có bản ghi -> Cập nhật theo ID chính xác để không bao giờ bị dính UNIQUE constraint
       const existingId = existingCheck.rows[0].id;
       updateRes = await pool.query(
         `UPDATE users 
@@ -35,18 +35,15 @@ router.post('/link', async (req, res) => {
              class_name = COALESCE($3, class_name),
              total_credits = COALESCE($4, total_credits),
              student_code = $5,
-             zalo_id = $6,
-             is_verified = TRUE,
-             verification_status = 'approved'
+             zalo_id = $6
          WHERE id = $7
          RETURNING id, name, student_code, class_name, faculty, is_verified, verification_status`,
         [cleanName, cleanFaculty, className?.trim() || null, Number(totalCredits) || 0, cleanStudentCode, cleanZaloId, existingId]
       );
     } else {
-      // Chưa có bản ghi -> Thêm mới an toàn
       updateRes = await pool.query(
         `INSERT INTO users (zalo_id, student_code, name, class_name, total_credits, faculty, is_verified, verification_status, role)
-         VALUES ($1, $2, $3, $4, $5, $6, TRUE, 'approved', 'student')
+         VALUES ($1, $2, $3, $4, $5, $6, FALSE, 'pending', 'student')
          RETURNING id, name, student_code, class_name, faculty, is_verified, verification_status`,
         [cleanZaloId, cleanStudentCode, cleanName, className?.trim() || null, Number(totalCredits) || 0, cleanFaculty]
       );
