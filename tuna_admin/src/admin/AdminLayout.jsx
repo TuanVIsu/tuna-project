@@ -473,14 +473,20 @@ export const AdminLayout = ({ onExitAdmin }) => {
 
               {/* DROPDOWN THÔNG BÁO HOÀN CHỈNH */}
               {showNotiDropdown && (
-                <div
-                  className="position-absolute end-0 mt-2 card border-0 shadow-2xl rounded-4 overflow-hidden z-3"
-                  style={{
-                    width: "min(380px, 92vw)",
-                    border: "1px solid #e2e8f0",
-                    animation: "fadeIn 0.15s ease-out forwards",
-                  }}
-                >
+      <div
+    className="position-absolute card border-0 shadow-lg rounded-4 overflow-hidden z-3"
+    style={{
+      top: "calc(100% + 10px)",   /* Căn khoảng cách thụt xuống dưới icon chuông 10px */
+      right: "0px",               /* Căn thẳng hàng mép phải với icon chuông */
+      width: "360px",             /* Khóa chiều rộng chuẩn đẹp, vừa vặn nội dung */
+      maxWidth: "92vw", 
+       
+      border: "1px solid #e2e8f0",
+      backgroundColor: "#ffffff",
+      boxShadow: "0 10px 25px -5px rgba(15, 23, 42, 0.12), 0 8px 10px -6px rgba(15, 23, 42, 0.08)",
+      animation: "fadeIn 0.15s ease-out forwards",
+    }}
+  >
                   {/* Header popup thông báo có nút Đã xem tất cả */}
                   <div className="p-3 border-bottom bg-slate-50 d-flex align-items-center justify-content-between">
                     <div className="d-flex align-items-center gap-2">
@@ -507,55 +513,76 @@ export const AdminLayout = ({ onExitAdmin }) => {
                   </div>
 
                   {/* Danh sách từng thông báo có nút Xóa / Đã xem riêng */}
-                  <div className="overflow-y-auto" style={{ maxHeight: "310px" }}>
-                    {notifications.length === 0 ? (
-                      <div className="p-4 text-center text-muted small">
-                        <i className="bi bi-check2-circle fs-2 text-emerald-500 d-block mb-1.5"></i>
-                        Không có yêu cầu nào đang chờ duyệt.
-                      </div>
-                    ) : (
-                      notifications.map((n) => (
-                        <div
-                          key={n.id}
-                          onClick={() => {
-                            setActiveTab(n.targetTab);
-                            setShowNotiDropdown(false);
-                          }}
-                          className="p-3 border-bottom bg-white noti-item-hover cursor-pointer position-relative group"
-                        >
-                          <div className="d-flex align-items-center justify-content-between mb-1">
-                            <span
-                              className={`badge rounded-md font-extrabold ${
-                                n.type === "student"
-                                  ? "bg-amber-100 text-amber-900 border border-amber-300"
-                                  : "bg-blue-100 text-blue-900 border border-blue-300"
-                              }`}
-                              style={{ fontSize: "9px" }}
-                            >
-                              {n.type === "student" ? "XIN VÀO LỚP" : n.type === "access" ? "CẤP QUYỀN" : "MẬT KHẨU"}
-                            </span>
+<div className="overflow-y-auto" style={{ maxHeight: "310px" }}>
+  {notifications.length === 0 ? (
+    <div className="p-4 text-center small" style={{ color: "#64748b" }}>
+      <i className="bi bi-check2-circle fs-2 text-success d-block mb-1.5"></i>
+      Không có yêu cầu nào đang chờ duyệt.
+    </div>
+  ) : (
+    notifications.map((n) => (
+      <div
+        key={n.id}
+        onClick={() => {
+          setActiveTab(n.targetTab);
+          setShowNotiDropdown(false);
+        }}
+        className="p-3 border-bottom bg-white noti-item-hover cursor-pointer position-relative"
+        style={{ color: "#0f172a" }}
+      >
+        <div className="d-flex align-items-center justify-content-between mb-1">
+          {/* Badge: Đổi nền xám/xanh nhạt, chữ đen đậm tương phản cao */}
+          <span
+            className="badge rounded-pill fw-bold"
+            style={{
+              fontSize: "9.5px",
+              backgroundColor: n.type === "student" ? "#fef3c7" : "#e0f2fe",
+              color: n.type === "student" ? "#92400e" : "#0369a1",
+              border: `1px solid ${n.type === "student" ? "#fde68a" : "#bae6fd"}`,
+              padding: "3px 8px",
+            }}
+          >
+            {n.type === "student" ? "XIN VÀO LỚP" : n.type === "access" ? "CẤP QUYỀN" : "MẬT KHẨU"}
+          </span>
 
-                            <div className="d-flex align-items-center gap-2">
-                              <small className="text-slate-400 font-semibold" style={{ fontSize: "10px" }}>{n.time}</small>
-                              {/* Nút Xóa / Ẩn thông báo cụ thể */}
-                              <button
-                                type="button"
-                                onClick={(e) => handleDismissNoti(e, n.id)}
-                                className="btn btn-sm btn-light p-0 rounded-circle text-slate-400 hover:text-danger d-inline-flex align-items-center justify-content-center border-0 cursor-pointer"
-                                style={{ width: "20px", height: "20px" }}
-                                title="Xóa thông báo này"
-                              >
-                                <i className="bi bi-x-lg" style={{ fontSize: "10px" }}></i>
-                              </button>
-                            </div>
-                          </div>
+          <div className="d-flex align-items-center gap-2">
+            {/* Thời gian: Đổi sang màu xám đen rõ ràng */}
+            <small style={{ fontSize: "10.5px", color: "#64748b", fontWeight: "600" }}>
+              {n.time}
+            </small>
 
-                          <div className="fw-black text-slate-800 small text-truncate">{n.title}</div>
-                          <small className="text-slate-500 d-block text-truncate mt-0.5">{n.desc}</small>
-                        </div>
-                      ))
-                    )}
-                  </div>
+            {/* Nút Xóa thông báo */}
+            <button
+              type="button"
+              onClick={(e) => handleDismissNoti(e, n.id)}
+              className="btn btn-sm btn-light p-0 rounded-circle d-inline-flex align-items-center justify-content-center border-0 cursor-pointer"
+              style={{ width: "22px", height: "22px", color: "#64748b" }}
+              title="Xóa thông báo này"
+            >
+              <i className="bi bi-x-lg" style={{ fontSize: "10px" }}></i>
+            </button>
+          </div>
+        </div>
+
+        {/* Tiêu đề: Khóa màu đen đậm tuyệt đối (#0f172a) */}
+        <div
+          className="fw-bold small text-truncate"
+          style={{ color: "#0f172a", fontSize: "13px", lineHeight: "1.4" }}
+        >
+          {n.title}
+        </div>
+
+        {/* Mô tả phụ: Màu xám đậm (#334155) thay vì text-slate-500 */}
+        <small
+          className="d-block text-truncate mt-0.5"
+          style={{ color: "#334155", fontSize: "11.5px", fontWeight: "500" }}
+        >
+          {n.desc}
+        </small>
+      </div>
+    ))
+  )}
+</div>
 
                   {/* Footer chuyển tab nhanh */}
                   <div className="p-2.5 border-top bg-slate-50 d-flex justify-content-between">
