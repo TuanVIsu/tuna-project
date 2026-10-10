@@ -410,51 +410,61 @@ export const ChatSection = ({ currentUser }) => {
         </div>
       )}
 
-      {/* THANH THÔNG TIN NGƯỜI DÙNG */}
-      <div className="bg-white rounded-2xl p-2 px-3 border border-slate-200/80 shadow-2xs mb-2 flex items-center justify-between shrink-0">
-        <div className="flex items-center gap-2">
+{/* THANH THÔNG TIN NGƯỜI DÙNG (GỌN GÀNG, CHỐNG RỚT DÒNG) */}
+      <div className="bg-white rounded-2xl p-2 px-3 border border-slate-200/80 shadow-2xs mb-2 flex items-center justify-between gap-2 shrink-0">
+        <div className="flex items-center gap-2 min-w-0 flex-1">
           <div className={`w-8 h-8 rounded-xl flex items-center justify-center text-xs font-black shrink-0 ${
             isAnonymous ? "bg-purple-100 text-purple-700" : "bg-blue-100 text-blue-700"
           }`}>
             <i className={`bi ${isAnonymous ? "bi-incognito" : "bi-person-fill"}`}></i>
           </div>
-          <div>
+          <div className="min-w-0 flex-1">
             <div className="text-[12px] font-black text-slate-900 flex items-center gap-1.5 leading-none">
-              <span>{myDisplayName}</span>
+              <span className="truncate max-w-[120px]">{myDisplayName}</span>
               {isAnonymous && (
-                <span className="px-1.5 py-0.2 rounded bg-purple-50 text-purple-700 text-[9px] font-bold border border-purple-200">
+                <span className="px-1.5 py-0.5 rounded bg-purple-50 text-purple-700 text-[9px] font-bold border border-purple-200 whitespace-nowrap shrink-0">
                   Ẩn danh
                 </span>
               )}
             </div>
-            <span className="text-[9.5px] text-slate-400 block mt-0.5 font-mono truncate max-w-[140px]">
+            <span className="text-[9.5px] text-slate-400 block mt-0.5 font-mono truncate max-w-[130px]">
               {myUserId}
             </span>
           </div>
         </div>
 
-        <div className="flex items-center gap-1.5">
+        {/* Cụm nút hành động căn chỉnh 1 dòng */}
+        <div className="flex items-center gap-1.5 shrink-0">
           <button
+            type="button"
             onClick={() => { setTempNickname(nickname); setShowNicknameModal(true); }}
-            className="px-2.5 py-1 bg-slate-100 hover:bg-slate-200 text-slate-700 text-[10.5px] font-bold rounded-lg border-0 cursor-pointer"
+            className="px-2 py-1.5 bg-slate-100 hover:bg-slate-200 active:scale-95 text-slate-700 text-[10.5px] font-bold rounded-xl border-0 cursor-pointer whitespace-nowrap flex items-center gap-1 transition"
+            title="Đổi biệt danh"
           >
-            Đổi biệt danh
+            <i className="bi bi-pencil-square text-[10px]"></i>
+            <span>Đổi tên</span>
           </button>
+          
           <button
+            type="button"
             onClick={() => {
               const nextVal = !isAnonymous;
               setIsAnonymous(nextVal);
               localStorage.setItem("tuna_chat_is_anon", String(nextVal));
             }}
-            className={`px-2.5 py-1 text-[10.5px] font-bold rounded-lg border-0 cursor-pointer ${
-              isAnonymous ? "bg-purple-600 text-white" : "bg-slate-100 text-slate-600"
+            className={`px-2.5 py-1.5 text-[10.5px] font-bold rounded-xl border-0 cursor-pointer whitespace-nowrap active:scale-95 flex items-center gap-1 transition ${
+              isAnonymous 
+                ? "bg-purple-600 hover:bg-purple-700 text-white shadow-xs shadow-purple-500/20" 
+                : "bg-slate-100 hover:bg-slate-200 text-slate-600"
             }`}
           >
-            {isAnonymous ? "Bật tên thật" : "Bật ẩn danh"}
+            <i className={`bi ${isAnonymous ? "bi-person-check-fill" : "bi-incognito"} text-[11px]`}></i>
+            <span>{isAnonymous ? "Hiện tên" : "Ẩn danh"}</span>
           </button>
+
           <span
-            className={`w-2.5 h-2.5 rounded-full ml-1 ${isConnected ? "bg-emerald-500 animate-pulse" : "bg-rose-400"}`}
-            title={isConnected ? "Đã kết nối máy chủ" : "Mất kết nối"}
+            className={`w-2 h-2 rounded-full ml-0.5 shrink-0 ${isConnected ? "bg-emerald-500 animate-pulse" : "bg-rose-400"}`}
+            title={isConnected ? "Đã kết nối" : "Mất kết nối"}
           />
         </div>
       </div>
