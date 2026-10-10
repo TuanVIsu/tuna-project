@@ -108,10 +108,20 @@ export const AIHubSection = () => {
     const file = e.target.files[0];
     if (!file) return;
 
+    const validExtensions = ['.pdf', '.doc', '.docx', '.txt', '.pptx', '.xlsx'];
+    const fileNameLower = file.name.toLowerCase();
+    const isValid = validExtensions.some(ext => fileNameLower.endsWith(ext));
+
+    if (!isValid) {
+      showToast("Ứng dụng chỉ hỗ trợ các tệp tài liệu: PDF, DOC, DOCX, TXT, PPTX hoặc XLSX!", "error");
+      e.target.value = '';
+      return;
+    }
+
     const reader = new FileReader();
     reader.onload = async (event) => {
       let rawContent = event.target.result;
-      if (file.name.toLowerCase().endsWith(".pdf")) {
+      if (fileNameLower.endsWith(".pdf")) {
         const matches = rawContent.match(/[a-zA-Z0-9\sàáạảãâầấậẩẫăằắặẳẵèéẹẻẽêềếệểễìíịỉĩòóọỏõôồốộổỗơờớợởỡùúụủũưừứựửữỳýỵỷỹđĐ.,:;!?()/-]{4,}/g);
         rawContent = matches ? matches.join(" ") : rawContent.slice(0, 10000);
       }
@@ -458,7 +468,7 @@ export const AIHubSection = () => {
 
   const visibleTasks = tasks.filter((t) => !t.hiddenInHistory);
 
-  // MÀN HÌNH XEM CHI TIẾT TÁC VỤ
+  // MÀN HÌNH XEM CHI TIẾT TÁC VỤ (HEADER 2 TẦNG CHỐNG RỚT DÒNG CHỮ)
   if (activeTask) {
     const isDocOutput = activeTask.featureId === "summary" || activeTask.featureId === "translate";
     const isDocActuallyInDB = isDocOutput && allSavedDocs.some(
@@ -472,7 +482,6 @@ export const AIHubSection = () => {
         style={{ zIndex: 1050, overflow: "hidden" }}
         onClick={() => { if (showRestartMenu) setShowRestartMenu(false); }}
       >
-        {/* TOAST NỔI */}
         {toastMessage && (
           <div 
             className="fixed top-24 left-3 right-3 z-50 flex items-center justify-between p-3.5 rounded-2xl shadow-xl border animate-in slide-in-from-top duration-300 backdrop-blur-md"
@@ -499,10 +508,13 @@ export const AIHubSection = () => {
           </div>
         )}
 
-        {/* Header né Dynamic Island */}
-        <div className="bg-white border-b border-slate-200/80 shadow-xs shrink-0 z-20" style={{ paddingTop: "max(var(--sat, 0px), 38px)" }}>
-          <div className="px-3.5 py-2 flex items-center justify-between gap-2">
-            <div className="flex items-center gap-2 min-w-0 flex-1">
+        {/* HEADER 2 TẦNG CHUẨN NÉ CAPSULE ZALO */}
+        <div className="bg-white border-b border-slate-200/80 shadow-xs shrink-0 z-20 select-none">
+          <div style={{ height: "max(var(--sat, 0px), 38px)", width: "100%" }} />
+
+          {/* TẦNG 1: Nút Back + Tiêu đề đầy đủ + Khối đệm né Zalo Capsule */}
+          <div className="px-3.5 pt-1.5 pb-2 flex items-center justify-between gap-3">
+            <div className="flex items-center gap-2.5 min-w-0 flex-1">
               <button
                 onClick={handleExitStudyView}
                 className="w-8 h-8 rounded-full bg-slate-100 hover:bg-slate-200 text-slate-700 flex items-center justify-center border border-slate-200 active:scale-90 transition cursor-pointer shrink-0"
@@ -510,29 +522,31 @@ export const AIHubSection = () => {
               >
                 <i className="bi bi-arrow-left font-bold text-sm"></i>
               </button>
+              <h6 className="m-0 font-black text-slate-900 text-[15px] truncate">
+                {tools.find((t) => t.id === activeTask.featureId)?.title}
+              </h6>
+            </div>
+            <div className="w-[105px] shrink-0 pointer-events-none" />
+          </div>
 
-              <div className="min-w-0 flex-1">
-                <h6 className="m-0 font-black text-slate-900 text-xs truncate leading-snug">
-                  {tools.find((t) => t.id === activeTask.featureId)?.title}
-                </h6>
-                <div className="flex items-center gap-1.5 mt-0.5">
-                  <span className="text-[10px] font-bold text-slate-400">
-                    Cấp độ: <b className="text-[#0045ce]">{activeTask.config?.difficulty || "Căn bản"}</b>
-                  </span>
-                  {isSavedBadge && (
-                    <span className="px-1.5 py-0.2 rounded-md bg-emerald-50 text-emerald-700 font-extrabold text-[9px] border border-emerald-200 shrink-0">
-                      ✓ Đã lưu
-                    </span>
-                  )}
-                </div>
-              </div>
+          {/* TẦNG 2: Cấp độ + Các nút chức năng ([Lưu bài], [Làm lại]) */}
+          <div className="px-3.5 pb-2.5 flex items-center justify-between gap-2 border-t border-slate-50 pt-2">
+            <div className="flex items-center gap-2 min-w-0 flex-1">
+              <span className="text-[11px] font-bold text-slate-500 bg-slate-50 px-2 py-0.5 rounded-md border border-slate-200 truncate">
+                Cấp độ: <b className="text-[#0045ce]">{activeTask.config?.difficulty || "Căn bản"}</b>
+              </span>
+              {isSavedBadge && (
+                <span className="px-1.5 py-0.5 rounded-md bg-emerald-50 text-emerald-700 font-extrabold text-[9px] border border-emerald-200 shrink-0">
+                  ✓ Đã lưu
+                </span>
+              )}
             </div>
 
             <div className="flex items-center gap-1.5 shrink-0">
               {!isSavedBadge && (
                 <button
                   onClick={(e) => handleSaveItem(e, activeTask)}
-                  className={`px-2.5 py-1.5 rounded-xl text-[10.5px] font-black border-0 cursor-pointer shadow-xs active:scale-95 transition flex items-center gap-1 ${
+                  className={`px-3 py-1.5 rounded-xl text-[11px] font-black border-0 cursor-pointer shadow-xs active:scale-95 transition flex items-center gap-1.5 ${
                     isDocOutput 
                       ? "bg-amber-400 text-slate-950 hover:bg-amber-500" 
                       : "bg-[#0045ce] text-white hover:bg-blue-700"
@@ -550,10 +564,10 @@ export const AIHubSection = () => {
                       e.stopPropagation();
                       setShowRestartMenu(!showRestartMenu);
                     }}
-                    className="px-2.5 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl text-[10.5px] font-black border border-slate-200 flex items-center gap-1 cursor-pointer active:scale-95 transition"
+                    className="px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl text-[11px] font-black border border-slate-200 flex items-center gap-1.5 cursor-pointer active:scale-95 transition"
                   >
                     <i className="bi bi-arrow-repeat text-[#0045ce]"></i>
-                    <span>Lại</span>
+                    <span>Làm lại</span>
                     <i className="bi bi-chevron-down text-[8px] text-slate-400"></i>
                   </button>
 
@@ -567,13 +581,13 @@ export const AIHubSection = () => {
                         onClick={() => handleRestart("default")}
                         className="w-full text-left py-1.5 px-2.5 rounded-xl text-xs font-bold text-slate-700 hover:bg-slate-50 border-0 bg-transparent flex items-center gap-2 cursor-pointer transition"
                       >
-                        <i className="bi bi-arrow-counterclockwise text-[#0045ce] text-xs"></i> Mặc định
+                        <i className="bi bi-arrow-counterclockwise text-[#0045ce] text-xs"></i> Lại từ đầu
                       </button>
                       <button
                         onClick={() => handleRestart("shuffle")}
                         className="w-full text-left py-1.5 px-2.5 rounded-xl text-xs font-bold text-slate-700 hover:bg-slate-50 border-0 bg-transparent flex items-center gap-2 cursor-pointer transition"
                       >
-                        <i className="bi bi-shuffle text-emerald-600 text-xs"></i> Xáo trộn vị trí
+                        <i className="bi bi-shuffle text-emerald-600 text-xs"></i> Đảo câu hỏi
                       </button>
                     </div>
                   )}
@@ -915,7 +929,13 @@ export const AIHubSection = () => {
           >
             <i className="bi bi-plus-lg text-[10px]"></i>
             <span>Tải tệp</span>
-            <input type="file" accept=".txt,.doc,.docx,.pdf" onChange={handleFileUpload} className="d-none" />
+            <input 
+              type="file" 
+              accept="application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document,text/plain,.pdf,.doc,.docx,.txt"
+              onClick={(e) => { e.target.value = null; }}
+              onChange={handleFileUpload} 
+              className="d-none" 
+            />
           </label>
         </div>
 

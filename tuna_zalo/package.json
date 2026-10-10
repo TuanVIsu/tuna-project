@@ -27,7 +27,7 @@
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
     "socket.io-client": "^4.8.3",
-    "zmp-sdk": "^2.9.4",
+    "zmp-sdk": "^2.53.0",
     "zmp-ui": "latest"
   },
   "devDependencies": {

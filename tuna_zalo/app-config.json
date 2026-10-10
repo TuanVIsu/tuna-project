@@ -11,6 +11,10 @@
     "hideIOSSafeAreaBottom": true,
     "hideAndroidBottomNavigationBar": false
   },
+  "listDomain": [
+    "https://tuna-project.onrender.com",
+    "https://cdnjs.cloudflare.com"
+  ],
   "listCSS": [],
   "listSyncJS": [],
   "listAsyncJS": [],

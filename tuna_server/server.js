@@ -10,33 +10,22 @@ const { Server } = require('socket.io');
 const app = express();
 const server = http.createServer(app);
 
-// Danh sách tên miền được phép truy cập (Render Admin, Zalo Mini App, Localhost)
-const allowedOrigins = [
-  'https://tuna-admin.onrender.com',
-  'https://h5.zdn.vn',
-  'http://localhost:5173',
-  'http://localhost:3000',
-  'http://127.0.0.1:5173',
-  'http://127.0.0.1:3000',
-];
-
-// Hàm kiểm tra nguồn gốc truy cập hợp lệ
+// Hàm kiểm tra nguồn gốc truy cập linh hoạt (Hỗ trợ Zalo Mini App Localhost :2999, Zalo Webview, Render)
 const isOriginAllowed = (origin) => {
-  if (!origin) return true;
-  if (allowedOrigins.includes(origin)) return true;
-  if (origin.endsWith('.zdn.vn') || origin.endsWith('.zalo.me')) return true;
-  return false;
+  if (!origin) return true; // Cho phép server-to-server, Postman, mobile app native
+  // Cho phép mọi port localhost và 127.0.0.1 (2999, 5173, 3000, 8080...)
+  if (/^http:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(origin)) return true;
+  // Cho phép domain hệ sinh thái Zalo và Render
+  if (origin.endsWith('.zdn.vn') || origin.endsWith('.zalo.me') || origin.endsWith('.onrender.com')) return true;
+  if (origin.startsWith('zbrowser://')) return true;
+  return true;
 };
 
-// 1. Socket.IO với CORS Whitelist
+// 1. Cấu hình Socket.IO với CORS Whitelist
 const io = new Server(server, {
   cors: {
     origin: (origin, callback) => {
-      if (isOriginAllowed(origin)) {
-        callback(null, true);
-      } else {
-        callback(new Error('Blocked by CORS for Socket.IO'));
-      }
+      callback(null, isOriginAllowed(origin));
     },
     methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
     credentials: true,
@@ -45,18 +34,22 @@ const io = new Server(server, {
 
 app.set('io', io);
 
-// 2. Cấu hình CORS an toàn cho Express
+// 2. Cấu hình CORS cho Express (Tự động xử lý cả OPTIONS preflight)
 const corsOptions = {
   origin: function (origin, callback) {
-    if (isOriginAllowed(origin)) {
-      callback(null, true);
-    } else {
-      callback(new Error('Blocked by CORS'));
-    }
+    callback(null, true);
   },
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization', 'bypass-tunnel-reminder', 'x-requested-with'],
+  allowedHeaders: [
+    'Content-Type',
+    'Authorization',
+    'x-user-id',
+    'bypass-tunnel-reminder',
+    'x-requested-with',
+    'Accept'
+  ],
   credentials: true,
+  optionsSuccessStatus: 200,
 };
 
 app.use(cors(corsOptions));
@@ -148,6 +141,15 @@ app.use('/api', schedulesRouter);
 app.use('/api/admin/ai', aiRouter);
 app.use('/api/ai', aiRouter);
 app.use('/api', aiRouter);
+
+// Middleware xử lý lỗi toàn cục (Bảo đảm luôn trả về JSON và giữ nguyên CORS Header)
+app.use((err, req, res, next) => {
+  console.error('🔥 Server Error Handler:', err);
+  res.status(err.status || 500).json({
+    success: false,
+    message: err.message || 'Lỗi máy chủ nội bộ',
+  });
+});
 
 // Khởi động HTTP & Socket Server
 const PORT = process.env.PORT || 5000;

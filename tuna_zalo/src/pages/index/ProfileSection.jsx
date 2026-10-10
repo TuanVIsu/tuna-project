@@ -221,7 +221,7 @@ export const ProfileSection = ({ currentUser: initialUser }) => {
               MSSV: <b className="text-[#0045ce]">{user?.student_code || "Chưa cập nhật"}</b>
             </p>
             <p className="text-[11px] text-slate-400 mb-0 truncate font-semibold">
-              Khoa: {user?.faculty || "Hệ Thống Thông Tin"}
+              Ngành: {user?.faculty || "Chưa xác nhận"}
             </p>
           </div>
         </div>

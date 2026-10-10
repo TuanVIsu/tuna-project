@@ -5,6 +5,35 @@ import { saveDocumentToDB } from "../services/aiService";
 const API_BASE = "https://tuna-project.onrender.com/api";
 const ITEMS_PER_PAGE = 10;
 
+// KẾT NỐI VÀ LƯU BLOB VÀO INDEXEDDB ĐỒNG BỘ VỚI DOCSSECTION
+const IDB_NAME = "TunaFileStorageDB";
+const IDB_STORE = "document_blobs";
+
+const openFileDB = () => {
+  return new Promise((resolve, reject) => {
+    const request = indexedDB.open(IDB_NAME, 1);
+    request.onupgradeneeded = () => {
+      request.result.createObjectStore(IDB_STORE);
+    };
+    request.onsuccess = () => resolve(request.result);
+    request.onerror = () => reject(request.error);
+  });
+};
+
+const saveBlobToIDB = async (id, blob) => {
+  try {
+    const db = await openFileDB();
+    const tx = db.transaction(IDB_STORE, "readwrite");
+    tx.objectStore(IDB_STORE).put(blob, id);
+    return new Promise((resolve) => {
+      tx.oncomplete = () => resolve(true);
+      tx.onerror = () => resolve(false);
+    });
+  } catch {
+    return false;
+  }
+};
+
 const SUB_CATEGORIES = {
   lecture_slide: { label: "Slide bài giảng", badge: "bg-blue-50 text-[#0045ce] border-blue-200", icon: "bi-file-earmark-easel" },
   exam_prep: { label: "Đề thi & Trắc nghiệm", badge: "bg-purple-50 text-purple-700 border-purple-200", icon: "bi-patch-question" },
@@ -233,30 +262,54 @@ export const LibraryModal = ({ isOpen, onClose, userMajor = "Hệ Thống Thông
     }
   };
 
+  // TẢI TỆP THỰC TẾ VÀ LƯU BLOB VÀO INDEXEDDB
   const handleDownloadAndSaveToDocs = async (doc) => {
     try {
       setDownloadingId(doc.id);
       const downloadUrl = getFullFileUrl(doc.downloadUrl || doc.fileUrl);
+      const newDocId = `lib_doc_${doc.id}_${Date.now()}`;
 
+      // 1. Tải dữ liệu nhị phân (Blob) trực tiếp từ server
+      if (downloadUrl && downloadUrl !== "#") {
+        try {
+          const res = await fetch(downloadUrl);
+          if (res.ok) {
+            const blob = await res.blob();
+            await saveBlobToIDB(newDocId, blob);
+          }
+        } catch (fetchErr) {
+          console.warn("Không thể lưu cache Blob vào IndexedDB:", fetchErr);
+        }
+      }
+
+      // 2. Định danh tên tệp kèm đuôi mở rộng chuẩn (.pdf / .docx)
+      const ext = (doc.type || "PDF").toLowerCase();
+      let properName = doc.title || "Tài liệu học tập";
+      if (!properName.toLowerCase().endsWith(`.${ext}`)) {
+        properName = `${properName}.${ext}`;
+      }
+
+      // 3. Lưu thông tin metadata vào DB
       const newDoc = {
-        id: `lib_doc_${doc.id}_${Date.now()}`,
-        name: doc.title,
+        id: newDocId,
+        name: properName,
         size: doc.size || "4.5 MB",
-        type: doc.type || "PDF",
+        type: (doc.type || "PDF").toUpperCase(),
         subject: doc.subject,
+        fileUrl: downloadUrl !== "#" ? downloadUrl : "",
         downloadUrl: downloadUrl !== "#" ? downloadUrl : "",
-        content: `Tài liệu môn học: ${doc.subject}\nTên bài giảng: ${doc.title}\nGiảng viên: ${doc.author}\n\nTài liệu học tập chính thống. Bấm "Mở tệp / Tải về" để mở toàn bộ tài liệu.`,
+        content: `Tài liệu môn học: ${doc.subject}\nTên bài giảng: ${doc.title}\nGiảng viên: ${doc.author}`,
         date: "Vừa tải từ Thư viện",
       };
 
       await saveDocumentToDB(newDoc);
-      showToast(`Đã lưu "${doc.title}" vào Không gian Tài liệu cá nhân!`);
+      showToast(`Đã lưu "${properName}" vào Tài liệu cá nhân!`);
 
       if (onNavigateToDocs) {
         setTimeout(() => {
           onClose();
           onNavigateToDocs();
-        }, 1200);
+        }, 1000);
       }
     } catch (err) {
       showToast("Lỗi khi tải tài liệu: " + err.message, "error");
