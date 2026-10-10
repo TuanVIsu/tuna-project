@@ -14,6 +14,7 @@ import {
   fetchTasksFromDB,
   saveTaskToDB,
   deleteTaskFromDB,
+  recordQuizAttempt,
 } from "../../services/aiService";
 
 const shuffleQuizCompletely = (questions) => {
@@ -665,15 +666,22 @@ export const AIHubSection = () => {
                         }
 
                         return (
-                          <button
-                            key={oIdx}
-                            disabled={hasAnswered}
-                            onClick={() => setSelectedAnswers((prev) => ({ ...prev, [idx]: optLetter }))}
-                            className={`w-100 text-start rounded-3 p-2.5 small font-bold transition border ${btnStyle}`}
-                            style={{ fontSize: "12px" }}
-                          >
-                            {opt}
-                          </button>
+<button
+  key={oIdx}
+  disabled={hasAnswered}
+  onClick={() => {
+    const isThisCorrect = correctLetter === optLetter;
+    setSelectedAnswers((prev) => ({ ...prev, [idx]: optLetter }));
+    // Ghi nhận trực tiếp vào bảng quiz_answer_attempts của user hiện tại
+    if (activeTask?.docName) {
+      recordQuizAttempt(activeTask.docName, isThisCorrect);
+    }
+  }}
+  className={`w-100 text-start rounded-3 p-2.5 small font-bold transition border ${btnStyle}`}
+  style={{ fontSize: "12px" }}
+>
+  {opt}
+</button> 
                         );
                       })}
                     </div>

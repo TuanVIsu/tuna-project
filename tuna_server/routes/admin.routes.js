@@ -1,7 +1,7 @@
 // routes/admin.routes.js
 const express = require('express');
 const router = express.Router();
-const pool = require('../config/db'); // Đảm bảo đúng file cấu hình database pool của bạn
+const pool = require('../config/db');
 
 router.get('/stats', async (req, res) => {
   try {
@@ -59,16 +59,20 @@ router.get('/stats', async (req, res) => {
         LIMIT 6
       `).catch(() => ({ rows: [] })),
 
-      // 11. Bảng vàng Streak từ bảng user_streaks JOIN users
+      // 11. Bảng vàng Streak từ bảng user_streaks JOIN users (theo Email / Mã sinh viên)
       pool.query(`
         SELECT 
           s.user_id, 
           s.current_streak, 
           s.longest_streak, 
-          COALESCE(u.name, 'Sinh viên ' || s.user_id) AS student_name, 
+          COALESCE(u.name, SPLIT_PART(s.user_id, '@', 1)) AS student_name, 
           COALESCE(u.class_name, 'Khoa CNTT') AS class_name
         FROM user_streaks s
-        LEFT JOIN users u ON u.student_code = s.user_id OR u.zalo_id = s.user_id
+        LEFT JOIN users u ON (
+          LOWER(u.email) = LOWER(s.user_id) 
+          OR u.student_code = s.user_id 
+          OR u.zalo_id = s.user_id
+        )
         ORDER BY s.current_streak DESC, s.longest_streak DESC 
         LIMIT 4
       `).catch(() => ({ rows: [] })),

@@ -1,47 +1,73 @@
 // tuna_zalo/src/services/aiService.js
 
-// Kết nối trực tiếp đến backend Render đã triển khai ổn định
+// Kết nối trực tiếp đến backend Render
 const API_BASE = "https://tuna-project.onrender.com/api";
 
-const getCommonHeaders = () => {
-  let token = localStorage.getItem("user_token") || localStorage.getItem("admin_token");
-  
-  // Tránh gửi chuỗi token rác hoặc null lên header
-  if (token === "null" || token === "undefined") {
-    token = null;
-  }
-
-  // Lấy định danh người dùng từ cache
-  let userId = "B2300001";
+// 1. HELPER ĐỊNH DANH NGƯỜI DÙNG ĐỘNG THEO EMAIL XÁC THỰC OTP
+export const getCurrentUserId = () => {
   try {
-    const rawUser = localStorage.getItem("user") || localStorage.getItem("tuna_current_user");
+    const rawUser = localStorage.getItem("user") || localStorage.getItem("user_info") || localStorage.getItem("tuna_current_user");
     if (rawUser) {
       const u = JSON.parse(rawUser);
-      userId = u.student_code || u.zalo_id || u.id || "B2300001";
+      const identity = u.email || u.user_email || u.student_code || u.zalo_id || u.id;
+      if (identity && identity !== "undefined" && identity !== "null") {
+        return String(identity).trim();
+      }
+    }
+
+    const verifiedEmail = localStorage.getItem("user_email") || localStorage.getItem("auth_email") || localStorage.getItem("tuna_user_id");
+    if (verifiedEmail && verifiedEmail !== "undefined" && verifiedEmail !== "null") {
+      return String(verifiedEmail).trim();
     }
   } catch (e) {}
 
+  return "guest_user";
+};
+
+export const getAuthHeaders = () => {
+  const userId = getCurrentUserId();
+  const token = localStorage.getItem("token") || localStorage.getItem("user_token") || localStorage.getItem("admin_token");
+
   const headers = {
     "Content-Type": "application/json",
-    "x-user-id": String(userId),
+    "x-user-id": userId,
   };
 
-  // Nếu có token thật thì gửi Bearer token, nếu không thì fallback token xác thực
-  if (token) {
+  if (token && token !== "null" && token !== "undefined") {
     headers["Authorization"] = `Bearer ${token}`;
-  } else {
-    headers["Authorization"] = `Bearer valid_session_${userId}`;
   }
 
   return headers;
 };
 
-// Hàm đọc response JSON an toàn, tránh văng cú pháp khi server bận
+const getCommonHeaders = () => getAuthHeaders();
+
+// 2. HELPER FETCH & PARSE JSON AN TOÀN
+const fetchWithTimeout = async (url, options = {}, timeoutMs = 60000) => {
+  const controller = new AbortController();
+  const id = setTimeout(() => controller.abort(), timeoutMs);
+
+  try {
+    const response = await fetch(url, {
+      ...options,
+      signal: controller.signal,
+    });
+    clearTimeout(id);
+    return response;
+  } catch (err) {
+    clearTimeout(id);
+    if (err.name === "AbortError") {
+      throw new Error("Máy chủ Render phản hồi quá lâu (hơn 60s). Vui lòng thử lại!");
+    }
+    throw new Error("Không thể kết nối đến máy chủ. Kiểm tra mạng hoặc chờ Render khởi động!");
+  }
+};
+
 const parseJsonResponse = async (res) => {
   const contentType = res.headers.get("content-type");
   if (!contentType || !contentType.includes("application/json")) {
     const rawText = await res.text();
-    throw new Error(`Server không trả về JSON hợp lệ (Mã lỗi ${res.status}). Vui lòng kiểm tra lại Backend!`);
+    throw new Error(`Server không trả về JSON hợp lệ (${res.status}). Vui lòng kiểm tra lại Backend!`);
   }
   return await res.json();
 };
@@ -56,9 +82,9 @@ export const computeContentHash = async (content) => {
 // ==================== QUẢN LÝ TÀI LIỆU ====================
 export const fetchDocumentsFromDB = async () => {
   try {
-    const res = await fetch(`${API_BASE}/documents`, {
+    const res = await fetchWithTimeout(`${API_BASE}/documents`, {
       headers: getCommonHeaders(),
-    });
+    }, 10000);
     if (res.ok) {
       const json = await parseJsonResponse(res);
       if (json.success && Array.isArray(json.data)) {
@@ -82,11 +108,11 @@ export const saveDocumentToDB = async (doc) => {
   } catch (e) {}
 
   try {
-    await fetch(`${API_BASE}/documents`, {
+    await fetchWithTimeout(`${API_BASE}/documents`, {
       method: "POST",
       headers: getCommonHeaders(),
       body: JSON.stringify(doc),
-    });
+    }, 15000);
   } catch (e) {}
 };
 
@@ -100,23 +126,21 @@ export const deleteDocumentFromDB = async (id) => {
   } catch (e) {}
 
   try {
-    await fetch(`${API_BASE}/documents/${id}`, { 
+    await fetchWithTimeout(`${API_BASE}/documents/${id}`, { 
       method: "DELETE",
       headers: getCommonHeaders(),
-    });
+    }, 15000);
   } catch (e) {}
 };
 
 // ==================== QUẢN LÝ LỊCH SỬ TÁC VỤ ====================
 export const fetchTasksFromDB = async () => {
   try {
-    const res = await fetch(`${API_BASE}/tasks`, {
+    const res = await fetchWithTimeout(`${API_BASE}/tasks`, {
       headers: getCommonHeaders(),
-    });
+    }, 10000);
 
-    // Nếu trả về lỗi 401 hoặc mã lỗi khác, chuyển qua đọc cache nội bộ
     if (res.status === 401) {
-      console.warn("API /tasks yêu cầu quyền đăng nhập mới, đọc cache local.");
       const local = localStorage.getItem("tuna_cached_tasks");
       return local ? JSON.parse(local) : [];
     }
@@ -144,11 +168,11 @@ export const saveTaskToDB = async (task) => {
   } catch (e) {}
 
   try {
-    await fetch(`${API_BASE}/tasks`, {
+    await fetchWithTimeout(`${API_BASE}/tasks`, {
       method: "POST",
       headers: getCommonHeaders(),
       body: JSON.stringify(task),
-    });
+    }, 15000);
   } catch (e) {}
 };
 
@@ -162,30 +186,30 @@ export const deleteTaskFromDB = async (id) => {
   } catch (e) {}
 
   try {
-    await fetch(`${API_BASE}/tasks/${id}`, { 
+    await fetchWithTimeout(`${API_BASE}/tasks/${id}`, { 
       method: "DELETE",
       headers: getCommonHeaders(),
-    });
+    }, 15000);
   } catch (e) {}
 };
 
 export const clearAllTasksFromDB = async () => {
   try {
     localStorage.removeItem("tuna_cached_tasks");
-    await fetch(`${API_BASE}/tasks`, { 
+    await fetchWithTimeout(`${API_BASE}/tasks`, { 
       method: "DELETE",
       headers: getCommonHeaders(),
-    });
+    }, 15000);
   } catch (e) {}
 };
 
-// ==================== KHO CACHE ====================
+// ==================== KHO CACHE POSTGRES ====================
 export const checkPostgresCache = async (hash, feature, requiredCount = 5, difficulty = "Căn bản") => {
   try {
     const url = `${API_BASE}/ai/cache?hash=${hash}&feature=${feature}_${difficulty}&limit=${requiredCount}`;
-    const res = await fetch(url, {
+    const res = await fetchWithTimeout(url, {
       headers: getCommonHeaders(),
-    });
+    }, 8000);
     if (!res.ok) return null;
     const result = await parseJsonResponse(res);
     
@@ -206,21 +230,20 @@ export const checkPostgresCache = async (hash, feature, requiredCount = 5, diffi
 
 export const savePostgresCache = async (hash, feature, payload, title, difficulty = "Căn bản") => {
   try {
-    await fetch(`${API_BASE}/ai/cache`, {
+    await fetchWithTimeout(`${API_BASE}/ai/cache`, {
       method: "POST",
       headers: getCommonHeaders(),
       body: JSON.stringify({ hash, feature: `${feature}_${difficulty}`, payload, title }),
-    });
+    }, 15000);
   } catch (e) {}
 };
 
 // ==================== GỌI GEMINI QUA BACKEND ====================
 const callGemini = async (prompt, isJson = false, featureType = "ai_feature") => {
   try {
-    const currentUser = JSON.parse(localStorage.getItem("user_info") || localStorage.getItem("user") || "{}");
-    const userId = currentUser.zalo_id || currentUser.student_code || "anonymous";
+    const userId = getCurrentUserId();
 
-    const response = await fetch(`${API_BASE}/ai/generate`, {
+    const response = await fetchWithTimeout(`${API_BASE}/ai/generate`, {
       method: "POST",
       headers: getCommonHeaders(),
       body: JSON.stringify({ 
@@ -229,7 +252,7 @@ const callGemini = async (prompt, isJson = false, featureType = "ai_feature") =>
         userId, 
         featureType 
       }),
-    });
+    }, 60000);
 
     const data = await parseJsonResponse(response);
     if (!response.ok || !data.success) {
@@ -243,8 +266,6 @@ const callGemini = async (prompt, isJson = false, featureType = "ai_feature") =>
 };
 
 // ==================== CÁC HÀM XỬ LÝ TÁC VỤ AI ====================
-
-// 1. Tạo trắc nghiệm
 export const generateQuizFromDoc = async (content, numQuestions = 5, difficulty = "Căn bản") => {
   const cleanContent = (content || "").slice(0, 15000);
   const targetCount = Number(numQuestions) || 5;
@@ -276,7 +297,6 @@ ${cleanContent}
   return Array.isArray(parsed) ? parsed : [];
 };
 
-// 2. Tạo thẻ ghi nhớ (Flashcards)
 export const generateFlashcardsFromDoc = async (content, numCards = 5, difficulty = "Căn bản") => {
   const cleanContent = (content || "").slice(0, 15000);
   const targetCount = Number(numCards) || 5;
@@ -298,16 +318,34 @@ ${cleanContent}
   return Array.isArray(parsed) ? parsed : [];
 };
 
-// 3. Tóm tắt văn bản
 export const summarizeFromDoc = async (content) => {
   const cleanContent = (content || "").slice(0, 15000);
   const prompt = `Hãy tóm tắt có hệ thống tài liệu sau:\n1. Tổng quan ngắn gọn.\n2. Các luận điểm trọng tâm (Gạch đầu dòng rõ ràng).\n3. Kết luận và ý nghĩa thực tiễn.\n\nTài liệu:\n"""${cleanContent}"""`;
   return await callGemini(prompt, false, "document_summary");
 };
 
-// 4. Dịch thuật
 export const translateFromDoc = async (content, targetLang = "Tiếng Việt") => {
   const cleanContent = (content || "").slice(0, 15000);
   const prompt = `Dịch chuẩn xác tài liệu sau sang ${targetLang}, giữ nguyên các định dạng cấu trúc và thuật ngữ kỹ thuật chuyên ngành:\n\n"""${cleanContent}"""`;
   return await callGemini(prompt, false, "document_translation");
+};
+
+// 3. GHI NHẬN KẾT QUẢ BÀI TẬP VỀ DB (ĐÓNG KÍN VÒNG LẶP SWRR)
+export const recordQuizAttempt = async (subject, isCorrect) => {
+  try {
+    const userId = getCurrentUserId();
+    if (userId === "guest_user") return;
+
+    await fetch(`${API_BASE}/exams/attempt`, {
+      method: "POST",
+      headers: getAuthHeaders(),
+      body: JSON.stringify({
+        userId,
+        subject,
+        isCorrect: Boolean(isCorrect),
+      }),
+    });
+  } catch (e) {
+    console.warn("Không thể lưu kết quả bài tập:", e.message);
+  }
 };

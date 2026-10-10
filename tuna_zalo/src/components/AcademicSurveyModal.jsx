@@ -3,6 +3,31 @@ import React, { useState, useEffect, useCallback } from "react";
 
 const API_BASE = "https://tuna-project.onrender.com/api";
 
+const DEFAULT_FALLBACK_SUBJECTS = {
+  "Hệ Thống Thông Tin": [
+    { subjectName: "Cơ sở dữ liệu", credits: 3 },
+    { subjectName: "Phân tích và thiết kế HTTT", credits: 3 },
+    { subjectName: "Hệ quản trị CSDL", credits: 3 },
+    { subjectName: "Khai phá dữ liệu", credits: 3 },
+  ],
+  "Công Nghệ Thông Tin": [
+    { subjectName: "Cấu trúc dữ liệu và giải thuật", credits: 3 },
+    { subjectName: "Lập trình hướng đối tượng", credits: 3 },
+    { subjectName: "Mạng máy tính", credits: 3 },
+    { subjectName: "Hệ điều hành", credits: 3 },
+  ],
+  "Kỹ Thuật Phần Mềm": [
+    { subjectName: "Nhập môn công nghệ phần mềm", credits: 3 },
+    { subjectName: "Kiểm thử phần mềm", credits: 3 },
+    { subjectName: "Kiến trúc và thiết kế phần mềm", credits: 3 },
+  ],
+  "An Ninh Mạng": [
+    { subjectName: "An toàn thông tin", credits: 3 },
+    { subjectName: "Mật mã học cơ sở", credits: 3 },
+    { subjectName: "Phòng thủ mạng máy tính", credits: 3 },
+  ],
+};
+
 export const AcademicSurveyModal = ({ isOpen, onSave, onDismiss }) => {
   const [major, setMajor] = useState("Hệ Thống Thông Tin");
   const [year, setYear] = useState(1);
@@ -38,7 +63,7 @@ export const AcademicSurveyModal = ({ isOpen, onSave, onDismiss }) => {
         }
       );
       const json = await res.json();
-      if (json.success && Array.isArray(json.data)) {
+      if (json.success && Array.isArray(json.data) && json.data.length > 0) {
         const normalized = json.data.map((item) => ({
           subjectName: item.subject_name || item.subjectName || item.title || "Môn học đại cương",
           credits: item.credits || 3,
@@ -52,9 +77,25 @@ export const AcademicSurveyModal = ({ isOpen, onSave, onDismiss }) => {
           }
         });
         setSubjectLevels(init);
+      } else {
+        // Fallback danh sách môn nền tảng khi CSDL chưa có dữ liệu của kỳ này
+        const fallback = DEFAULT_FALLBACK_SUBJECTS[selectedMajor] || DEFAULT_FALLBACK_SUBJECTS["Hệ Thống Thông Tin"];
+        setDbSubjects(fallback);
+        const init = {};
+        fallback.forEach((item) => {
+          init[item.subjectName] = "medium";
+        });
+        setSubjectLevels(init);
       }
     } catch (err) {
-      console.error("Lỗi nạp môn học:", err);
+      console.warn("Lỗi nạp môn học, dùng danh mục dự phòng:", err.message);
+      const fallback = DEFAULT_FALLBACK_SUBJECTS[selectedMajor] || DEFAULT_FALLBACK_SUBJECTS["Hệ Thống Thông Tin"];
+      setDbSubjects(fallback);
+      const init = {};
+      fallback.forEach((item) => {
+        init[item.subjectName] = "medium";
+      });
+      setSubjectLevels(init);
     } finally {
       setIsLoadingSubjects(false);
     }
@@ -135,13 +176,13 @@ export const AcademicSurveyModal = ({ isOpen, onSave, onDismiss }) => {
     showToast(`Đã thêm môn "${trimmed}" vào danh sách!`);
   };
 
-  const handleConfirm = () => {
+  const handleConfirm = async () => {
     const selectedSubs = Object.keys(subjectLevels).filter(
       (s) => s && s.trim() !== "" && s !== "undefined"
     );
 
     if (selectedSubs.length === 0) {
-      showToast("Vui lòng chọn ít nhất 1 môn học hợp lệ để tạo lộ trình!", "error");
+      showToast("Vui lòng chọn ít nhất 1 môn học để tạo lộ trình!", "error");
       return;
     }
 
@@ -165,8 +206,9 @@ export const AcademicSurveyModal = ({ isOpen, onSave, onDismiss }) => {
 
     localStorage.setItem("user_academic_profile", JSON.stringify(studyPlan));
     showToast("Đã lưu kế hoạch và lộ trình học tập cá nhân!");
+
     if (onSave) {
-      setTimeout(() => onSave(studyPlan), 600);
+      setTimeout(() => onSave(studyPlan), 500);
     }
   };
 
@@ -201,7 +243,7 @@ export const AcademicSurveyModal = ({ isOpen, onSave, onDismiss }) => {
         </div>
       )}
 
-      {/* Header Bar */}
+      {/* Header Bar 2 tầng né Capsule Zalo */}
       <div className="bg-[#0045ce] text-white sticky-top shadow-xs select-none flex-shrink-0">
         <div style={{ height: "max(var(--sat, 0px), 38px)", width: "100%" }} />
 
@@ -219,7 +261,7 @@ export const AcademicSurveyModal = ({ isOpen, onSave, onDismiss }) => {
                 Kế hoạch & Lộ trình học tập
               </h6>
               <span className="text-blue-100/80 text-[11px] font-medium block truncate mt-0.5">
-                Dữ liệu đồng bộ trực tiếp từ CSDL Đào tạo
+                Thiết lập mục tiêu & thuật toán phân bổ ca tự học
               </span>
             </div>
           </div>
@@ -227,9 +269,9 @@ export const AcademicSurveyModal = ({ isOpen, onSave, onDismiss }) => {
         </div>
       </div>
 
-      <div className="p-3.5 space-y-4 flex-1 pb-20 max-w-lg mx-auto w-full">
+      <div className="p-3.5 space-y-4 flex-1 pb-24 max-w-lg mx-auto w-full">
         <div className="flex items-center justify-between px-1">
-          <span className="text-xs font-bold text-slate-500">Thiết lập lộ trình cá nhân</span>
+          <span className="text-xs font-bold text-slate-500">Thông số lộ trình</span>
           <button
             onClick={handleConfirm}
             className="px-3.5 py-1.5 rounded-full bg-amber-400 hover:bg-amber-500 text-slate-950 font-black text-xs border-0 shadow-xs active:scale-95 transition cursor-pointer flex items-center gap-1"
@@ -314,15 +356,15 @@ export const AcademicSurveyModal = ({ isOpen, onSave, onDismiss }) => {
           <div className="flex items-center justify-between">
             <label className="font-extrabold text-slate-900 text-xs flex items-center gap-1.5 m-0">
               <span className="w-5 h-5 rounded-full bg-blue-100 text-[#0045ce] flex items-center justify-center text-[10.5px] font-black">3</span>
-              Môn học theo khung ({Object.keys(subjectLevels).filter((k) => k !== "undefined").length} môn đã chọn):
+              Môn học cần ôn tập ({Object.keys(subjectLevels).filter((k) => k !== "undefined").length} môn đã chọn):
             </label>
-            <span className="text-[10px] text-slate-400 font-bold">Lấy từ CSDL</span>
+            <span className="text-[10px] text-slate-400 font-bold">CTĐT</span>
           </div>
 
           {isLoadingSubjects ? (
             <div className="py-6 text-center text-xs font-bold text-slate-400">
               <span className="spinner-border spinner-border-sm text-[#0045ce] me-2"></span>
-              Đang tải danh sách môn từ cơ sở dữ liệu...
+              Đang tải danh sách môn...
             </div>
           ) : (
             <div className="space-y-2 max-h-56 overflow-y-auto pr-1">
@@ -405,7 +447,7 @@ export const AcademicSurveyModal = ({ isOpen, onSave, onDismiss }) => {
           <div className="bg-slate-50 p-2.5 rounded-2xl border border-slate-200/80 flex items-center justify-between">
             <div>
               <span className="text-xs font-black text-slate-800 block">GPA tích lũy hiện tại:</span>
-              <span className="text-[10px] text-slate-400 font-medium">Hệ thống sẽ bù trừ trọng số dựa trên khoảng cách điểm</span>
+              <span className="text-[10px] text-slate-400 font-medium">Bù trừ trọng số theo khoảng cách điểm mục tiêu</span>
             </div>
             <div className="flex items-center gap-1">
               <input

@@ -193,5 +193,48 @@ router.delete('/admin/:id', authenticateToken, async (req, res) => {
     res.status(500).json({ success: false, message: err.message });
   }
 });
+// Thêm vào routes/exams.routes.js
+
+// 6. Ghi nhận nỗ lực làm bài tập / trắc nghiệm (Đóng kín vòng lặp thuật toán SWRR)
+router.post('/attempt', async (req, res) => {
+  try {
+    const userEmail = String(
+      req.headers['x-user-id'] || 
+      req.user?.email || 
+      req.body?.userId || 
+      'guest_user'
+    ).trim();
+
+    const { subject, isCorrect, examId = null } = req.body;
+
+    if (!subject) {
+      return res.status(400).json({ success: false, message: 'Thiếu thông tin môn học' });
+    }
+
+    // Đảm bảo bảng tồn tại trước khi chèn
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS quiz_answer_attempts (
+        id SERIAL PRIMARY KEY,
+        user_id VARCHAR(255) NOT NULL,
+        subject VARCHAR(255) NOT NULL,
+        is_correct BOOLEAN NOT NULL DEFAULT FALSE,
+        exam_id INT,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      )
+    `).catch(() => {});
+
+    await pool.query(
+      `INSERT INTO quiz_answer_attempts (user_id, subject, is_correct, exam_id)
+       VALUES ($1, $2, $3, $4)`,
+      [userEmail, String(subject).trim(), Boolean(isCorrect), examId ? Number(examId) : null]
+    );
+
+    res.json({ success: true, message: 'Đã ghi nhận kết quả bài làm thành công!' });
+  } catch (err) {
+    console.error("Lỗi ghi nhận attempt:", err.message);
+    res.json({ success: false, error: err.message });
+  }
+});
+
 
 module.exports = router;

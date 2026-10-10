@@ -1,169 +1,133 @@
-// routes/streak.routes.js
+// routes/tasks.routes.js
 const express = require('express');
 const router = express.Router();
 const pool = require('../config/db');
 
-// 1. API BẢNG XẾP HẠNG THỰC TẾ TỪ CSDL
-const getLeaderboardHandler = async (req, res) => {
+// Trích xuất Email động từ Header (x-user-id) hoặc Query/Body
+const extractUserEmail = (req) => {
+  return String(
+    req.headers['x-user-id'] || 
+    req.user?.email || 
+    req.query.userId || 
+    req.query.email || 
+    req.body?.userId || 
+    req.body?.email || 
+    'guest_user'
+  ).trim();
+};
+
+// 1. LẤY DANH SÁCH LỊCH SỬ TÁC VỤ CỦA TÀI KHOẢN EMAIL
+router.get('/', async (req, res) => {
+  const userEmail = extractUserEmail(req);
   try {
     const query = `
       SELECT 
-        s.user_id,
-        COALESCE(u.name, 'Sinh viên ' || SUBSTRING(s.user_id FROM 1 FOR 6)) AS user_name,
-        COALESCE(s.current_streak, 0) AS streak,
-        COALESCE(s.xp_points, 0) AS xp
-      FROM user_streaks s
-      LEFT JOIN users u ON (
-        s.user_id = u.student_code 
-        OR s.user_id = u.zalo_id 
-        OR s.user_id = u.id::TEXT
-      )
-      ORDER BY s.xp_points DESC, s.current_streak DESC
-      LIMIT 25;
+        id, 
+        user_id AS "userId",
+        feature_id AS "featureId", 
+        doc_name AS "docName", 
+        status, 
+        result_data AS "resultData",
+        config,
+        error_message AS "errorMessage",
+        COALESCE(is_saved, false) AS "isSaved",
+        COALESCE(is_doc_saved, false) AS "isDocSaved",
+        COALESCE(hidden_in_history, false) AS "hiddenInHistory",
+        created_at AS "createdAt",
+        TO_CHAR(created_at, 'HH24:MI') AS "time"
+      FROM ai_tasks
+      WHERE user_id = $1 OR user_id = 'guest_user'
+      ORDER BY created_at DESC
     `;
-    const { rows } = await pool.query(query).catch(() => ({ rows: [] }));
-    return res.json({ success: true, leaderboard: rows });
+    const { rows } = await pool.query(query, [userEmail]).catch(() => ({ rows: [] }));
+    res.json({ success: true, data: rows });
   } catch (err) {
-    console.error("Lỗi truy vấn Leaderboard từ DB:", err.message);
-    return res.json({ success: true, leaderboard: [] });
+    console.error('Lỗi GET /api/tasks:', err.message);
+    res.json({ success: true, data: [] });
   }
-};
+});
 
-router.get('/leaderboard', getLeaderboardHandler);
-router.get('/streak/leaderboard', getLeaderboardHandler);
+// 2. LƯU HOẶC CẬP NHẬT TÁC VỤ AI
+router.post('/', async (req, res) => {
+  const userEmail = extractUserEmail(req);
+  const {
+    id, featureId, docName, status, resultData,
+    config, errorMessage, isSaved, isDocSaved, hiddenInHistory
+  } = req.body;
 
-// 2. API LẤY CHI TIẾT STREAK TỪ CSDL (CHỐNG LỖI 500 KHI CHƯA CÓ BẢN GHI)
-const getStreakDetailHandler = async (req, res) => {
   try {
-    const { userId } = req.params;
-    if (!userId || userId === 'undefined') {
-      return res.json({
-        success: true,
-        current_streak: 1,
-        longest_streak: 1,
-        xp_points: 0,
-        streak_freeze: 1,
-        activeDays: [],
-      });
-    }
+    const taskId = String(id || `task_${Date.now()}`);
 
-    let userRes = await pool.query(
-      `SELECT current_streak, longest_streak, xp_points, streak_freeze_count, last_active_date 
-       FROM user_streaks WHERE user_id = $1`,
-      [userId]
-    ).catch(() => ({ rows: [] }));
+    const query = `
+      INSERT INTO ai_tasks (
+        id, user_id, feature_id, doc_name, status, result_data,
+        config, error_message, is_saved, is_doc_saved, hidden_in_history, created_at
+      )
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, CURRENT_TIMESTAMP)
+      ON CONFLICT (id) DO UPDATE SET
+        status = EXCLUDED.status,
+        result_data = COALESCE(EXCLUDED.result_data, ai_tasks.result_data),
+        config = COALESCE(EXCLUDED.config, ai_tasks.config),
+        error_message = COALESCE(EXCLUDED.error_message, ai_tasks.error_message),
+        is_saved = COALESCE(EXCLUDED.is_saved, ai_tasks.is_saved),
+        is_doc_saved = COALESCE(EXCLUDED.is_doc_saved, ai_tasks.is_doc_saved),
+        hidden_in_history = COALESCE(EXCLUDED.hidden_in_history, ai_tasks.hidden_in_history)
+      RETURNING *
+    `;
 
-    // Tự khởi tạo trong DB nếu là sinh viên mới
-    if (userRes.rows.length === 0) {
-      await pool.query(
-        `INSERT INTO user_streaks (user_id, current_streak, longest_streak, xp_points, last_active_date)
-         VALUES ($1, 1, 1, 0, CURRENT_DATE) ON CONFLICT (user_id) DO NOTHING`,
-        [userId]
-      ).catch(() => {});
-      userRes = await pool.query(`SELECT * FROM user_streaks WHERE user_id = $1`, [userId]).catch(() => ({ rows: [] }));
-    }
+    const values = [
+      taskId,
+      userEmail,
+      featureId || 'quiz',
+      docName || 'Tài liệu học tập',
+      status || 'done',
+      typeof resultData === 'object' ? JSON.stringify(resultData) : resultData,
+      typeof config === 'object' ? JSON.stringify(config) : config,
+      errorMessage || '',
+      Boolean(isSaved),
+      Boolean(isDocSaved),
+      Boolean(hiddenInHistory)
+    ];
 
-    // Lấy 7 ngày học tập gần nhất từ bảng streak_logs
-    const logsRes = await pool.query(
-      `SELECT TO_CHAR(activity_date, 'YYYY-MM-DD') AS act_date 
-       FROM streak_logs 
-       WHERE user_id = $1 AND activity_date >= CURRENT_DATE - INTERVAL '6 days'
-       ORDER BY activity_date ASC`,
-      [userId]
-    ).catch(() => ({ rows: [] }));
-
-    return res.json({
-      success: true,
-      current_streak: userRes.rows[0]?.current_streak || 1,
-      longest_streak: userRes.rows[0]?.longest_streak || 1,
-      xp_points: userRes.rows[0]?.xp_points || 0,
-      streak_freeze: userRes.rows[0]?.streak_freeze_count || 1,
-      activeDays: logsRes.rows.map(r => r.act_date),
+    const result = await pool.query(query, values).catch(async () => {
+      // Fallback nếu schema cũ chưa có cột user_id
+      return await pool.query(
+        `INSERT INTO ai_tasks (id, feature_id, doc_name, status, result_data)
+         VALUES ($1, $2, $3, $4, $5)
+         ON CONFLICT (id) DO UPDATE SET status = EXCLUDED.status, result_data = EXCLUDED.result_data
+         RETURNING *`,
+        [taskId, featureId, docName, status, typeof resultData === 'object' ? JSON.stringify(resultData) : resultData]
+      );
     });
+
+    res.json({ success: true, data: result.rows[0] });
   } catch (err) {
-    console.error("Lỗi lấy chi tiết streak từ DB:", err.message);
-    // Trả về dữ liệu an toàn để UI không bị sập hay mất CORS
-    return res.json({
-      success: true,
-      current_streak: 1,
-      longest_streak: 1,
-      xp_points: 0,
-      streak_freeze: 1,
-      activeDays: [],
-    });
+    console.error('Lỗi POST /api/tasks:', err.message);
+    res.status(500).json({ success: false, message: err.message });
   }
-};
+});
 
-router.get('/:userId', getStreakDetailHandler);
-router.get('/streak/:userId', getStreakDetailHandler);
-
-// 3. API CHECK-IN & GHI NHẬN XP
-const checkInHandler = async (req, res) => {
+// 3. XÓA TÁC VỤ KHỎI LỊCH SỬ
+router.delete('/:id', async (req, res) => {
   try {
-    const { userId, xpBonus = 20 } = req.body;
-    if (!userId || userId === 'undefined') {
-      return res.status(400).json({ success: false, message: 'Thiếu userId' });
-    }
-
-    const today = new Date().toISOString().slice(0, 10);
-
-    await pool.query(
-      `INSERT INTO streak_logs (user_id, activity_date, xp_earned) 
-       VALUES ($1, $2, $3)
-       ON CONFLICT (user_id, activity_date) DO NOTHING`,
-      [userId, today, xpBonus]
-    ).catch(() => {});
-
-    const checkUser = await pool.query(`SELECT * FROM user_streaks WHERE user_id = $1`, [userId]).catch(() => ({ rows: [] }));
-
-    let newStreak = 1;
-    let newLongest = 1;
-
-    if (checkUser.rows.length > 0) {
-      const u = checkUser.rows[0];
-      const lastDate = u.last_active_date ? new Date(u.last_active_date).toISOString().slice(0, 10) : null;
-      const yesterday = new Date();
-      yesterday.setDate(yesterday.getDate() - 1);
-      const yesterdayStr = yesterday.toISOString().slice(0, 10);
-
-      if (lastDate === today) {
-        newStreak = u.current_streak || 1;
-      } else if (lastDate === yesterdayStr) {
-        newStreak = (u.current_streak || 0) + 1;
-      } else {
-        newStreak = 1;
-      }
-
-      newLongest = Math.max(newStreak, u.longest_streak || 0);
-
-      await pool.query(
-        `UPDATE user_streaks 
-         SET current_streak = $1, longest_streak = $2, xp_points = COALESCE(xp_points, 0) + $3, last_active_date = $4, updated_at = CURRENT_TIMESTAMP
-         WHERE user_id = $5`,
-        [newStreak, newLongest, xpBonus, today, userId]
-      ).catch(() => {});
-    } else {
-      await pool.query(
-        `INSERT INTO user_streaks (user_id, current_streak, longest_streak, xp_points, last_active_date)
-         VALUES ($1, 1, 1, $2, $3)`,
-        [userId, xpBonus, today]
-      ).catch(() => {});
-    }
-
-    const updated = await pool.query(`SELECT * FROM user_streaks WHERE user_id = $1`, [userId]).catch(() => ({ rows: [] }));
-
-    return res.json({
-      success: true,
-      current_streak: updated.rows[0]?.current_streak || 1,
-      xp_points: updated.rows[0]?.xp_points || xpBonus,
-    });
+    await pool.query(`DELETE FROM ai_tasks WHERE id = $1`, [req.params.id]);
+    res.json({ success: true, message: 'Đã xóa tác vụ thành công!' });
   } catch (err) {
-    console.error("Lỗi ghi nhận check-in:", err.message);
-    return res.json({ success: true, current_streak: 1, xp_points: 20 });
+    res.status(500).json({ success: false, message: err.message });
   }
-};
+});
 
-router.post('/check-in', checkInHandler);
-router.post('/streak/check-in', checkInHandler);
+// 4. XÓA TOÀN BỘ LỊCH SỬ CỦA TÀI KHOẢN
+router.delete('/', async (req, res) => {
+  const userEmail = extractUserEmail(req);
+  try {
+    await pool.query(`DELETE FROM ai_tasks WHERE user_id = $1`, [userEmail]).catch(async () => {
+      await pool.query(`DELETE FROM ai_tasks`);
+    });
+    res.json({ success: true, message: 'Đã dọn dẹp toàn bộ lịch sử tác vụ!' });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
 
 module.exports = router;
