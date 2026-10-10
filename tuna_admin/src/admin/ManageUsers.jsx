@@ -173,19 +173,23 @@ export const ManageUsers = () => {
   };
 
   // Xóa tài khoản
-  const handleDeleteUser = async (userId, name) => {
+const handleDeleteUser = async (userId, name) => {
     setActiveMenuData(null);
-    if (!window.confirm(`Xác nhận xóa tài khoản "${name}" khỏi hệ thống?`)) return;
+    if (!window.confirm(`Xác nhận xóa vĩnh viễn tài khoản "${name}" khỏi cơ sở dữ liệu?`)) return;
+
     try {
       const d = await safeFetchUsersApi(`/${userId}`, {
         method: "DELETE",
       });
       if (d.success) {
-        setUsers((prev) => prev.filter((u) => u.id !== userId));
-        setPendingUsers((prev) => prev.filter((u) => u.id !== userId));
+        alert("Đã xóa sinh viên thành công!");
+        // Gọi lại cả 2 API để đồng bộ dữ liệu chuẩn xác từ PostgreSQL
+        await Promise.all([fetchUsers(), fetchPendingUsers()]);
+      } else {
+        alert(d.message || "Không thể xóa sinh viên này!");
       }
     } catch (e) {
-      alert("Lỗi khi xóa người dùng");
+      alert("Lỗi kết nối máy chủ khi xóa");
     }
   };
 

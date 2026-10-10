@@ -12,6 +12,7 @@ const extractUserEmail = (req) => {
   return String(
     req.headers['x-user-id'] || 
     req.user?.email || 
+    req.query.identifier ||
     req.query.userId || 
     req.query.email || 
     req.body?.userId || 
@@ -296,62 +297,77 @@ router.delete('/admin/:id', authenticateToken, async (req, res) => {
 });
 
 // =============================================================================
-// 4. DÀNH CHO ZALO MINI APP (LẤY LỊCH HỌC SINH VIÊN QUA EMAIL / ZALO ID / MSSV)
+// 4. DÀNH CHO ZALO MINI APP (LẤY LỊCH HỌC SINH VIÊN - KIỂM TRA CHẶT CHẼ PHÊ DUYỆT)
 // =============================================================================
 router.get('/student-schedule', async (req, res) => {
-  const { studentCode, zaloId, month, year } = req.query;
-  const currentIdentity = extractUserEmail(req);
+  const { studentCode, zaloId, identifier, month, year } = req.query;
+  const currentIdentity = (identifier || studentCode || zaloId || extractUserEmail(req) || '').trim();
 
   try {
-    let userQuery = `
-      SELECT id, zalo_id, faculty, class_name, student_code, email,
-             COALESCE(is_verified, false) AS "isVerified",
-             COALESCE(verification_status, 'pending') AS "verificationStatus"
-      FROM users 
-      WHERE 1=1
-    `;
-    let userParams = [];
-
-    if (currentIdentity && currentIdentity !== 'guest_user') {
-      userParams.push(currentIdentity);
-      userQuery += ` AND (LOWER(email) = LOWER($1) OR student_code = $1 OR zalo_id = $1)`;
-    } else if (studentCode && studentCode !== 'undefined' && studentCode.trim() !== '') {
-      userParams.push(studentCode.trim());
-      userQuery += ` AND student_code = $1`;
-    } else if (zaloId && zaloId !== 'undefined' && zaloId.trim() !== '') {
-      userParams.push(String(zaloId).trim());
-      userQuery += ` AND zalo_id = $1`;
+    // Nếu không có định danh người dùng
+    if (!currentIdentity || currentIdentity === 'guest_user') {
+      return res.json({
+        success: true,
+        data: [],
+        isPending: true,
+        verificationStatus: 'pending',
+        message: 'Vui lòng hoàn tất xác thực email để truy cập thời khóa biểu!',
+      });
     }
 
-    const userRes = await pool.query(userQuery, userParams).catch(() => ({ rows: [] }));
+    // 1. Tìm thông tin người dùng trong CSDL
+    const userRes = await pool.query(
+      `SELECT id, zalo_id, faculty, class_name, student_code, email,
+              COALESCE(is_verified, false) AS "isVerified",
+              COALESCE(verification_status, 'pending') AS "verificationStatus"
+       FROM users 
+       WHERE student_code = $1 
+          OR zalo_id = $1 
+          OR LOWER(COALESCE(email, '')) = LOWER($1) 
+          OR id::TEXT = $1 
+       LIMIT 1`,
+      [currentIdentity]
+    );
 
     if (userRes.rows.length === 0) {
       return res.json({
         success: true,
         data: [],
-        message: 'Không tìm thấy hồ sơ sinh viên.',
+        isPending: true,
+        verificationStatus: 'pending',
+        message: 'Hồ sơ của bạn đang chờ hệ thống phê duyệt để xem thời khóa biểu chính thức.',
       });
     }
 
     const user = userRes.rows[0];
 
-    // Chỉ chặn nếu tài khoản bị từ chối chính thức
+    // 2. CHẶN NẾU CHƯA ĐƯỢC DUYỆT (PENDING HOẶC REJECTED)
     if (user.verificationStatus === 'rejected') {
       return res.json({
         success: true,
         data: [],
         isPending: true,
         verificationStatus: 'rejected',
-        message: 'Tài khoản của bạn đã bị từ chối truy cập thời khóa biểu!',
+        message: 'Yêu cầu vào lớp của bạn đã bị từ chối bởi Quản trị viên.',
       });
     }
 
+    if (user.verificationStatus === 'pending' || !user.isVerified) {
+      return res.json({
+        success: true,
+        data: [],
+        isPending: true,
+        verificationStatus: 'pending',
+        message: 'Hồ sơ của bạn đang chờ hệ thống phê duyệt để xem thời khóa biểu chính thức của lớp.',
+      });
+    }
+
+    // 3. ĐÃ ĐƯỢC DUYỆT (APPROVED) -> NẠP LỊCH HỌC CHÍNH THỨC
     const facultyMajor = user.faculty || 'Hệ Thống Thông Tin';
     const className = user.class_name;
     const cohortMatch = (className || '').match(/K?(\d{2})/i) || (user.student_code || '').match(/(\d{2})/);
     const cohort = cohortMatch ? `K${cohortMatch[1]}` : 'K23';
 
-    // Truy vấn lịch học nới lỏng
     let scheduleQuery = `
       SELECT 
         id,
@@ -386,6 +402,7 @@ router.get('/student-schedule', async (req, res) => {
       success: true,
       data: rows,
       isPending: false,
+      verificationStatus: 'approved',
       studentInfo: {
         studentCode: user.student_code,
         faculty: facultyMajor,
@@ -394,6 +411,7 @@ router.get('/student-schedule', async (req, res) => {
       },
     });
   } catch (err) {
+    console.error("Lỗi GET /student-schedule:", err.message);
     res.json({ success: true, data: [] });
   }
 });

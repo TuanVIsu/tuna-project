@@ -45,25 +45,33 @@ export const ScheduleModal = ({ isOpen, onClose }) => {
   const [teacher, setTeacher] = useState("");
   const [category, setCategory] = useState("study");
 
-  const fetchStudentSchedules = async () => {
+const fetchStudentSchedules = async () => {
     setLoading(true);
     setPendingNotice(null);
     try {
-      const user = JSON.parse(localStorage.getItem("user") || "{}");
-      const studentCode = user.student_code || localStorage.getItem("tuna_user_id") || "B2300001";
-      const zaloId = user.zalo_id || "";
+      // 1. Lấy định danh thực tế của tài khoản hiện tại (Email hoặc MSSV)
+      let currentIdentifier = "";
+      try {
+        const u = JSON.parse(localStorage.getItem("user") || localStorage.getItem("user_info") || "{}");
+        currentIdentifier = u.email || u.student_code || u.zalo_id || u.id || "";
+      } catch (e) {}
+
+      if (!currentIdentifier) {
+        currentIdentifier = localStorage.getItem("user_email") || localStorage.getItem("tuna_user_id") || "";
+      }
 
       const res = await fetch(
-        `${API_BASE}/schedules/student-schedule?studentCode=${encodeURIComponent(studentCode)}&zaloId=${encodeURIComponent(zaloId)}`,
+        `${API_BASE}/schedules/student-schedule?identifier=${encodeURIComponent(currentIdentifier)}`,
         { headers: getScheduleHeaders() }
       );
       const data = await res.json();
 
       if (data.success) {
-        if (data.isPending) {
+        // Nếu tài khoản đang chờ duyệt hoặc bị từ chối -> hiển thị thông báo khóa lịch
+        if (data.isPending || data.verificationStatus === "pending" || data.verificationStatus === "rejected") {
           setPendingNotice({
-            status: data.verificationStatus,
-            message: data.message,
+            status: data.verificationStatus || "pending",
+            message: data.message || "Hồ sơ của bạn đang chờ hệ thống phê duyệt để xem thời khóa biểu chính thức của lớp.",
           });
           setSchedules([]);
           return;
