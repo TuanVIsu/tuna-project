@@ -6,6 +6,18 @@ const bcrypt = require('bcryptjs');
 const { OAuth2Client } = require('google-auth-library');
 const pool = require('../config/db');
 
+// Tự động kiểm tra và bổ sung cột email nếu cơ sở dữ liệu chưa có
+(async () => {
+  try {
+    await pool.query(`
+      ALTER TABLE users 
+      ADD COLUMN IF NOT EXISTS email VARCHAR(255);
+    `);
+  } catch (e) {
+    console.warn("Lỗi kiểm tra cột email:", e.message);
+  }
+})();
+
 // Lấy JWT_SECRET
 let JWT_SECRET = process.env.JWT_SECRET || 'tuna_secret_jwt_key_2026';
 try {
@@ -39,6 +51,7 @@ router.post('/send-otp', async (req, res) => {
     const otp = Math.floor(100000 + Math.random() * 900000).toString();
     const expiresAt = new Date(Date.now() + 5 * 60 * 1000);
 
+    // Lưu mã xác thực vào cơ sở dữ liệu
     await pool.query(
       `INSERT INTO student_verifications (student_code, email, otp_code, expires_at)
        VALUES ($1, $2, $3, $4)`,
@@ -67,7 +80,7 @@ router.post('/send-otp', async (req, res) => {
       `,
     };
 
-    // Gửi ngầm qua Brevo HTTPS API (Cổng 443 - Không timeout trên Render)
+    // Gửi thư thông qua Brevo API
     fetch('https://api.brevo.com/v3/smtp/email', {
       method: 'POST',
       headers: {
@@ -86,7 +99,7 @@ router.post('/send-otp', async (req, res) => {
         }
       })
       .catch((err) => {
-        console.error(`❌ [Brevo API] Lỗi kết nối mạng:`, err.message);
+        console.error(`❌ [Brevo API] Lỗi mạng:`, err.message);
       });
 
     return res.json({
@@ -125,28 +138,40 @@ router.post('/verify-otp', async (req, res) => {
 
     const isStudent = cleanEmail.includes('student.') || /^[A-Z]{2,5}\d{4,}/i.test(cleanCode);
     const assignedRole = isStudent ? 'student' : 'member';
+    const generatedZaloId = `ctut_${cleanCode.toLowerCase()}`;
 
-    const existing = await pool.query('SELECT * FROM users WHERE student_code = $1', [cleanCode]);
+    // Tìm kiếm tài khoản đã tồn tại theo student_code, email hoặc zalo_id
+    const existing = await pool.query(
+      `SELECT * FROM users WHERE student_code = $1 OR email = $2 OR zalo_id = $3 LIMIT 1`,
+      [cleanCode, cleanEmail, generatedZaloId]
+    );
+
     let finalUser = null;
 
     if (existing.rows.length > 0) {
       const updateRes = await pool.query(
-        'UPDATE users SET is_verified = TRUE, name = COALESCE($1, name) WHERE student_code = $2 RETURNING *',
-        [name, cleanCode]
+        `UPDATE users 
+         SET is_verified = TRUE, 
+             email = $1, 
+             name = COALESCE($2, name), 
+             student_code = $3 
+         WHERE id = $4 
+         RETURNING *`,
+        [cleanEmail, name || null, cleanCode, existing.rows[0].id]
       );
       finalUser = updateRes.rows[0];
     } else {
-      const generatedZaloId = `ctut_${cleanCode.toLowerCase()}`;
       const insertRes = await pool.query(
-        `INSERT INTO users (zalo_id, student_code, name, role, is_verified)
-         VALUES ($1, $2, $3, $4, TRUE) RETURNING *`,
-        [generatedZaloId, cleanCode, name || `Thành viên ${cleanCode}`, assignedRole]
+        `INSERT INTO users (zalo_id, student_code, email, name, role, is_verified)
+         VALUES ($1, $2, $3, $4, $5, TRUE) 
+         RETURNING *`,
+        [generatedZaloId, cleanCode, cleanEmail, name || `Thành viên ${cleanCode}`, assignedRole]
       );
       finalUser = insertRes.rows[0];
     }
 
     const token = jwt.sign(
-      { id: finalUser.id, role: finalUser.role, studentCode: finalUser.student_code },
+      { id: finalUser.id, role: finalUser.role, studentCode: finalUser.student_code, email: finalUser.email },
       JWT_SECRET,
       { expiresIn: '30d' }
     );

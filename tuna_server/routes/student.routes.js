@@ -3,7 +3,7 @@ const express = require('express');
 const router = express.Router();
 const pool = require('../config/db');
 
-// 1. LIÊN KẾT & CẬP NHẬT HỒ SƠ SINH VIÊN (Không bắt buộc mã lớp)
+// 1. LIÊN KẾT & CẬP NHẬT HỒ SƠ SINH VIÊN (Tránh lỗi trùng lặp zalo_id / student_code)
 router.post('/link', async (req, res) => {
   const { zaloId, name, studentCode, className, totalCredits, faculty } = req.body;
 
@@ -17,39 +17,40 @@ router.post('/link', async (req, res) => {
   const cleanFaculty = faculty?.trim() || 'Hệ Thống Thông Tin';
 
   try {
+    // Tìm kiếm xem tài khoản đã tồn tại theo student_code hoặc zalo_id chưa
     const existingCheck = await pool.query(
-      `SELECT id, zalo_id FROM users WHERE student_code = $1 LIMIT 1`,
-      [cleanStudentCode]
+      `SELECT id, zalo_id, student_code FROM users 
+       WHERE student_code = $1 OR zalo_id = $2 LIMIT 1`,
+      [cleanStudentCode, cleanZaloId]
     );
 
-    if (existingCheck.rows.length > 0 && existingCheck.rows[0].zalo_id && existingCheck.rows[0].zalo_id !== cleanZaloId) {
-      return res.status(409).json({
-        success: false,
-        message: `Mã số sinh viên "${cleanStudentCode}" đã được liên kết với một tài khoản khác!`
-      });
+    let updateRes;
+    if (existingCheck.rows.length > 0) {
+      // Đã có bản ghi -> Cập nhật theo ID chính xác để không bao giờ bị dính UNIQUE constraint
+      const existingId = existingCheck.rows[0].id;
+      updateRes = await pool.query(
+        `UPDATE users 
+         SET name = $1, 
+             faculty = $2, 
+             class_name = COALESCE($3, class_name),
+             total_credits = COALESCE($4, total_credits),
+             student_code = $5,
+             zalo_id = $6,
+             is_verified = TRUE,
+             verification_status = 'approved'
+         WHERE id = $7
+         RETURNING id, name, student_code, class_name, faculty, is_verified, verification_status`,
+        [cleanName, cleanFaculty, className?.trim() || null, Number(totalCredits) || 0, cleanStudentCode, cleanZaloId, existingId]
+      );
+    } else {
+      // Chưa có bản ghi -> Thêm mới an toàn
+      updateRes = await pool.query(
+        `INSERT INTO users (zalo_id, student_code, name, class_name, total_credits, faculty, is_verified, verification_status, role)
+         VALUES ($1, $2, $3, $4, $5, $6, TRUE, 'approved', 'student')
+         RETURNING id, name, student_code, class_name, faculty, is_verified, verification_status`,
+        [cleanZaloId, cleanStudentCode, cleanName, className?.trim() || null, Number(totalCredits) || 0, cleanFaculty]
+      );
     }
-
-    const updateRes = await pool.query(
-      `INSERT INTO users (zalo_id, student_code, name, class_name, total_credits, faculty, is_verified, verification_status, role)
-       VALUES ($1, $2, $3, $4, $5, $6, TRUE, 'approved', 'student')
-       ON CONFLICT (student_code) DO UPDATE 
-       SET name = EXCLUDED.name,
-           faculty = EXCLUDED.faculty,
-           class_name = COALESCE(EXCLUDED.class_name, users.class_name),
-           total_credits = COALESCE(EXCLUDED.total_credits, users.total_credits),
-           zalo_id = COALESCE(users.zalo_id, EXCLUDED.zalo_id),
-           is_verified = TRUE,
-           verification_status = 'approved'
-       RETURNING id, name, student_code, class_name, faculty, is_verified, verification_status`,
-      [
-        cleanZaloId,
-        cleanStudentCode,
-        cleanName,
-        className?.trim() || null,
-        Number(totalCredits) || 0,
-        cleanFaculty
-      ]
-    );
 
     res.json({
       success: true,
@@ -72,18 +73,19 @@ router.get('/profile/:userId', async (req, res) => {
 
     const cleanId = String(userId).trim();
 
-    // 1. Lấy thông tin tài khoản
+    // 1. Lấy thông tin tài khoản (hỗ trợ qua student_code, zalo_id, id hoặc email)
     const userRes = await pool.query(
-      `SELECT id, name, student_code, class_name, faculty, role, is_verified, verification_status 
+      `SELECT id, name, email, student_code, class_name, faculty, role, is_verified, verification_status 
        FROM users 
-       WHERE student_code = $1 OR zalo_id = $1 OR id::TEXT = $1 LIMIT 1`,
+       WHERE student_code = $1 OR zalo_id = $1 OR id::TEXT = $1 OR LOWER(COALESCE(email, '')) = LOWER($1) 
+       LIMIT 1`,
       [cleanId]
     );
 
     const user = userRes.rows[0] || null;
 
     // 2. Lấy số ngày Streak và điểm XP tích lũy
-    const targetUserId = user?.student_code || cleanId;
+    const targetUserId = user?.email || user?.student_code || cleanId;
     const streakRes = await pool.query(
       `SELECT current_streak, xp_points FROM user_streaks WHERE user_id = $1 LIMIT 1`,
       [targetUserId]
