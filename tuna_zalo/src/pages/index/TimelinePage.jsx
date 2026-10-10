@@ -31,6 +31,8 @@ export const TimelinePage = ({ onBack, onNavigateToTasks, onNavigateToDocs, onOp
     }, 2800);
   };
 
+  // State Modal Chi Tiết & Modal Thêm/Sửa
+  const [viewingDetailTask, setViewingDetailTask] = useState(null);
   const [showItemModal, setShowItemModal] = useState(false);
   const [editingItem, setEditingItem] = useState(null);
   const [formData, setFormData] = useState({
@@ -43,10 +45,11 @@ export const TimelinePage = ({ onBack, onNavigateToTasks, onNavigateToDocs, onOp
   });
 
   // Lấy danh tính người dùng đồng nhất
+// SỬA LẠI ĐOẠN NÀY (BỎ currentUser KHỎI DEPENDENCY VÌ PROP KHÔNG CÓ)
   const currentStudentId = useMemo(() => {
     try {
       const u = JSON.parse(localStorage.getItem("user") || localStorage.getItem("user_info") || "{}");
-      const id = u.email || u.student_code || u.zalo_id || u.id;
+      const id = u.student_code || u.email || u.zalo_id || u.id;
       if (id && id !== "undefined" && id !== "null") return String(id).trim();
     } catch (e) {}
     return String(localStorage.getItem("user_email") || localStorage.getItem("tuna_user_id") || "guest_user").trim();
@@ -109,7 +112,7 @@ export const TimelinePage = ({ onBack, onNavigateToTasks, onNavigateToDocs, onOp
         {
           headers: {
             "Content-Type": "application/json",
-            "x-user-id": currentStudentId,
+            "x-user-id": encodeURIComponent(currentStudentId),
           },
         }
       );
@@ -151,7 +154,7 @@ export const TimelinePage = ({ onBack, onNavigateToTasks, onNavigateToDocs, onOp
         method: "POST",
         headers: { 
           "Content-Type": "application/json",
-          "x-user-id": currentStudentId,
+          "x-user-id": encodeURIComponent(currentStudentId),
         },
         body: JSON.stringify({
           userId: currentStudentId,
@@ -204,7 +207,7 @@ export const TimelinePage = ({ onBack, onNavigateToTasks, onNavigateToDocs, onOp
           method: "PUT",
           headers: { 
             "Content-Type": "application/json",
-            "x-user-id": currentStudentId,
+            "x-user-id": encodeURIComponent(currentStudentId),
           },
           body: JSON.stringify(formData),
         });
@@ -218,7 +221,7 @@ export const TimelinePage = ({ onBack, onNavigateToTasks, onNavigateToDocs, onOp
           method: "POST",
           headers: { 
             "Content-Type": "application/json",
-            "x-user-id": currentStudentId,
+            "x-user-id": encodeURIComponent(currentStudentId),
           },
           body: JSON.stringify({
             ...formData,
@@ -253,6 +256,7 @@ export const TimelinePage = ({ onBack, onNavigateToTasks, onNavigateToDocs, onOp
       const data = await res.json();
       if (data.success) {
         setDbTimelines((prev) => prev.filter((item) => item.id !== id));
+        if (viewingDetailTask?.id === id) setViewingDetailTask(null);
         showToast("Đã xóa khỏi lịch trình!");
       }
     } catch (err) {
@@ -371,31 +375,31 @@ export const TimelinePage = ({ onBack, onNavigateToTasks, onNavigateToDocs, onOp
             <i className="bi bi-chevron-left font-black text-xs"></i>
           </button>
 
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-1.5 shrink-0">
             <button
               onClick={handleOpenAdd}
-              className="px-3 py-1.5 bg-white text-[#0b57d0] rounded-xl text-xs font-black shadow-xs active:scale-95 transition border-0 cursor-pointer flex items-center gap-1.5"
+              className="h-8 px-2.5 bg-white text-[#0b57d0] rounded-xl text-[11px] font-black shadow-xs active:scale-95 transition border-0 cursor-pointer flex items-center gap-1 whitespace-nowrap"
             >
-              <i className="bi bi-plus-lg text-xs"></i>
+              <i className="bi bi-plus-lg text-[10px]"></i>
               <span>Thêm lịch</span>
             </button>
 
             <button
               onClick={() => handleTriggerWRRPlan(false)}
               disabled={isWrrGenerating}
-              className="px-3.5 py-1.5 bg-emerald-500 hover:bg-emerald-600 text-white rounded-xl text-xs font-black shadow-xs active:scale-95 transition border-0 cursor-pointer flex items-center gap-1.5"
+              className="h-8 px-2.5 bg-emerald-500 hover:bg-emerald-600 text-white rounded-xl text-[11px] font-black shadow-xs active:scale-95 transition border-0 cursor-pointer flex items-center gap-1 whitespace-nowrap"
             >
               {isWrrGenerating ? (
-                <span className="spinner-border spinner-border-sm text-[10px]"></span>
+                <span className="spinner-border spinner-border-sm text-[9px]"></span>
               ) : (
-                <i className="bi bi-arrow-repeat text-xs"></i>
+                <i className="bi bi-arrow-repeat text-[10px]"></i>
               )}
               <span>Tối ưu WRR</span>
             </button>
 
             <button
               onClick={onOpenScheduleModal}
-              className="w-9 h-9 rounded-full bg-white/15 hover:bg-white/25 flex items-center justify-center border-0 text-white active:scale-95 transition cursor-pointer"
+              className="w-8 h-8 rounded-full bg-white/15 hover:bg-white/25 flex items-center justify-center border-0 text-white active:scale-95 transition cursor-pointer shrink-0"
               title="Thời khóa biểu trường"
             >
               <i className="bi bi-calendar3 text-xs"></i>
@@ -515,7 +519,7 @@ export const TimelinePage = ({ onBack, onNavigateToTasks, onNavigateToDocs, onOp
           </div>
         ) : (
           <div className="space-y-3">
-            {/* 3.1. Lịch chính khóa trên trường (nếu có) */}
+            {/* 3.1. Lớp học chính khóa */}
             {dayScheduleData.classes.length > 0 && (
               <div className="space-y-2">
                 <span className="text-[10px] font-black text-blue-700 uppercase px-1 flex items-center gap-1">
@@ -550,7 +554,7 @@ export const TimelinePage = ({ onBack, onNavigateToTasks, onNavigateToDocs, onOp
               </div>
             )}
 
-            {/* 3.2. Lịch tự học cá nhân hóa theo WRR */}
+            {/* 3.2. Ca tự học: GIAO DIỆN TỐI GIẢN CHỐNG TRÀN CHỮ */}
             {dayScheduleData.tasks.length > 0 && (
               <div className="space-y-2">
                 <span className="text-[10px] font-black text-slate-500 uppercase px-1 flex items-center gap-1">
@@ -565,80 +569,63 @@ export const TimelinePage = ({ onBack, onNavigateToTasks, onNavigateToDocs, onOp
                   return (
                     <div
                       key={task.id}
-                      onClick={() => handleTaskAction(task)}
-                      className="bg-white rounded-2xl p-3.5 shadow-xs border border-slate-200/80 hover:border-slate-300 transition cursor-pointer flex flex-col gap-2.5"
+                      onClick={() => setViewingDetailTask(task)}
+                      className="bg-white rounded-2xl p-3.5 shadow-xs border border-slate-200/80 hover:border-blue-300 active:scale-[0.99] transition cursor-pointer flex flex-col gap-2 relative overflow-hidden"
                     >
+                      {/* HÀNG 1: CHỈ GIỮ 2 PHẦN TỬ HAI ĐẦU ĐỂ KHÔNG BAO GIỜ BỊ ĐÈ CHỮ */}
                       <div className="flex items-center justify-between gap-2">
-                        <div className="flex items-center gap-2">
-                          <span
-                            className={`px-2 py-0.5 font-black text-[10px] rounded-md ${
-                              isDone
-                                ? "bg-emerald-50 text-emerald-700"
-                                : isDoc
-                                ? "bg-amber-50 text-amber-700"
-                                : isQuiz
-                                ? "bg-indigo-50 text-indigo-700"
-                                : "bg-purple-50 text-purple-700"
-                            }`}
-                          >
-                            {isDone
-                              ? "✓ Hoàn thành"
+                        <span
+                          className={`px-2 py-0.5 font-black text-[10px] rounded-md shrink-0 whitespace-nowrap ${
+                            isDone
+                              ? "bg-emerald-50 text-emerald-700"
                               : isDoc
-                              ? "Tài liệu"
+                              ? "bg-amber-50 text-amber-700"
                               : isQuiz
-                              ? "Luyện đề"
-                              : "Flashcard"}
-                          </span>
+                              ? "bg-indigo-50 text-indigo-700"
+                              : "bg-purple-50 text-purple-700"
+                          }`}
+                        >
+                          {isDone ? "✓ Hoàn thành" : isDoc ? "Tài liệu" : isQuiz ? "Luyện đề" : "Flashcard"}
+                        </span>
 
-                          <span className="text-[11px] font-semibold text-slate-400 flex items-center gap-1">
-                            <i className="bi bi-clock"></i> {task.time_slot || task.timeSlot} • {task.duration_minutes || task.durationMinutes || 15}p
-                          </span>
-                        </div>
-
-                        <span className="text-[10.5px] font-black text-slate-700 bg-slate-100 px-2 py-0.5 rounded-lg truncate max-w-[120px]">
+                        <span className="text-[10.5px] font-bold text-slate-500 bg-slate-100 px-2 py-0.5 rounded-md truncate max-w-[170px] text-right">
                           {task.subject}
                         </span>
                       </div>
 
+                      {/* HÀNG 2: TIÊU ĐỀ */}
                       <div>
-                        <h5 className="font-black text-[13px] text-slate-900 m-0 leading-snug">
+                        <h5 className="font-black text-[13.5px] text-slate-900 m-0 leading-snug line-clamp-2">
                           {task.title}
                         </h5>
-                        <p className="text-[11px] text-slate-500 m-0 mt-0.5 line-clamp-1">
-                          {task.description}
-                        </p>
                       </div>
 
-                      <div className="flex items-center justify-between pt-2 border-t border-slate-100" onClick={(e) => e.stopPropagation()}>
-                        <div className="flex items-center gap-1.5">
-                          <button
-                            onClick={(e) => handleOpenEdit(e, task)}
-                            className="w-7 h-7 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-600 flex items-center justify-center text-xs transition border-0 cursor-pointer"
-                            title="Sửa"
-                          >
-                            <i className="bi bi-pencil"></i>
-                          </button>
-
-                          <button
-                            onClick={(e) => handleDeleteItem(e, task.id)}
-                            className="w-7 h-7 rounded-lg bg-slate-100 hover:bg-rose-50 text-slate-600 hover:text-rose-600 flex items-center justify-center text-xs transition border-0 cursor-pointer"
-                            title="Xóa"
-                          >
-                            <i className="bi bi-trash3"></i>
-                          </button>
-                        </div>
+                      {/* HÀNG 3: NÚT THAO TÁC & GỢI Ý XEM CHI TIẾT */}
+                      <div 
+                        className="flex items-center justify-between pt-2 border-t border-slate-100" 
+                        onClick={(e) => e.stopPropagation()}
+                      >
+                        <span 
+                          onClick={() => setViewingDetailTask(task)}
+                          className="text-[11px] font-bold text-blue-600 flex items-center gap-1 cursor-pointer hover:underline"
+                        >
+                          <span>Xem chi tiết</span>
+                          <i className="bi bi-info-circle text-[10.5px]"></i>
+                        </span>
 
                         <button
+                          type="button"
                           onClick={() => handleTaskAction(task)}
-                          className={`px-3.5 py-1.5 rounded-xl text-xs font-black border-0 cursor-pointer active:scale-95 transition ${
+                          className={`h-7 px-3.5 rounded-lg text-xs font-black border-0 cursor-pointer active:scale-95 transition flex items-center gap-1 shadow-xs whitespace-nowrap ${
                             isDone
                               ? "bg-slate-100 text-slate-500"
                               : isDoc
-                              ? "bg-amber-400 hover:bg-amber-500 text-slate-950 shadow-xs"
-                              : "bg-[#0b57d0] hover:bg-blue-700 text-white shadow-xs"
+                              ? "bg-amber-400 hover:bg-amber-500 text-slate-950"
+                              : "bg-[#0b57d0] hover:bg-blue-700 text-white"
                           }`}
                         >
-                          {isDone ? "Xem lại" : isDoc ? "Đọc giáo trình" : "Luyện đề ngay"}
+                          <span>{isDone ? "Xem lại" : isDoc ? "Đọc bài" : "Luyện ngay"}</span>
+                          <i className="bi bi-chevron-right text-[10px]"></i>
                         </button>
                       </div>
                     </div>
@@ -650,7 +637,117 @@ export const TimelinePage = ({ onBack, onNavigateToTasks, onNavigateToDocs, onOp
         )}
       </div>
 
-      {/* MODAL THÊM / SỬA CA HỌC */}
+      {/* 4. MODAL POPUP HIỂN THỊ CHI TIẾT CA HỌC (ĐẦY ĐỦ THÔNG TIN KHÔNG LO CHẬT) */}
+      {viewingDetailTask && (
+        <div 
+          className="fixed inset-0 bg-slate-900/50 backdrop-blur-xs flex items-center justify-center z-50 p-4"
+          onClick={() => setViewingDetailTask(null)}
+        >
+          <div 
+            className="bg-white rounded-3xl p-5 w-full max-w-sm shadow-2xl border border-slate-100 animate-in zoom-in-95 duration-150"
+            onClick={(e) => e.stopPropagation()}
+          >
+            {/* Header Modal */}
+            <div className="flex items-center justify-between pb-3 border-b border-slate-100">
+              <span className="px-2.5 py-1 bg-blue-50 text-[#0b57d0] text-[11px] font-black rounded-lg">
+                Chi Tiết Ca Rèn Luyện
+              </span>
+              <button
+                type="button"
+                onClick={() => setViewingDetailTask(null)}
+                className="w-7 h-7 rounded-full bg-slate-100 flex items-center justify-center border-0 text-slate-500 hover:bg-slate-200 cursor-pointer text-xs"
+              >
+                ✕
+              </button>
+            </div>
+
+            {/* Nội dung chi tiết */}
+            <div className="py-3.5 space-y-3">
+              <div>
+                <span className="text-[10px] font-black uppercase text-slate-400 tracking-wider block mb-0.5">Môn học</span>
+                <span className="text-xs font-black text-blue-700 bg-blue-50 px-2 py-0.5 rounded-md inline-block">
+                  {viewingDetailTask.subject}
+                </span>
+              </div>
+
+              <div>
+                <span className="text-[10px] font-black uppercase text-slate-400 tracking-wider block mb-0.5">Nội dung nhiệm vụ</span>
+                <h4 className="text-sm font-black text-slate-900 m-0 leading-snug">
+                  {viewingDetailTask.title}
+                </h4>
+              </div>
+
+              <div className="grid grid-cols-2 gap-2 bg-slate-50 p-2.5 rounded-xl border border-slate-100">
+                <div>
+                  <span className="text-[10px] font-bold text-slate-400 block">Khung giờ</span>
+                  <span className="text-xs font-black text-slate-700">
+                    <i className="bi bi-clock me-1 text-slate-400"></i>
+                    {viewingDetailTask.time_slot || viewingDetailTask.timeSlot || "19:30 - 20:15"}
+                  </span>
+                </div>
+                <div>
+                  <span className="text-[10px] font-bold text-slate-400 block">Thời lượng</span>
+                  <span className="text-xs font-black text-slate-700">
+                    <i className="bi bi-hourglass-split me-1 text-slate-400"></i>
+                    {viewingDetailTask.duration_minutes || viewingDetailTask.durationMinutes || 15} phút
+                  </span>
+                </div>
+              </div>
+
+              {viewingDetailTask.description && (
+                <div>
+                  <span className="text-[10px] font-black uppercase text-slate-400 tracking-wider block mb-1">Mô tả & Hướng dẫn</span>
+                  <p className="text-xs text-slate-600 m-0 bg-slate-50 p-2.5 rounded-xl border border-slate-100 leading-relaxed font-medium">
+                    {viewingDetailTask.description}
+                  </p>
+                </div>
+              )}
+            </div>
+
+            {/* Footer Buttons */}
+            <div className="flex items-center gap-2 pt-2 border-t border-slate-100">
+              <button
+                type="button"
+                onClick={(e) => {
+                  const t = viewingDetailTask;
+                  setViewingDetailTask(null);
+                  handleOpenEdit(e, t);
+                }}
+                className="h-9 px-3 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-xs border-0 cursor-pointer flex items-center justify-center gap-1"
+                title="Chỉnh sửa"
+              >
+                <i className="bi bi-pencil"></i>
+                <span>Sửa</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={(e) => handleDeleteItem(e, viewingDetailTask.id)}
+                className="h-9 px-3 rounded-xl bg-rose-50 hover:bg-rose-100 text-rose-600 font-bold text-xs border-0 cursor-pointer flex items-center justify-center gap-1"
+                title="Xóa"
+              >
+                <i className="bi bi-trash3"></i>
+                <span>Xóa</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => {
+                  const t = viewingDetailTask;
+                  setViewingDetailTask(null);
+                  handleTaskAction(t);
+                }}
+                className="flex-1 h-9 rounded-xl bg-[#0b57d0] hover:bg-blue-700 text-white font-black text-xs border-0 cursor-pointer shadow-xs active:scale-95 transition flex items-center justify-center gap-1.5"
+              >
+                <span>Thực hiện ngay</span>
+                <i className="bi bi-arrow-right-short text-base leading-none"></i>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 5. MODAL THÊM / SỬA CA HỌC */}
       {showItemModal && (
         <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-xs flex items-center justify-center z-50 p-4">
           <div className="bg-white rounded-3xl p-5 w-full max-w-sm shadow-xl border border-slate-100 animate-in zoom-in-95 duration-150">
@@ -748,4 +845,4 @@ export const TimelinePage = ({ onBack, onNavigateToTasks, onNavigateToDocs, onOp
   );
 };
 
-export default TimelinePage;
+export default TimelinePage;  

@@ -13,6 +13,7 @@ import logoImg from "../assets/logo.png";
 import "bootstrap-icons/font/bootstrap-icons.css";
 
 const API_BASE = import.meta.env.VITE_API_URL || "https://tuna-project.onrender.com/api";
+
 export const AdminLayout = ({ onExitAdmin }) => {
   const [currentAdmin, setCurrentAdmin] = useState(null);
   const [activeTab, setActiveTab] = useState("dashboard");
@@ -22,6 +23,15 @@ export const AdminLayout = ({ onExitAdmin }) => {
   const [staffPendingCount, setStaffPendingCount] = useState(0);
   const [studentPendingCount, setStudentPendingCount] = useState(0);
   const [notifications, setNotifications] = useState([]);
+  const [dismissedNotiIds, setDismissedNotiIds] = useState(() => {
+    try {
+      const saved = localStorage.getItem("admin_dismissed_notis");
+      return saved ? JSON.parse(saved) : [];
+    } catch {
+      return [];
+    }
+  });
+
   const [showNotiDropdown, setShowNotiDropdown] = useState(false);
   const notiRef = useRef(null);
 
@@ -52,8 +62,10 @@ export const AdminLayout = ({ onExitAdmin }) => {
             sPending = dStaff.totalPending || 0;
             staffNotis = (dStaff.notifications || []).map((n) => ({
               ...n,
+              id: n.id || `staff_${n.userId || Date.now()}`,
               category: "staff",
               targetTab: "staff",
+              time: n.time || "Vừa xong",
             }));
           }
         } catch (e) {}
@@ -66,13 +78,13 @@ export const AdminLayout = ({ onExitAdmin }) => {
         const dUser = await resUser.json();
         if (dUser.success && Array.isArray(dUser.data)) {
           uPending = dUser.data.length;
-          studentNotis = dUser.data.slice(0, 5).map((u) => ({
+          studentNotis = dUser.data.slice(0, 10).map((u) => ({
             id: `student_${u.id}`,
             type: "student",
             category: "user",
-            title: `Sinh viên: ${u.name}`,
+            title: `Sinh viên: ${u.name || "Chưa rõ"}`,
             desc: `Xin vào lớp ${u.className || "Chưa rõ"} (MSSV: ${u.studentCode || "Chưa có"})`,
-            time: u.createdAt || "Vừa gửi",
+            time: u.createdAt ? new Date(u.createdAt).toLocaleString("vi-VN", { dateStyle: "short", timeStyle: "short" }) : "Vừa gửi",
             targetTab: "users",
           }));
         }
@@ -80,7 +92,11 @@ export const AdminLayout = ({ onExitAdmin }) => {
 
       setStaffPendingCount(sPending);
       setStudentPendingCount(uPending);
-      setNotifications([...studentNotis, ...staffNotis]);
+
+      const allNotis = [...studentNotis, ...staffNotis];
+      // Lọc bỏ những thông báo mà Admin đã xóa/đã xem
+      const activeNotis = allNotis.filter((n) => !dismissedNotiIds.includes(n.id));
+      setNotifications(activeNotis);
     } catch (err) {
       console.error("Lỗi nạp thông báo:", err);
     }
@@ -92,7 +108,7 @@ export const AdminLayout = ({ onExitAdmin }) => {
       const interval = setInterval(fetchAllNotifications, 15000);
       return () => clearInterval(interval);
     }
-  }, [currentAdmin]);
+  }, [currentAdmin, dismissedNotiIds]);
 
   useEffect(() => {
     const handleClickOutside = (e) => {
@@ -103,6 +119,25 @@ export const AdminLayout = ({ onExitAdmin }) => {
     document.addEventListener("mousedown", handleClickOutside);
     return () => document.removeEventListener("mousedown", handleClickOutside);
   }, []);
+
+  // Xóa / Đánh dấu đã xem 1 thông báo
+  const handleDismissNoti = (e, notiId) => {
+    e.stopPropagation();
+    const updated = [...dismissedNotiIds, notiId];
+    setDismissedNotiIds(updated);
+    localStorage.setItem("admin_dismissed_notis", JSON.stringify(updated));
+    setNotifications((prev) => prev.filter((n) => n.id !== notiId));
+  };
+
+  // Đánh dấu đã xem tất cả thông báo
+  const handleDismissAll = (e) => {
+    e.stopPropagation();
+    const allIds = notifications.map((n) => n.id);
+    const updated = [...new Set([...dismissedNotiIds, ...allIds])];
+    setDismissedNotiIds(updated);
+    localStorage.setItem("admin_dismissed_notis", JSON.stringify(updated));
+    setNotifications([]);
+  };
 
   const handleLogout = () => {
     localStorage.removeItem("admin_token");
@@ -122,7 +157,7 @@ export const AdminLayout = ({ onExitAdmin }) => {
     );
   }
 
-  const totalNotiCount = staffPendingCount + studentPendingCount;
+  const totalNotiCount = notifications.length;
 
   const allMenuItems = [
     { id: "dashboard", label: "Tổng quan hệ thống", icon: "bi-grid-1x2-fill", roles: ["super_admin", "instructor"] },
@@ -245,7 +280,6 @@ export const AdminLayout = ({ onExitAdmin }) => {
           {/* Brand Header */}
           <div className="d-flex align-items-center justify-content-between px-2 py-2 mb-3">
             <div className="d-flex align-items-center gap-2.5 overflow-hidden">
-{/* KHUNG LOGO BO TRÒN SQUIRCLE ĐỒNG DẠNG HÌNH MẪU */}
               <div
                 className="d-flex align-items-center justify-content-center bg-white shadow-sm flex-shrink-0"
                 style={{
@@ -272,11 +306,11 @@ export const AdminLayout = ({ onExitAdmin }) => {
               </div>
               <div className="overflow-hidden">
                 <h6 className="mb-0 fw-black text-white text-truncate d-flex align-items-center gap-1.5" style={{ fontSize: "15px", letterSpacing: "-0.2px" }}>
-                       TUNA Portal
+                  TUNA Portal
                   <span className="badge rounded-pill bg-blue-400 text-slate-950 px-1.5 py-0.5" style={{ fontSize: "9px" }}>PRO</span>
                 </h6>
                 <span style={{ color: "rgba(191, 219, 254, 0.8)", fontSize: "11px", fontWeight: "600" }}>
-                       Quản Trị Đào Tạo
+                  Quản Trị Đào Tạo
                 </span>
               </div>
             </div>
@@ -437,26 +471,43 @@ export const AdminLayout = ({ onExitAdmin }) => {
                 )}
               </button>
 
+              {/* DROPDOWN THÔNG BÁO HOÀN CHỈNH */}
               {showNotiDropdown && (
                 <div
                   className="position-absolute end-0 mt-2 card border-0 shadow-2xl rounded-4 overflow-hidden z-3"
                   style={{
-                    width: "min(350px, 92vw)",
+                    width: "min(380px, 92vw)",
                     border: "1px solid #e2e8f0",
                     animation: "fadeIn 0.15s ease-out forwards",
                   }}
                 >
+                  {/* Header popup thông báo có nút Đã xem tất cả */}
                   <div className="p-3 border-bottom bg-slate-50 d-flex align-items-center justify-content-between">
-                    <div className="d-flex align-items-center gap-1.5">
-                      <i className="bi bi-bell-fill text-blue-600"></i>
+                    <div className="d-flex align-items-center gap-2">
+                      <i className="bi bi-bell-fill text-blue-600 fs-6"></i>
                       <h6 className="mb-0 fw-black text-slate-900" style={{ fontSize: "13px" }}>Yêu Cầu Chờ Duyệt</h6>
+                      {totalNotiCount > 0 && (
+                        <span className="badge bg-danger-subtle text-danger border border-danger-subtle rounded-pill font-bold" style={{ fontSize: "10px" }}>
+                          {totalNotiCount}
+                        </span>
+                      )}
                     </div>
-                    <span className="badge bg-rose-500 text-white rounded-pill font-bold" style={{ fontSize: "10.5px" }}>
-                      {totalNotiCount} yêu cầu
-                    </span>
+                    {notifications.length > 0 && (
+                      <button
+                        type="button"
+                        onClick={handleDismissAll}
+                        className="btn btn-link btn-sm text-decoration-none fw-bold p-0 text-secondary hover:text-dark d-flex align-items-center gap-1 cursor-pointer"
+                        style={{ fontSize: "11px" }}
+                        title="Đánh dấu đã xem toàn bộ thông báo"
+                      >
+                        <i className="bi bi-check2-all text-primary"></i>
+                        <span>Đã xem tất cả</span>
+                      </button>
+                    )}
                   </div>
 
-                  <div className="overflow-y-auto" style={{ maxHeight: "290px" }}>
+                  {/* Danh sách từng thông báo có nút Xóa / Đã xem riêng */}
+                  <div className="overflow-y-auto" style={{ maxHeight: "310px" }}>
                     {notifications.length === 0 ? (
                       <div className="p-4 text-center text-muted small">
                         <i className="bi bi-check2-circle fs-2 text-emerald-500 d-block mb-1.5"></i>
@@ -470,7 +521,7 @@ export const AdminLayout = ({ onExitAdmin }) => {
                             setActiveTab(n.targetTab);
                             setShowNotiDropdown(false);
                           }}
-                          className="p-3 border-bottom bg-white noti-item-hover cursor-pointer"
+                          className="p-3 border-bottom bg-white noti-item-hover cursor-pointer position-relative group"
                         >
                           <div className="d-flex align-items-center justify-content-between mb-1">
                             <span
@@ -483,8 +534,22 @@ export const AdminLayout = ({ onExitAdmin }) => {
                             >
                               {n.type === "student" ? "XIN VÀO LỚP" : n.type === "access" ? "CẤP QUYỀN" : "MẬT KHẨU"}
                             </span>
-                            <small className="text-slate-400 font-semibold" style={{ fontSize: "10px" }}>{n.time}</small>
+
+                            <div className="d-flex align-items-center gap-2">
+                              <small className="text-slate-400 font-semibold" style={{ fontSize: "10px" }}>{n.time}</small>
+                              {/* Nút Xóa / Ẩn thông báo cụ thể */}
+                              <button
+                                type="button"
+                                onClick={(e) => handleDismissNoti(e, n.id)}
+                                className="btn btn-sm btn-light p-0 rounded-circle text-slate-400 hover:text-danger d-inline-flex align-items-center justify-content-center border-0 cursor-pointer"
+                                style={{ width: "20px", height: "20px" }}
+                                title="Xóa thông báo này"
+                              >
+                                <i className="bi bi-x-lg" style={{ fontSize: "10px" }}></i>
+                              </button>
+                            </div>
                           </div>
+
                           <div className="fw-black text-slate-800 small text-truncate">{n.title}</div>
                           <small className="text-slate-500 d-block text-truncate mt-0.5">{n.desc}</small>
                         </div>
@@ -492,6 +557,7 @@ export const AdminLayout = ({ onExitAdmin }) => {
                     )}
                   </div>
 
+                  {/* Footer chuyển tab nhanh */}
                   <div className="p-2.5 border-top bg-slate-50 d-flex justify-content-between">
                     {studentPendingCount > 0 && (
                       <button

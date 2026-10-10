@@ -15,7 +15,7 @@ module.exports = (io) => {
       if (userId || userName) {
         try {
           const checkRes = await pool.query(
-            `SELECT is_locked, lock_until, lock_reason 
+            `SELECT is_locked, lock_until, lock_reason, warning_reason 
              FROM users 
              WHERE zalo_id = $1 OR student_code = $1 OR id::TEXT = $1 OR LOWER(email) = LOWER($1) OR LOWER(TRIM(name)) = LOWER(TRIM($2))
              ORDER BY id DESC LIMIT 1`,
@@ -24,6 +24,15 @@ module.exports = (io) => {
 
           if (checkRes.rows.length > 0) {
             const u = checkRes.rows[0];
+            // Kiểm tra nếu có cảnh báo chưa đọc
+            if (u.warning_reason) {
+              socket.emit('admin_warning_received', {
+                userId,
+                reason: u.warning_reason,
+                warnedBy: 'Ban Quản Trị'
+              });
+            }
+
             if (u.is_locked) {
               if (u.lock_until && new Date() > new Date(u.lock_until)) {
                 await pool.query(
@@ -50,12 +59,30 @@ module.exports = (io) => {
       }
     });
 
+    // SỰ KIỆN: Admin gửi cảnh báo trực tiếp qua socket
+    socket.on('admin_warn_user', async ({ targetUserId, reason, adminName }) => {
+      try {
+        await pool.query(
+          `UPDATE users SET warning_reason = $1 WHERE zalo_id = $2 OR student_code = $2 OR id::TEXT = $2 OR LOWER(email) = LOWER($2)`,
+          [reason, targetUserId]
+        ).catch(() => {});
+
+        io.emit('admin_warning_received', {
+          userId: String(targetUserId),
+          reason: reason || 'Vi phạm nội quy thảo luận cộng đồng',
+          warnedBy: adminName || 'Ban Quản Trị'
+        });
+      } catch (err) {
+        console.error("Lỗi socket admin_warn_user:", err.message);
+      }
+    });
+
     socket.on('leave_room', (payload) => {
       const category = typeof payload === 'string' ? payload : (payload?.category || 'all');
       socket.leave(category);
     });
 
-    // 2. Nhận và phát tin nhắn (Lưu đầy đủ replyTo vào CSDL)
+    // 2. Nhận và phát tin nhắn
     socket.on('send_message', async (data) => {
       const { category = 'all', userId, userName, avatar, content, imageUrl, replyTo, isAnonymous } = data;
       if ((!content || !content.trim()) && !imageUrl) return;
@@ -124,7 +151,7 @@ module.exports = (io) => {
       }
     });
 
-    // 3. Tín hiệu đang soạn tin
+    // 3. Soạn tin
     socket.on('typing', ({ category = 'all', userName, userId }) => {
       socket.to(category).emit('user_typing', { userName, userId, category });
       if (category !== 'all') socket.to('all').emit('user_typing', { userName, userId, category });
@@ -135,7 +162,7 @@ module.exports = (io) => {
       if (category !== 'all') socket.to('all').emit('user_stop_typing', { userId, category });
     });
 
-    // 4. Thu hồi tin nhắn realtime (Kiểm tra đúng 60 phút)
+    // 4. Thu hồi
     socket.on('recall_message', async ({ messageId, userId }) => {
       try {
         const checkRes = await pool.query(
@@ -153,13 +180,7 @@ module.exports = (io) => {
                SET content = 'Tin nhắn đã được thu hồi', image_url = NULL, is_recalled = TRUE 
                WHERE id = $1`,
               [Number(messageId)]
-            ).catch(async () => {
-              await pool.query(
-                `UPDATE community_messages SET content = 'Tin nhắn đã được thu hồi', image_url = NULL WHERE id = $1`,
-                [Number(messageId)]
-              );
-            });
-
+            );
             io.emit('message_recalled', { messageId: Number(messageId) });
           }
         }

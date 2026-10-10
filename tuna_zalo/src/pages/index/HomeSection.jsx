@@ -1,5 +1,5 @@
 // src/pages/index/HomeSection.jsx
-import React, { useState, useEffect, useMemo } from "react";
+import React, { useState, useEffect, useMemo, useCallback } from "react";
 import { AcademicSurveyModal } from "../../components/AcademicSurveyModal";
 import { ScheduleModal } from "../../components/ScheduleModal";
 import { LibraryModal } from "../../components/LibraryModal";
@@ -17,13 +17,18 @@ export const HomeSection = ({ currentUser, onNavigate }) => {
   const [showLibraryModal, setShowLibraryModal] = useState(false);
   const [currentTaskIdx, setCurrentTaskIdx] = useState(0);
 
+  // 1. Đồng bộ cơ chế lấy ID người dùng giống hệt TimelinePage
   const myUserId = useMemo(() => {
-    let savedId = localStorage.getItem("tuna_user_id");
-    if (!savedId) {
-      savedId = currentUser?.student_code || currentUser?.id || "B2300001";
-      localStorage.setItem("tuna_user_id", String(savedId));
-    }
-    return String(savedId);
+    try {
+      const u = JSON.parse(localStorage.getItem("user") || localStorage.getItem("user_info") || "{}");
+      const id = u.email || u.student_code || u.zalo_id || u.id;
+      if (id && id !== "undefined" && id !== "null") return String(id).trim();
+    } catch (e) {}
+
+    const directId = currentUser?.email || currentUser?.student_code || currentUser?.id;
+    if (directId) return String(directId).trim();
+
+    return String(localStorage.getItem("user_email") || localStorage.getItem("tuna_user_id") || "B2300001").trim();
   }, [currentUser]);
 
   const [streakCount, setStreakCount] = useState(() => {
@@ -40,7 +45,7 @@ export const HomeSection = ({ currentUser, onNavigate }) => {
 
   const todayStr = useMemo(() => getTodayDateString(), []);
 
-  const loadStoredData = () => {
+  const loadStoredData = useCallback(() => {
     try {
       const savedProfile = localStorage.getItem("user_academic_profile");
       if (savedProfile && savedProfile !== "undefined") {
@@ -53,16 +58,25 @@ export const HomeSection = ({ currentUser, onNavigate }) => {
       if (savedSchedules && savedSchedules !== "undefined") {
         setSchedules(JSON.parse(savedSchedules));
       }
+
+      // Đọc sẵn cache nhiệm vụ hôm nay từ TimelinePage để render ngay tức thì
+      const cachedTodayTasks = localStorage.getItem("tuna_today_tasks");
+      if (cachedTodayTasks) {
+        const parsed = JSON.parse(cachedTodayTasks);
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          setDbTimelinesToday(parsed);
+        }
+      }
     } catch (e) {
       console.error("Lỗi nạp dữ liệu cá nhân:", e);
     }
-  };
+  }, [currentUser]);
 
   useEffect(() => {
     loadStoredData();
-  }, [currentUser]);
+  }, [loadStoredData]);
 
-  const fetchStreak = async () => {
+  const fetchStreak = useCallback(async () => {
     if (!myUserId) return;
     try {
       const res = await fetch(`${API_BASE}/streak/${myUserId}`);
@@ -77,41 +91,59 @@ export const HomeSection = ({ currentUser, onNavigate }) => {
     } catch (err) {
       console.error("Lỗi lấy thông tin streak:", err);
     }
-  };
-
-  useEffect(() => {
-    fetchStreak();
   }, [myUserId]);
 
   useEffect(() => {
-    const fetchTodayTimeline = async () => {
-      if (!academicProfile) return;
-      setIsTimelineLoading(true);
-      try {
-        const subject = academicProfile?.subjects?.[0] || "Hệ thống phân tán";
-        const goal = academicProfile?.targetGoal || "KhaGioi";
-        const pace = academicProfile?.dailyPace || 15;
+    fetchStreak();
+  }, [fetchStreak]);
 
-        const res = await fetch(
-          `${API_BASE}/timelines?userId=${myUserId}&startDate=${todayStr}&endDate=${todayStr}&subject=${encodeURIComponent(subject)}&goal=${goal}&pace=${pace}`
-        );
-        const json = await res.json();
-        if (json.success && Array.isArray(json.data)) {
-          setDbTimelinesToday(json.data);
+  // 2. Tải lịch trình hôm nay chuẩn xác: Bỏ các param lọc làm sót dữ liệu
+  const fetchTodayTimeline = useCallback(async () => {
+    if (!myUserId) return;
+    setIsTimelineLoading(true);
+    try {
+      const res = await fetch(
+        `${API_BASE}/timelines?userId=${encodeURIComponent(myUserId)}&startDate=${todayStr}&endDate=${todayStr}`,
+        {
+          headers: {
+            "Content-Type": "application/json",
+            "x-user-id": myUserId,
+          },
         }
-      } catch (err) {
-        console.error("Lỗi nạp lịch trình hôm nay:", err);
-      } finally {
-        setIsTimelineLoading(false);
+      );
+      const json = await res.json();
+      if (json.success && Array.isArray(json.data)) {
+        const formatted = json.data.map((item) => {
+          let d = item.timelineDate || item.timeline_date || "";
+          if (d.includes("T")) d = d.split("T")[0];
+          return {
+            ...item,
+            timelineDate: d,
+            timeline_date: d,
+          };
+        });
+
+        // Lọc lấy đúng các ca học có ngày bằng hôm nay
+        const todayItems = formatted.filter((t) => t.timelineDate === todayStr);
+        setDbTimelinesToday(todayItems);
+        localStorage.setItem("tuna_today_tasks", JSON.stringify(todayItems));
       }
-    };
+    } catch (err) {
+      console.error("Lỗi nạp lịch trình hôm nay:", err);
+    } finally {
+      setIsTimelineLoading(false);
+    }
+  }, [todayStr, myUserId]);
 
+  useEffect(() => {
     fetchTodayTimeline();
-  }, [todayStr, academicProfile, myUserId]);
+  }, [fetchTodayTimeline]);
 
+  // 3. Kết hợp lịch chính khóa và ca tự học WRR thành danh sách hiển thị
   const todaySchedules = useMemo(() => {
     const scheduleItems = [];
 
+    // Lịch chính khóa
     let matchedSchedules = schedules.filter((s) => s.date === todayStr);
     if (matchedSchedules.length === 0 && schedules.length > 0) {
       const currentDayOfWeek = new Date().getDay();
@@ -120,7 +152,7 @@ export const HomeSection = ({ currentUser, onNavigate }) => {
         const [y, m, d] = s.date.split("-").map(Number);
         return new Date(y, m - 1, d).getDay() === currentDayOfWeek;
       });
-      matchedSchedules = matchedByDay.length > 0 ? matchedByDay : schedules.slice(0, 1);
+      matchedSchedules = matchedByDay.length > 0 ? matchedByDay : [];
     }
 
     matchedSchedules.forEach((item) => {
@@ -128,7 +160,7 @@ export const HomeSection = ({ currentUser, onNavigate }) => {
         id: `class_${item.id}`,
         title: item.title,
         time: `${item.period ? `Tiết ${item.period} • ` : ""}${item.time || "07:30 - 09:50"} • Phòng ${item.room || "C201"}`,
-        badge: item.category === "exam" ? "Lịch thi" : item.category === "online" ? "Trực tuyến" : "Lớp chính khóa",
+        badge: item.category === "exam" ? "Lịch thi" : item.category === "online" ? "Trực tuyến" : "Chính khóa",
         badgeStyle:
           item.category === "exam"
             ? "bg-amber-50 text-amber-700 border border-amber-200"
@@ -140,35 +172,37 @@ export const HomeSection = ({ currentUser, onNavigate }) => {
       });
     });
 
+    // Ca tự học WRR
     dbTimelinesToday.forEach((item) => {
-      const isDone = item.isCompleted || localStorage.getItem(`daily_completed_date_${item.subject}`) === todayStr;
+      const isDone = item.isCompleted || item.is_completed || localStorage.getItem(`daily_completed_date_${item.subject}`) === todayStr;
+      const isDoc = item.task_type === "doc_study" || item.taskType === "doc_study";
+      const isQuiz = item.task_type === "quiz" || item.taskType === "quiz";
 
-      let badgeName = isDone ? "Đã xong" : "Nhiệm vụ WRR";
+      let badgeName = isDone ? "✓ Hoàn thành" : isDoc ? "Tài liệu" : isQuiz ? "Luyện đề" : "Flashcard";
       let badgeStyle = isDone
         ? "bg-emerald-50 text-emerald-700 border border-emerald-200"
+        : isDoc
+        ? "bg-amber-50 text-amber-700 border border-amber-200"
         : "bg-indigo-50 text-indigo-700 border border-indigo-200";
-      let borderLeft = isDone ? "border-l-emerald-500" : "border-l-indigo-600";
+      let borderLeft = isDone ? "border-l-emerald-500" : isDoc ? "border-l-amber-500" : "border-l-indigo-600";
 
-      if (item.goalLevel === "HocBong") {
-        badgeName = isDone ? "Hoàn tất" : "Nâng cao";
-        badgeStyle = isDone ? "bg-emerald-50 text-emerald-700 border border-emerald-200" : "bg-amber-50 text-amber-800 border border-amber-300";
-        borderLeft = isDone ? "border-l-emerald-500" : "border-l-amber-500";
-      } else if (item.goalLevel === "QuaMon") {
-        badgeName = isDone ? "Đã xong" : "Cơ bản";
-        badgeStyle = isDone ? "bg-emerald-50 text-emerald-700 border border-emerald-200" : "bg-rose-50 text-rose-700 border border-rose-200";
-        borderLeft = isDone ? "border-l-emerald-500" : "border-l-rose-500";
-      }
+      const timeText = item.time_slot || item.timeSlot || "07:45 - 08:30";
+      const duration = item.duration_minutes || item.durationMinutes || 30;
 
       scheduleItems.push({
         id: `timeline_${item.id}`,
         title: item.title,
-        time: `${item.timeSlot} • ${item.durationMinutes}p • ${item.description}`,
+        time: `${timeText} • ${duration}p • ${item.subject || "Tự học"}`,
         badge: badgeName,
         badgeStyle: badgeStyle,
         borderLeft: borderLeft,
         action: () => {
-          if (item.actionTarget === "docs") setShowLibraryModal(true);
-          else onNavigate && onNavigate("tasks");
+          if (isDoc || item.actionTarget === "docs") {
+            if (onNavigate) onNavigate("docs");
+            else setShowLibraryModal(true);
+          } else {
+            if (onNavigate) onNavigate("tasks");
+          }
         },
       });
     });
@@ -439,7 +473,7 @@ export const HomeSection = ({ currentUser, onNavigate }) => {
         </div>
       </div>
 
-      {/* 4. Lịch trình hôm nay */}
+      {/* 4. Lịch trình hôm nay (Đã sửa để hiển thị ngay lập tức) */}
       <div className="bg-white rounded-3xl p-4 shadow-xs border border-slate-200/80">
         <div className="flex items-center justify-between mb-3">
           <div className="flex items-center gap-2">
@@ -460,10 +494,14 @@ export const HomeSection = ({ currentUser, onNavigate }) => {
           </button>
         </div>
 
-        {isTimelineLoading ? (
+        {isTimelineLoading && todaySchedules.length === 0 ? (
           <div className="py-6 text-center text-xs font-bold text-slate-400">
             <span className="spinner-border spinner-border-sm text-blue-600 me-2"></span>
             Đang đồng bộ lịch trình tối ưu...
+          </div>
+        ) : todaySchedules.length === 0 ? (
+          <div className="py-6 text-center text-xs font-bold text-slate-400 bg-slate-50/60 rounded-2xl border border-dashed border-slate-200">
+            Hôm nay không có ca học nào. Bấm "Mở lịch tuần" để xem cả tuần!
           </div>
         ) : (
           <div className="space-y-2.5">
