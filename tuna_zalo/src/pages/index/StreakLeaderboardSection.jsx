@@ -6,7 +6,7 @@ const API_BASE = "https://tuna-project.onrender.com/api";
 export const StreakLeaderboardSection = ({ onBack, currentUser }) => {
   const [activeTab, setActiveTab] = useState("streak");
 
-  // Định danh người dùng thực tế từ session/profile (Không gán cứng B2300001)
+  // Định danh người dùng thực tế từ session/profile
   const targetUserId = useMemo(() => {
     if (currentUser?.student_code) return String(currentUser.student_code).trim();
     if (currentUser?.id) return String(currentUser.id).trim();
@@ -26,7 +26,7 @@ export const StreakLeaderboardSection = ({ onBack, currentUser }) => {
     return String(localStorage.getItem("tuna_user_id") || "").trim();
   }, [currentUser]);
 
-  // Khởi tạo trạng thái thực tế bằng 0, không gán số liệu ảo
+  // Khởi tạo trạng thái thực tế từ bộ nhớ đệm
   const [streakData, setStreakData] = useState(() => {
     const cachedXp = Number(localStorage.getItem("user_study_xp"));
     const cachedStreak = Number(localStorage.getItem("user_current_streak"));
@@ -43,10 +43,9 @@ export const StreakLeaderboardSection = ({ onBack, currentUser }) => {
   const [loading, setLoading] = useState(false);
 
   // Nạp dữ liệu thời gian thực từ CSDL
-const fetchDbData = useCallback(async () => {
+  const fetchDbData = useCallback(async () => {
     setLoading(true);
     try {
-      // 1. Thử gọi /api/leaderboard, nếu không có dữ liệu sẽ tự chuyển sang /api/streak/leaderboard
       let lbRes = await fetch(`${API_BASE}/leaderboard`).catch(() => null);
       if (!lbRes || !lbRes.ok) {
         lbRes = await fetch(`${API_BASE}/streak/leaderboard`).catch(() => null);
@@ -54,12 +53,11 @@ const fetchDbData = useCallback(async () => {
 
       if (lbRes && lbRes.ok) {
         const lbJson = await lbRes.json();
-        if (lbJson.success && Array.isArray(lbJson.leaderboard) && lbJson.leaderboard.length > 0) {
+        if (lbJson.success && Array.isArray(lbJson.leaderboard)) {
           setLeaderboard(lbJson.leaderboard);
         }
       }
 
-      // 2. Nạp dữ liệu streak cá nhân
       if (targetUserId) {
         const streakRes = await fetch(`${API_BASE}/streak/${encodeURIComponent(targetUserId)}`).catch(() => null);
         if (streakRes && streakRes.ok) {
@@ -93,6 +91,13 @@ const fetchDbData = useCallback(async () => {
 
   useEffect(() => {
     fetchDbData();
+
+    // Lắng nghe tín hiệu nộp bài thành công để cập nhật lại danh sách ngay lập tức
+    const handleSync = () => {
+      fetchDbData();
+    };
+    window.addEventListener("tuna_study_task_completed", handleSync);
+    return () => window.removeEventListener("tuna_study_task_completed", handleSync);
   }, [fetchDbData]);
 
   // Chuẩn hóa định dạng ngày địa phương YYYY-MM-DD
@@ -113,7 +118,6 @@ const fetchDbData = useCallback(async () => {
       const dayLabel = ["CN", "T2", "T3", "T4", "T5", "T6", "T7"][d.getDay()];
       const isToday = diffFromToday === 0;
 
-      // Chỉ thắp sáng nếu ngày có lưu trong nhật ký streak_logs của CSDL
       const isDone = Boolean(streakData.activeDays && streakData.activeDays.includes(str));
 
       return { str, dayLabel, isToday, isDone };
@@ -122,7 +126,7 @@ const fetchDbData = useCallback(async () => {
 
   return (
     <div className="flex flex-col min-h-screen bg-[#F8FAFC] pb-24 max-w-lg mx-auto w-full">
-      {/* 1. Header toolbar */}
+      {/* 1. Header Toolbar */}
       <div className="bg-gradient-to-r from-amber-500 via-orange-600 to-indigo-700 text-white px-4 py-3.5 shadow-sm flex items-center justify-between mb-3 rounded-b-3xl">
         <div className="flex items-center gap-3">
           <button
@@ -237,7 +241,7 @@ const fetchDbData = useCallback(async () => {
             </div>
           </div>
 
-          {/* Chỉ số thực tế */}
+          {/* Khối thống kê chỉ số */}
           <div className="grid grid-cols-2 gap-2.5">
             <div className="bg-blue-50/70 border border-blue-200/80 p-3.5 rounded-3xl shadow-xs text-center">
               <span className="text-[10.5px] font-black text-blue-700 block mb-0.5 tracking-wide">
@@ -286,7 +290,13 @@ const fetchDbData = useCallback(async () => {
                 const isTop1 = idx === 0;
                 const isTop2 = idx === 1;
                 const isTop3 = idx === 2;
-                const isMe = targetUserId && String(user.user_id) === String(targetUserId);
+
+                const myName = (currentUser?.name || localStorage.getItem("tuna_user_name") || "").toLowerCase().trim();
+                const currentTargetId = String(targetUserId || "").toLowerCase().trim();
+
+                const isMe =
+                  (user.user_id && String(user.user_id).toLowerCase().trim() === currentTargetId) ||
+                  (user.user_name && user.user_name.toLowerCase().trim() === myName);
 
                 return (
                   <div

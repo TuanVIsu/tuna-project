@@ -652,9 +652,7 @@ export const ManageUsers = () => {
                         ) : (
                           <span className="text-muted small">Chưa có MSSV</span>
                         )}
-                        <span className="font-monospace text-secondary fw-bold" style={{ fontSize: "10.5px" }}>
-                          {u.className || "Chưa xếp lớp"}
-                        </span>
+                 
                       </div>
                     </td>
 

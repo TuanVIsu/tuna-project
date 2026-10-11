@@ -7,10 +7,16 @@ const DEFAULT_AVATAR = "https://images.unsplash.com/photo-1534528741775-53994a69
 
 export const ProfileSection = ({ currentUser: initialUser }) => {
   const [user, setUser] = useState(initialUser || getCurrentUser());
-  const [stats, setStats] = useState({
-    streak: 0,
-    xp: 0,
-    rank: "-",
+  
+  // Khởi tạo state từ localStorage để hiển thị ngay tức thì, tránh nháy về 0
+  const [stats, setStats] = useState(() => {
+    const cachedStreak = Number(localStorage.getItem("user_current_streak") || 0);
+    const cachedXp = Number(localStorage.getItem("user_study_xp") || 0);
+    return {
+      streak: cachedStreak,
+      xp: cachedXp,
+      rank: "-",
+    };
   });
 
   const [availableFaculties, setAvailableFaculties] = useState([]);
@@ -27,13 +33,14 @@ export const ProfileSection = ({ currentUser: initialUser }) => {
   const [facultyInput, setFacultyInput] = useState("");
   const [isUpdating, setIsUpdating] = useState(false);
 
+  // Định danh người dùng thực tế
   const myUserId = useMemo(() => {
     let savedId = localStorage.getItem("tuna_user_id");
     if (!savedId) {
-      savedId = user?.student_code || user?.id || "B2300001";
+      savedId = user?.student_code || user?.id || user?.zalo_id || "B2300001";
       localStorage.setItem("tuna_user_id", String(savedId));
     }
-    return String(savedId);
+    return String(savedId).trim();
   }, [user]);
 
   const fetchFaculties = async () => {
@@ -44,35 +51,87 @@ export const ProfileSection = ({ currentUser: initialUser }) => {
         setAvailableFaculties(json.data);
       }
     } catch (e) {
-      console.warn("Không tải được danh mục khoa từ DB:", e);
+      console.warn("Không tải được danh mục khoa:", e);
     }
   };
 
+  // ĐỒNG BỘ DỮ LIỆU THỰC TẾ TỪ STREAK & LEADERBOARD
   const fetchProfileAndStats = useCallback(async () => {
     if (!myUserId) return;
+
     try {
-      const res = await fetch(`${API_BASE}/student/profile/${myUserId}`);
-      const json = await res.json();
-      if (json.success && json.data) {
-        if (json.data.user) {
+      // 1. Gọi song song cả API thông tin hồ sơ, streak thực tế và bảng xếp hạng
+      const [profileRes, streakRes, lbRes] = await Promise.all([
+        fetch(`${API_BASE}/student/profile/${encodeURIComponent(myUserId)}`).catch(() => null),
+        fetch(`${API_BASE}/streak/${encodeURIComponent(myUserId)}`).catch(() => null),
+        fetch(`${API_BASE}/leaderboard`).catch(() => null),
+      ]);
+
+      // Cập nhật thông tin sinh viên
+      if (profileRes && profileRes.ok) {
+        const json = await profileRes.json();
+        if (json.success && json.data?.user) {
           setUser((prev) => ({ ...prev, ...json.data.user }));
           localStorage.setItem("user", JSON.stringify(json.data.user));
           localStorage.setItem("user_info", JSON.stringify(json.data.user));
         }
-        if (json.data.stats) {
-          setStats(json.data.stats);
-          localStorage.setItem("user_current_streak", String(json.data.stats.streak));
-          localStorage.setItem("user_study_xp", String(json.data.stats.xp));
+      }
+
+      let currentStreak = Number(localStorage.getItem("user_current_streak") || 0);
+      let currentXp = Number(localStorage.getItem("user_study_xp") || 0);
+
+      // Cập nhật điểm Streak & XP từ backend
+      if (streakRes && streakRes.ok) {
+        const sJson = await streakRes.json();
+        if (sJson.success) {
+          currentStreak = Number(sJson.current_streak) || 0;
+          currentXp = Number(sJson.xp_points) || 0;
+          localStorage.setItem("user_current_streak", String(currentStreak));
+          localStorage.setItem("user_study_xp", String(currentXp));
         }
       }
+
+      // Tính toán thứ hạng Top thực tế từ mảng Leaderboard
+      let rankText = "-";
+      if (lbRes && lbRes.ok) {
+        const lbJson = await lbRes.json();
+        if (lbJson.success && Array.isArray(lbJson.leaderboard)) {
+          const myIndex = lbJson.leaderboard.findIndex(
+            (item) => String(item.user_id).toLowerCase() === myUserId.toLowerCase()
+          );
+          if (myIndex !== -1) {
+            rankText = String(myIndex + 1);
+          } else {
+            // Nếu chưa lọt bảng, gán bằng độ dài bảng + 1
+            rankText = String(lbJson.leaderboard.length + 1);
+          }
+        }
+      }
+
+      setStats({
+        streak: currentStreak,
+        xp: currentXp,
+        rank: rankText,
+      });
     } catch (err) {
-      console.error("Lỗi nạp thông tin hồ sơ:", err);
+      console.error("Lỗi nạp thông tin hồ sơ và điểm thưởng:", err);
     }
   }, [myUserId]);
 
   useEffect(() => {
     fetchFaculties();
     fetchProfileAndStats();
+
+    // Tự động làm mới khi vừa nộp bài tập xong ở các tab khác
+    const handleSync = () => {
+      fetchProfileAndStats();
+    };
+    window.addEventListener("tuna_study_task_completed", handleSync);
+    window.addEventListener("storage", handleSync);
+    return () => {
+      window.removeEventListener("tuna_study_task_completed", handleSync);
+      window.removeEventListener("storage", handleSync);
+    };
   }, [fetchProfileAndStats]);
 
   useEffect(() => {
@@ -226,6 +285,7 @@ export const ProfileSection = ({ currentUser: initialUser }) => {
           </div>
         </div>
 
+        {/* 3 Ô Thống kê: Tự động cập nhật đồng bộ theo thời gian thực */}
         <div className="grid grid-cols-3 gap-2 pt-2.5 border-t border-slate-100 text-center">
           <div className="bg-slate-50 p-2.5 rounded-2xl border border-slate-100">
             <span className="text-[10px] text-slate-500 font-bold block">Chuỗi học</span>

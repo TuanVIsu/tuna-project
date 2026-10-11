@@ -3,7 +3,7 @@ const express = require('express');
 const router = express.Router();
 const pool = require('../config/db');
 
-// Helper: Tìm kiếm ID sinh viên chính xác trong database
+// Helper: Phân giải định danh người dùng chính xác trong CSDL
 const resolveDbUserId = async (rawId) => {
   if (!rawId || rawId === 'undefined') return null;
   try {
@@ -26,7 +26,7 @@ const resolveDbUserId = async (rawId) => {
 };
 
 // =============================================================================
-// 1. GET /api/streak/:userId - LẤY DỮ LIỆU STREAK & NHẬT KÝ THỰC TẾ
+// 1. GET /api/streak/:userId - LẤY DỮ LIỆU STREAK VÀ NHẬT KÝ HOẠT ĐỘNG
 // =============================================================================
 router.get('/:userId', async (req, res) => {
   try {
@@ -44,7 +44,6 @@ router.get('/:userId', async (req, res) => {
       });
     }
 
-    // Lấy chuỗi streak và XP
     const streakRes = await pool.query(
       `SELECT current_streak, longest_streak, xp_points, streak_freeze_count, last_completed_date
        FROM user_streaks 
@@ -52,7 +51,6 @@ router.get('/:userId', async (req, res) => {
       [finalUserId]
     );
 
-    // Lấy 14 ngày học tập gần nhất từ bảng streak_logs
     const logsRes = await pool.query(
       `SELECT TO_CHAR(activity_date, 'YYYY-MM-DD') AS act_date 
        FROM streak_logs 
@@ -78,6 +76,7 @@ router.get('/:userId', async (req, res) => {
       longest_streak: Number(s.longest_streak) || Number(s.current_streak) || 0,
       xp_points: Number(s.xp_points) || 0,
       streak_freeze: Number(s.streak_freeze_count) || 0,
+      last_completed_date: s.last_completed_date,
       activeDays
     });
   } catch (err) {
@@ -177,52 +176,43 @@ router.post('/check-in', async (req, res) => {
 });
 
 // =============================================================================
-// 3. GET /api/leaderboard - BẢNG XẾP HẠNG LẤY TỪ USERS + USER_STREAKS
+// 3. GET /api/leaderboard - BẢNG XẾP HẠNG THÀNH TÍCH ĐẦY ĐỦ
 // =============================================================================
 router.get(['/leaderboard', '/top/ranks'], async (req, res) => {
   try {
-    // Truy vấn từ bảng users, kết hợp dữ liệu điểm streak
     const query = `
       SELECT 
-        COALESCE(u.student_code, u.zalo_id, u.id::TEXT) AS user_id,
-        u.name AS user_name,
+        s.user_id,
+        COALESCE(u.name, s.user_id, 'Sinh viên TUNA') AS user_name,
         COALESCE(s.xp_points, 0) AS xp,
         COALESCE(s.current_streak, 0) AS streak,
         COALESCE(s.longest_streak, 0) AS longest_streak
-      FROM users u
-      LEFT JOIN user_streaks s ON (
+      FROM user_streaks s
+      LEFT JOIN users u ON (
         s.user_id = u.student_code 
         OR s.user_id = u.zalo_id 
         OR s.user_id = u.id::TEXT
         OR LOWER(u.email) = LOWER(s.user_id)
       )
-      WHERE u.name IS NOT NULL AND u.name <> ''
+      WHERE COALESCE(s.xp_points, 0) > 0 OR u.name IS NOT NULL
       ORDER BY COALESCE(s.xp_points, 0) DESC, COALESCE(s.current_streak, 0) DESC
-      LIMIT 25
+      LIMIT 30
     `;
     let { rows } = await pool.query(query);
 
-    // Nếu bảng users chưa có sinh viên nào khác, tạo dữ liệu khởi tạo ban đầu
-    if (rows.length === 0) {
-      await pool.query(`
-        INSERT INTO users (zalo_id, name, student_code, role, faculty) VALUES
-        ('zalo_dev_2311052', 'Nguyễn Minh Tuấn', 'B2300001', 'student', 'Hệ Thống Thông Tin'),
-        ('zalo_sv_02', 'Lê Hoàng Nam', 'B2300045', 'student', 'Công Nghệ Thông Tin'),
-        ('zalo_sv_03', 'Trần Thảo My', 'B2300088', 'student', 'Hệ Thống Thông Tin')
-        ON CONFLICT (zalo_id) DO NOTHING;
+    // Chuẩn hóa loại bỏ trùng lặp nếu có sự phân mảnh định danh
+    const uniqueMap = new Map();
+    rows.forEach((r) => {
+      const key = String(r.user_name || r.user_id).trim().toLowerCase();
+      if (!uniqueMap.has(key) || uniqueMap.get(key).xp < r.xp) {
+        uniqueMap.set(key, r);
+      }
+    });
 
-        INSERT INTO user_streaks (user_id, current_streak, longest_streak, xp_points, last_active_date) VALUES
-        ('B2300001', 5, 12, 340, CURRENT_DATE),
-        ('B2300045', 4, 8, 260, CURRENT_DATE),
-        ('B2300088', 2, 4, 180, CURRENT_DATE)
-        ON CONFLICT (user_id) DO NOTHING;
-      `).catch(() => {});
+    const finalLeaderboard = Array.from(uniqueMap.values())
+      .sort((a, b) => b.xp - a.xp || b.streak - a.streak);
 
-      const retry = await pool.query(query);
-      rows = retry.rows;
-    }
-
-    res.json({ success: true, leaderboard: rows });
+    res.json({ success: true, leaderboard: finalLeaderboard });
   } catch (err) {
     console.error("Lỗi GET /api/leaderboard:", err);
     res.status(500).json({ success: false, error: err.message, leaderboard: [] });
