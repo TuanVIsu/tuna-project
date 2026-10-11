@@ -17,18 +17,18 @@ export const HomeSection = ({ currentUser, onNavigate }) => {
   const [showLibraryModal, setShowLibraryModal] = useState(false);
   const [currentTaskIdx, setCurrentTaskIdx] = useState(0);
 
-  // 1. Đồng bộ cơ chế lấy ID người dùng giống hệt TimelinePage
+  // 1. Đồng bộ định danh người dùng
   const myUserId = useMemo(() => {
     try {
       const u = JSON.parse(localStorage.getItem("user") || localStorage.getItem("user_info") || "{}");
-      const id = u.email || u.student_code || u.zalo_id || u.id;
+      const id = u.student_code || u.id || u.zalo_id || u.email;
       if (id && id !== "undefined" && id !== "null") return String(id).trim();
     } catch (e) {}
 
-    const directId = currentUser?.email || currentUser?.student_code || currentUser?.id;
+    const directId = currentUser?.student_code || currentUser?.id || currentUser?.zalo_id || currentUser?.email;
     if (directId) return String(directId).trim();
 
-    return String(localStorage.getItem("user_email") || localStorage.getItem("tuna_user_id") || "B2300001").trim();
+    return String(localStorage.getItem("tuna_user_id") || "B2300001").trim();
   }, [currentUser]);
 
   const [streakCount, setStreakCount] = useState(() => {
@@ -59,7 +59,6 @@ export const HomeSection = ({ currentUser, onNavigate }) => {
         setSchedules(JSON.parse(savedSchedules));
       }
 
-      // Đọc sẵn cache nhiệm vụ hôm nay từ TimelinePage để render ngay tức thì
       const cachedTodayTasks = localStorage.getItem("tuna_today_tasks");
       if (cachedTodayTasks) {
         const parsed = JSON.parse(cachedTodayTasks);
@@ -67,6 +66,10 @@ export const HomeSection = ({ currentUser, onNavigate }) => {
           setDbTimelinesToday(parsed);
         }
       }
+
+      // Cập nhật lại streak từ bộ nhớ cục bộ
+      const currentStreak = Number(localStorage.getItem("user_current_streak") || 0);
+      setStreakCount(currentStreak);
     } catch (e) {
       console.error("Lỗi nạp dữ liệu cá nhân:", e);
     }
@@ -76,14 +79,16 @@ export const HomeSection = ({ currentUser, onNavigate }) => {
     loadStoredData();
   }, [loadStoredData]);
 
+  // Tải thông tin streak & XP từ CSDL
   const fetchStreak = useCallback(async () => {
     if (!myUserId) return;
     try {
-      const res = await fetch(`${API_BASE}/streak/${myUserId}`);
+      const res = await fetch(`${API_BASE}/streak/${encodeURIComponent(myUserId)}`);
       const data = await res.json();
       if (data.success) {
-        setStreakCount(data.current_streak);
-        localStorage.setItem("user_current_streak", String(data.current_streak));
+        const streakVal = Number(data.current_streak) || 0;
+        setStreakCount(streakVal);
+        localStorage.setItem("user_current_streak", String(streakVal));
         if (data.xp_points !== undefined) {
           localStorage.setItem("user_study_xp", String(data.xp_points));
         }
@@ -97,7 +102,7 @@ export const HomeSection = ({ currentUser, onNavigate }) => {
     fetchStreak();
   }, [fetchStreak]);
 
-  // 2. Tải lịch trình hôm nay chuẩn xác: Bỏ các param lọc làm sót dữ liệu
+  // Tải lịch trình hôm nay
   const fetchTodayTimeline = useCallback(async () => {
     if (!myUserId) return;
     setIsTimelineLoading(true);
@@ -123,7 +128,6 @@ export const HomeSection = ({ currentUser, onNavigate }) => {
           };
         });
 
-        // Lọc lấy đúng các ca học có ngày bằng hôm nay
         const todayItems = formatted.filter((t) => t.timelineDate === todayStr);
         setDbTimelinesToday(todayItems);
         localStorage.setItem("tuna_today_tasks", JSON.stringify(todayItems));
@@ -139,11 +143,10 @@ export const HomeSection = ({ currentUser, onNavigate }) => {
     fetchTodayTimeline();
   }, [fetchTodayTimeline]);
 
-  // 3. Kết hợp lịch chính khóa và ca tự học WRR thành danh sách hiển thị
+  // Kết hợp lịch chính khóa và ca tự học
   const todaySchedules = useMemo(() => {
     const scheduleItems = [];
 
-    // Lịch chính khóa
     let matchedSchedules = schedules.filter((s) => s.date === todayStr);
     if (matchedSchedules.length === 0 && schedules.length > 0) {
       const currentDayOfWeek = new Date().getDay();
@@ -172,7 +175,6 @@ export const HomeSection = ({ currentUser, onNavigate }) => {
       });
     });
 
-    // Ca tự học WRR
     dbTimelinesToday.forEach((item) => {
       const isDone = item.isCompleted || item.is_completed || localStorage.getItem(`daily_completed_date_${item.subject}`) === todayStr;
       const isDoc = item.task_type === "doc_study" || item.taskType === "doc_study";
@@ -210,48 +212,59 @@ export const HomeSection = ({ currentUser, onNavigate }) => {
     return scheduleItems;
   }, [schedules, dbTimelinesToday, todayStr, onNavigate]);
 
+  // 3. ĐỒNG BỘ TOÀN DIỆN TRẠNG THÁI HOÀN THÀNH VỚI TasksSection
   const dynamicTaskList = useMemo(() => {
     const rawSubjects = academicProfile?.subjects || [];
     const subjects = rawSubjects.filter(
       (s) => s && String(s).trim() !== "" && String(s) !== "undefined"
     );
 
-    const fallbackSub = "Cơ sở dữ liệu căn bản";
+    const fallbackSub = "Hệ cơ sở dữ liệu đa phương tiện";
     const sub1 = subjects[0] || fallbackSub;
     const sub2 = subjects[1] || sub1;
     const sub3 = subjects[2] || sub1;
 
-    const isSub1Done =
+    // Kiểm tra tất cả các key có thể đã được lưu khi hoàn thành trắc nghiệm
+    const isQuizDone =
+      localStorage.getItem(`daily_quiz_completed_${sub1}_${todayStr}`) === "true" ||
+      localStorage.getItem(`daily_quiz_completed_${todayStr}`) === "true" ||
       localStorage.getItem(`daily_completed_date_${sub1}`) === todayStr ||
       localStorage.getItem(`daily_completed_date_${todayStr}`) === "true";
+
+    // Kiểm tra hoàn thành flashcard
+    const isFlashDone =
+      localStorage.getItem(`daily_flash_completed_${sub2}_${todayStr}`) === "true" ||
+      localStorage.getItem(`daily_flash_completed_${todayStr}`) === "true" ||
+      isQuizDone;
+
     const paceTime = academicProfile?.dailyPace || 15;
 
     return [
       {
         id: "daily_task_1",
-        tag: isSub1Done ? "Đã hoàn thành" : "Nhiệm vụ hôm nay",
-        tagBg: isSub1Done ? "bg-emerald-600 text-white" : "bg-blue-600 text-white",
+        tag: isQuizDone ? "Đã hoàn thành" : "Nhiệm vụ hôm nay",
+        tagBg: isQuizDone ? "bg-emerald-600 text-white" : "bg-blue-600 text-white",
         title: `Ôn tập trọng tâm môn ${sub1}`,
-        desc: isSub1Done
-          ? `Bạn đã hoàn thành thử thách môn ${sub1} hôm nay và nhận trọn vẹn +20 XP.`
+        desc: isQuizDone
+          ? `Bạn đã hoàn thành thử thách môn ${sub1} hôm nay và nhận trọn vẹn điểm thưởng XP.`
           : `Luyện đề trắc nghiệm AI bám sát giáo trình Thư viện theo thời lượng ${paceTime} phút/ngày.`,
-        current: isSub1Done ? 1 : 0,
+        current: isQuizDone ? 1 : 0,
         total: 1,
-        isCompleted: isSub1Done,
-        actionTarget: isSub1Done ? "done" : "tasks",
+        isCompleted: isQuizDone,
+        actionTarget: isQuizDone ? "done" : "tasks",
       },
       {
         id: "daily_task_2",
-        tag: isSub1Done ? "Đã hoàn thành" : "Thử thách Flashcard",
-        tagBg: isSub1Done ? "bg-emerald-600 text-white" : "bg-indigo-600 text-white",
+        tag: isFlashDone ? "Đã hoàn thành" : "Thử thách Flashcard",
+        tagBg: isFlashDone ? "bg-emerald-600 text-white" : "bg-indigo-600 text-white",
         title: `Lật thẻ thuật ngữ môn ${sub2}`,
-        desc: isSub1Done
+        desc: isFlashDone
           ? `Đã hoàn tất phiên ghi nhớ thuật ngữ của ngày hôm nay!`
           : `Ghi nhớ các khái niệm cốt lõi của môn ${sub2} để chuẩn bị kiến thức thi kết thúc học phần.`,
-        current: isSub1Done ? 1 : 0,
+        current: isFlashDone ? 1 : 0,
         total: 1,
-        isCompleted: isSub1Done,
-        actionTarget: isSub1Done ? "done" : "tasks",
+        isCompleted: isFlashDone,
+        actionTarget: isFlashDone ? "done" : "tasks",
       },
       {
         id: "daily_task_3",
@@ -409,7 +422,7 @@ export const HomeSection = ({ currentUser, onNavigate }) => {
         </div>
       </div>
 
-      {/* 3. Thẻ nhiệm vụ */}
+      {/* 3. Thẻ nhiệm vụ: Đã cập nhật đúng tiến độ 1/1 và nút "Đã hoàn thành" */}
       <div className="bg-white rounded-3xl p-4 shadow-xs border border-slate-200/80 relative overflow-hidden">
         <div className="flex items-center justify-between mb-2">
           <span className={`px-2.5 py-0.5 rounded-full text-[10.5px] font-black tracking-wide flex items-center gap-1 ${activeTask.tagBg}`}>
@@ -473,7 +486,7 @@ export const HomeSection = ({ currentUser, onNavigate }) => {
         </div>
       </div>
 
-      {/* 4. Lịch trình hôm nay (Đã sửa để hiển thị ngay lập tức) */}
+      {/* 4. Lịch trình hôm nay */}
       <div className="bg-white rounded-3xl p-4 shadow-xs border border-slate-200/80">
         <div className="flex items-center justify-between mb-3">
           <div className="flex items-center gap-2">

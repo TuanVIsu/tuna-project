@@ -279,7 +279,7 @@ export const AdminLayout = ({ onExitAdmin }) => {
         <div className="d-flex flex-column position-relative z-1 overflow-hidden">
           {/* Brand Header */}
           <div className="d-flex align-items-center justify-content-between px-2 py-2 mb-3">
-            <div className="d-flex align-items-center gap-2.5 overflow-hidden">
+            <div className="d-flex align-items-center gap-3 overflow-hidden">
               <div
                 className="d-flex align-items-center justify-content-center bg-white shadow-sm flex-shrink-0"
                 style={{

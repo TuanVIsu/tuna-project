@@ -176,11 +176,12 @@ router.post('/messages/recall', async (req, res) => {
 });
 
 // GET /api/community/user-status/:userId - Kiểm tra trạng thái khóa của người dùng
+// routes/community.routes.js -> GET /user-status/:userId
 router.get('/user-status/:userId', async (req, res) => {
   try {
     const { userId } = req.params;
     const { rows } = await pool.query(
-      `SELECT is_locked, lock_until, lock_reason, warning_count, last_warning_reason
+      `SELECT is_locked, lock_until, lock_reason, warning_count, warning_reason, last_warning_reason
        FROM users 
        WHERE zalo_id = $1 OR student_code = $1 OR id::TEXT = $1 OR LOWER(email) = LOWER($1)
        ORDER BY id DESC LIMIT 1`,
@@ -193,6 +194,7 @@ router.get('/user-status/:userId', async (req, res) => {
 
     const u = rows[0];
     const isLocked = u.is_locked && (!u.lock_until || new Date(u.lock_until) > new Date());
+    const warnReason = u.warning_reason || u.last_warning_reason || null;
 
     res.json({
       success: true,
@@ -201,7 +203,8 @@ router.get('/user-status/:userId', async (req, res) => {
       lockReason: u.lock_reason,
       durationText: u.lock_until ? new Date(u.lock_until).toLocaleString('vi-VN') : 'Vĩnh viễn',
       warningCount: u.warning_count || 0,
-      lastWarningReason: u.last_warning_reason
+      warningReason: warnReason,
+      lastWarningReason: warnReason
     });
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
@@ -354,6 +357,7 @@ router.post('/messages/bulk-delete', authenticateToken, async (req, res) => {
   }
 });
 
+// routes/community.routes.js -> POST /user/warn
 router.post('/user/warn', authenticateToken, async (req, res) => {
   try {
     const { userId, userName = 'Sinh viên', reason } = req.body;
@@ -369,22 +373,43 @@ router.post('/user/warn', authenticateToken, async (req, res) => {
     let targetId = null;
     if (uCheck.rows.length === 0) {
       const ins = await pool.query(
-        `INSERT INTO users (zalo_id, name, role, warning_count, last_warning_reason) VALUES ($1, $2, 'student', 1, $3) RETURNING id`,
+        `INSERT INTO users (zalo_id, name, role, warning_count, warning_reason, last_warning_reason) 
+         VALUES ($1, $2, 'student', 1, $3, $3) RETURNING id`,
         [userId, userName, reason]
       );
       targetId = ins.rows[0].id;
     } else {
       targetId = uCheck.rows[0].id;
-      await pool.query(`UPDATE users SET warning_count = COALESCE(warning_count, 0) + 1, last_warning_reason = $1 WHERE id = $2`, [reason, targetId]);
+      await pool.query(
+        `UPDATE users 
+         SET warning_count = COALESCE(warning_count, 0) + 1, 
+             warning_reason = $1, 
+             last_warning_reason = $1 
+         WHERE id = $2`, 
+        [reason, targetId]
+      );
     }
 
+    // PHÁT ĐỒNG BỘ CẢ 2 EVENT ĐỂ CHẮC CHẮN CLIENT NHẬN ĐƯỢC
     const io = req.app.get('io');
     if (io) {
-      io.emit('user_warned', { userId, userName, reason });
-      io.emit(`user_warning_${userId}`, { userId, userName, reason });
+      const warningPayload = {
+        userId: String(userId),
+        userName: userName,
+        reason: reason,
+        warnedBy: 'Ban Quản Trị',
+        timestamp: new Date().toISOString()
+      };
+
+      // Tên event chuẩn mà ChatSection.jsx đang lắng nghe
+      io.emit('admin_warning_received', warningPayload);
+      io.emit('user_warned', warningPayload);
+      io.emit(`user_warning_${userId}`, warningPayload);
     }
+
     res.json({ success: true, message: `Đã gửi cảnh báo thành công!` });
   } catch (err) {
+    console.error("Lỗi cảnh báo:", err);
     res.status(500).json({ success: false, message: err.message });
   }
 });

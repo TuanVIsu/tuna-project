@@ -5,10 +5,7 @@ const crypto = require('crypto');
 const pool = require('../config/db');
 const { generateContentWithFallback } = require('../utils/gemini');
 
-// Đường dẫn service Python SWRR trên Render
-const WRR_SERVICE_URL = process.env.WRR_SERVICE_URL || 'https://tuna-wrr-service.onrender.com';
-
-// Helper trích xuất User ID thực tế từ Header / Body / Query
+// Trích xuất User ID định danh từ request
 const extractUserId = (req) => {
   return String(
     req.headers['x-user-id'] ||
@@ -33,7 +30,6 @@ const getOrCreateAiSettings = async () => {
       return settingsRes.rows[0];
     }
 
-    // Nếu chưa có dòng nào, tự động tạo cấu hình mặc định ban đầu
     const insertRes = await pool.query(
       `INSERT INTO system_ai_settings (enable_ai_global, daily_token_limit_per_user, cache_ttl_hours, max_questions_per_gen)
        VALUES (TRUE, 15000, 24, 5)
@@ -52,7 +48,7 @@ const getOrCreateAiSettings = async () => {
   }
 };
 
-// Helper: Kiểm tra Gateway bật/tắt & Hạn mức token trong ngày
+// Helper: Kiểm tra Gateway & Hạn mức token
 const checkUserTokenLimit = async (userId) => {
   try {
     const settings = await getOrCreateAiSettings();
@@ -93,7 +89,6 @@ const checkUserTokenLimit = async (userId) => {
 // 1. APIS QUẢN TRỊ ADMIN (AdminDashboard & ManageAI)
 // =============================================================================
 
-// GET: Lấy thống kê sử dụng AI cho Admin Dashboard (Hỗ trợ đa endpoint)
 router.get(['/stats', '/admin/stats', '/admin/ai/stats'], async (req, res) => {
   try {
     const settings = await getOrCreateAiSettings();
@@ -174,10 +169,6 @@ router.get(['/stats', '/admin/stats', '/admin/ai/stats'], async (req, res) => {
   }
 });
 
-// POST: Bật / Tắt Gateway AI (Xử lý dứt điểm lỗi "Không thể chuyển trạng thái AI")
-// routes/ai.routes.js
-// Đoạn route toggle & settings:
-
 router.post(['/toggle', '/admin/toggle-ai', '/admin/ai/toggle'], async (req, res) => {
   const { enabled } = req.body;
   try {
@@ -202,7 +193,6 @@ router.post(['/toggle', '/admin/toggle-ai', '/admin/ai/toggle'], async (req, res
   }
 });
 
-// PUT: Lưu cấu hình hạn mức vào CSDL (Hỗ trợ đa endpoint)
 router.put(['/settings', '/admin/settings', '/admin/ai/settings'], async (req, res) => {
   try {
     const { daily_token_limit_per_user, max_questions_per_gen, enable_ai_global, cache_ttl_hours } = req.body;
@@ -225,17 +215,6 @@ router.put(['/settings', '/admin/settings', '/admin/ai/settings'], async (req, r
       ]
     );
 
-    await pool.query(
-      `INSERT INTO admin_audit_logs (actor_name, actor_role, action, details)
-       VALUES ($1, $2, $3, $4)`,
-      [
-        'Quản trị viên', 
-        'super_admin', 
-        'CẬP NHẬT CẤU HÌNH AI', 
-        `Hạn mức: ${daily_token_limit_per_user} tokens/ngày, TTL Cache: ${cache_ttl_hours}h`
-      ]
-    ).catch(() => {});
-
     res.json({ success: true, message: 'Đã cập nhật chính sách hạn mức AI thành công!' });
   } catch (err) {
     console.error("Lỗi cập nhật settings AI:", err);
@@ -243,17 +222,9 @@ router.put(['/settings', '/admin/settings', '/admin/ai/settings'], async (req, r
   }
 });
 
-// POST: Làm sạch bộ nhớ đệm
 router.post(['/clear-cache', '/admin/clear-cache', '/admin/ai/clear-cache'], async (req, res) => {
   try {
     const delRes = await pool.query(`DELETE FROM ai_cached_outputs`);
-    
-    await pool.query(
-      `INSERT INTO admin_audit_logs (actor_name, actor_role, action, details)
-       VALUES ($1, $2, $3, $4)`,
-      ['Quản trị viên', 'super_admin', 'XÓA CACHE AI', `Đã dọn sạch ${delRes.rowCount || 0} bản ghi bộ nhớ đệm.`]
-    ).catch(() => {});
-
     res.json({ success: true, message: `Đã dọn dẹp ${delRes.rowCount || 0} bản ghi bộ nhớ đệm AI!` });
   } catch (err) {
     console.error("Lỗi xóa cache:", err);
@@ -262,10 +233,10 @@ router.post(['/clear-cache', '/admin/clear-cache', '/admin/ai/clear-cache'], asy
 });
 
 // =============================================================================
-// 2. APIS SINH NỘI DUNG VỚI CACHE 24H & GHI NHẬN TOKEN
+// 2. APIS SINH NỘI DUNG VỚI CACHE ĐÚNG THEO TUNA_PROJECT_DB.SQL
 // =============================================================================
 
-// POST /api/ai/generate - Sinh nội dung trực tiếp qua Gemini (Có Cache & ghi Task)
+// POST /api/ai/generate - Sinh nội dung trực tiếp qua Gemini
 router.post('/generate', async (req, res) => {
   const { prompt, isJson, featureType = 'chat_assistant', docName = 'Yêu cầu trực tiếp' } = req.body;
   const userId = extractUserId(req);
@@ -277,29 +248,33 @@ router.post('/generate', async (req, res) => {
     }
 
     const ttlHours = limitCheck.settings?.cache_ttl_hours || 24;
-    const promptHash = crypto.createHash('md5').update((prompt || '').trim()).digest('hex');
+    const contentHash = crypto.createHash('sha256').update((prompt || '').trim()).digest('hex');
 
-    // 1. KIỂM TRA BỘ ĐỆM CACHE 24H
+    // Kiểm tra cache từ bảng ai_cached_outputs chuẩn schema (content_hash, feature_type, payload)
     const cacheRes = await pool.query(
-      `SELECT output_text 
+      `SELECT payload 
        FROM ai_cached_outputs 
-       WHERE prompt_hash = $1 
-         AND created_at >= NOW() - INTERVAL '1 hour' * $2 
+       WHERE content_hash = $1 
+         AND feature_type = $2
+         AND created_at >= NOW() - INTERVAL '1 hour' * $3 
        LIMIT 1`,
-      [promptHash, ttlHours]
+      [contentHash, featureType, ttlHours]
     ).catch(() => ({ rows: [] }));
 
     if (cacheRes.rows.length > 0) {
-      // Ghi task hoàn tất từ cache
+      const cachedPayload = cacheRes.rows[0].payload;
+      const textOutput = typeof cachedPayload === 'string' ? cachedPayload : JSON.stringify(cachedPayload);
+
       await pool.query(
-        `INSERT INTO ai_tasks (feature_id, doc_name, status, error_message, created_at)
-         VALUES ($1, $2, 'done', 'Phản hồi từ Cache 24h', CURRENT_TIMESTAMP)`,
-        [featureType, docName]
+        `INSERT INTO ai_tasks (id, feature_id, doc_name, status, error_message, created_at)
+         VALUES ($1, $2, $3, 'done', 'Phản hồi từ Cache 24h', CURRENT_TIMESTAMP)
+         ON CONFLICT (id) DO NOTHING`,
+        [`task_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`, featureType, docName]
       ).catch(() => {});
 
       return res.json({ 
         success: true, 
-        text: cacheRes.rows[0].output_text,
+        text: textOutput,
         cached: true 
       });
     }
@@ -311,7 +286,6 @@ router.post('/generate', async (req, res) => {
     const config = { temperature: 0.2, maxOutputTokens: 8192 };
     if (isJson) config.responseMimeType = 'application/json';
 
-    // 2. GỌI GEMINI NẾU KHÔNG CÓ TRONG CACHE
     const text = await generateContentWithFallback(prompt, config);
 
     const promptTokensEst = Math.round((prompt || '').length / 4);
@@ -319,127 +293,140 @@ router.post('/generate', async (req, res) => {
     const totalTokensEst = promptTokensEst + compTokensEst;
     const costUsd = Number(((totalTokensEst / 1000000) * 0.35).toFixed(6));
 
-    // 3. LƯU BẢN GHI TOKEN VÀ CACHE VÀO CSDL
+    // Lưu token log
     await pool.query(
       `INSERT INTO ai_token_logs (user_id, feature_type, prompt_tokens, completion_tokens, total_tokens, cost_usd)
        VALUES ($1, $2, $3, $4, $5, $6)`,
       [userId, featureType, promptTokensEst, compTokensEst, totalTokensEst, costUsd]
     ).catch(() => {});
 
+    // Lưu cache đúng schema tuna_project_db
+    let payloadToSave = text;
+    if (isJson) {
+      try { payloadToSave = JSON.parse(text); } catch (e) { payloadToSave = text; }
+    }
+
     await pool.query(
-      `INSERT INTO ai_cached_outputs (prompt_hash, prompt_text, output_text, created_at)
-       VALUES ($1, $2, $3, CURRENT_TIMESTAMP)
-       ON CONFLICT (prompt_hash) DO UPDATE SET output_text = EXCLUDED.output_text, created_at = CURRENT_TIMESTAMP`,
-      [promptHash, prompt, text]
+      `INSERT INTO ai_cached_outputs (content_hash, doc_title, feature_type, payload, created_at)
+       VALUES ($1, $2, $3, $4, CURRENT_TIMESTAMP)`,
+      [contentHash, docName, featureType, JSON.stringify(payloadToSave)]
     ).catch(() => {});
 
-    // 4. GHI NHẬN VÀO BẢNG AI_TASKS ĐỂ DASHBOARD HIỂN THỊ
+    // Ghi vào ai_tasks
     await pool.query(
-      `INSERT INTO ai_tasks (feature_id, doc_name, status, error_message, created_at)
-       VALUES ($1, $2, 'done', 'Xử lý thành công', CURRENT_TIMESTAMP)`,
-      [featureType, docName]
+      `INSERT INTO ai_tasks (id, feature_id, doc_name, status, error_message, created_at)
+       VALUES ($1, $2, $3, 'done', 'Xử lý thành công', CURRENT_TIMESTAMP)
+       ON CONFLICT (id) DO NOTHING`,
+      [`task_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`, featureType, docName]
     ).catch(() => {});
 
     res.json({ success: true, text, cached: false });
   } catch (error) {
     console.error('❌ Lỗi Gemini API:', error.message);
-
-    await pool.query(
-      `INSERT INTO ai_tasks (feature_id, doc_name, status, error_message, created_at)
-       VALUES ($1, $2, 'error', $3, CURRENT_TIMESTAMP)`,
-      [featureType, docName, error.message]
-    ).catch(() => {});
-
     res.status(500).json({ success: false, error: error.message });
   }
 });
 
-// POST /api/ai/daily-quiz/generate - Tạo câu hỏi trắc nghiệm & flashcard
+// POST /daily-quiz/generate - Sinh bài tập động theo môn học kết hợp CSDL & Gemini
 router.post(['/daily-quiz/generate', '/ai/daily-quiz/generate'], async (req, res) => {
   let { subject, targetGoal = 'KhaGioi', dailyPace = 15 } = req.body;
   const userId = extractUserId(req);
 
   if (!subject || subject === 'undefined' || subject.trim() === '') {
-    subject = 'Cơ sở dữ liệu căn bản';
+    subject = 'Hệ cơ sở dữ liệu đa phương tiện';
   }
 
   try {
     const limitCheck = await checkUserTokenLimit(userId);
-    if (!limitCheck.allowed) {
-      return res.status(403).json({ success: false, error: limitCheck.reason });
-    }
-
     const maxQuestions = limitCheck.settings?.max_questions_per_gen || 5;
-    const numQuestions = Math.min(dailyPace >= 30 ? 5 : 3, maxQuestions);
+    const numQuestions = Math.min(dailyPace >= 30 ? 5 : 4, maxQuestions);
     const difficulty = targetGoal === 'HocBong' ? 'Nâng cao' : 'Căn bản';
 
-    // 1. ƯU TIÊN LẤY TỪ NGÂN HÀNG CÂU HỎI TRONG CSDL (Zero Token Cost)
-    const dbQuiz = await pool.query(
-      `SELECT question, options, answer, explain 
-       FROM question_bank 
-       WHERE subject ILIKE $1 
-       ORDER BY RANDOM() LIMIT $2`,
-      [`%${subject}%`, numQuestions]
-    ).catch(() => ({ rows: [] }));
+    let questions = [];
+    let flashcards = [];
 
-    if (dbQuiz.rows && dbQuiz.rows.length >= numQuestions) {
-      await pool.query(
-        `INSERT INTO ai_tasks (feature_id, doc_name, status, error_message, created_at)
-         VALUES ('daily_quiz', $1, 'done', 'Lấy từ Ngân hàng câu hỏi (Zero Token)', CURRENT_TIMESTAMP)`,
-        [subject]
-      ).catch(() => {});
-
-      return res.json({
-        success: true,
-        source: 'database_bank',
-        subject,
-        questions: dbQuiz.rows.map(q => ({
-          ...q,
-          options: typeof q.options === 'string' ? JSON.parse(q.options) : q.options
-        })),
-        flashcards: [
-          { front: `Thuật ngữ: ${subject}`, back: `Định nghĩa và nguyên lý cốt lõi của ${subject}.` }
-        ],
-      });
-    }
-
-    // 2. KIỂM TRA BỘ ĐỆM CACHE 24H
-    const cacheKey = `quiz_${subject}_${difficulty}_${numQuestions}`;
-    const cacheHash = crypto.createHash('md5').update(cacheKey).digest('hex');
+    // TẦNG 1: ƯU TIÊN KIỂM TRA BỘ NHỚ CACHE 24H (Zero Cost)
+    const cacheKey = `daily_${subject}_${difficulty}_${numQuestions}`;
+    const contentHash = crypto.createHash('sha256').update(cacheKey).digest('hex');
     const ttlHours = limitCheck.settings?.cache_ttl_hours || 24;
 
     const cacheRes = await pool.query(
-      `SELECT output_text FROM ai_cached_outputs 
-       WHERE prompt_hash = $1 AND created_at >= NOW() - INTERVAL '1 hour' * $2 LIMIT 1`,
-      [cacheHash, ttlHours]
+      `SELECT payload 
+       FROM ai_cached_outputs 
+       WHERE content_hash = $1 
+         AND feature_type = 'daily_quiz'
+         AND created_at >= NOW() - INTERVAL '1 hour' * $2 
+       LIMIT 1`,
+      [contentHash, ttlHours]
     ).catch(() => ({ rows: [] }));
 
     if (cacheRes.rows.length > 0) {
-      const parsedCache = JSON.parse(cacheRes.rows[0].output_text || '{}');
-
-      await pool.query(
-        `INSERT INTO ai_tasks (feature_id, doc_name, status, error_message, created_at)
-         VALUES ('daily_quiz', $1, 'done', 'Phản hồi từ Cache 24h', CURRENT_TIMESTAMP)`,
-        [subject]
-      ).catch(() => {});
+      const data = typeof cacheRes.rows[0].payload === 'string' 
+        ? JSON.parse(cacheRes.rows[0].payload) 
+        : cacheRes.rows[0].payload;
 
       return res.json({
         success: true,
         source: 'cache_24h',
         subject,
-        questions: parsedCache.questions || [],
-        flashcards: parsedCache.flashcards || [],
+        questions: data.questions || [],
+        flashcards: data.flashcards || [],
       });
     }
 
-    // 3. GỌI GEMINI NẾU CSDL VÀ CACHE ĐỀU CHƯA CÓ
-    const prompt = `Bạn là giảng viên đại học. Hãy tạo đúng ${numQuestions} câu hỏi trắc nghiệm và 2 thẻ ghi nhớ (flashcards) cho môn học "${subject}" ở mức độ [${difficulty}].
-YÊU CẦU: Trả về duy nhất một chuỗi JSON hợp lệ không có markdown:
+    // TẦNG 2: KIỂM TRA NGÂN HÀNG CÂU HỎI TRONG CSDL (question_bank & exam_questions)
+    const dbQuiz = await pool.query(
+      `SELECT question, options, answer, explain 
+       FROM question_bank 
+       WHERE LOWER(subject) ILIKE LOWER($1) 
+       ORDER BY RANDOM() LIMIT $2`,
+      [`%${subject}%`, numQuestions]
+    ).catch(() => ({ rows: [] }));
+
+    if (dbQuiz.rows && dbQuiz.rows.length >= numQuestions) {
+      questions = dbQuiz.rows.map(q => ({
+        question: q.question,
+        options: typeof q.options === 'string' ? JSON.parse(q.options) : q.options,
+        answer: q.answer,
+        explain: q.explain
+      }));
+    }
+
+    const dbFlash = await pool.query(
+      `SELECT eq.front_text AS front, eq.back_text AS back 
+       FROM exam_questions eq
+       JOIN exam_tests et ON eq.exam_id = et.id
+       WHERE LOWER(et.subject_name) ILIKE LOWER($1) 
+         AND eq.front_text IS NOT NULL AND eq.front_text <> ''
+       ORDER BY RANDOM() LIMIT 4`,
+      [`%${subject}%`]
+    ).catch(() => ({ rows: [] }));
+
+    if (dbFlash.rows && dbFlash.rows.length >= 2) {
+      flashcards = dbFlash.rows;
+    }
+
+    // Nếu CSDL đã có đủ câu hỏi & thẻ nhớ thì trả về ngay lập tức
+    if (questions.length >= numQuestions && flashcards.length >= 2) {
+      return res.json({
+        success: true,
+        source: 'database_bank',
+        subject,
+        questions,
+        flashcards,
+      });
+    }
+
+    // TẦNG 3: GỌI GEMINI NẾU CSDL CHƯA CÓ HOẶC THIẾU
+    if (limitCheck.allowed && process.env.GEMINI_API_KEY) {
+      try {
+        const prompt = `Bạn là giảng viên đại học. Hãy tạo đúng ${numQuestions} câu hỏi trắc nghiệm 4 lựa chọn (A, B, C, D) và 4 thẻ ghi nhớ (flashcards) cho môn học "${subject}" ở mức độ [${difficulty}].
+YÊU CẦU: Trả về duy nhất một chuỗi JSON hợp lệ không dùng markdown code block:
 {
   "questions": [
     {
       "question": "Nội dung câu hỏi?",
-      "options": ["A. Lựa chọn 1", "B. Lựa chọn 2", "C. Lựa chọn 3", "D. Lựa chọn 4"],
+      "options": ["A. Lựa chọn A", "B. Lựa chọn B", "C. Lựa chọn C", "D. Lựa chọn D"],
       "answer": "A",
       "explain": "Giải thích chi tiết"
     }
@@ -447,71 +434,95 @@ YÊU CẦU: Trả về duy nhất một chuỗi JSON hợp lệ không có markd
   "flashcards": [
     {
       "front": "Thuật ngữ chính",
-      "back": "Ý nghĩa thuật ngữ"
+      "back": "Định nghĩa hoặc giải thích chi tiết"
     }
   ]
 }`;
 
-    const textOutput = await generateContentWithFallback(prompt, { responseMimeType: 'application/json' });
-    const cleanJson = textOutput.replace(/```json|```/g, '').trim();
-    const parsed = JSON.parse(cleanJson || '{}');
+        const textOutput = await generateContentWithFallback(prompt, { responseMimeType: 'application/json' });
+        const cleanJson = textOutput.replace(/```json|```/g, '').trim();
+        const parsed = JSON.parse(cleanJson || '{}');
 
-    const generatedQuestions = parsed.questions || [];
-    const generatedFlashcards = parsed.flashcards || [];
+        if (Array.isArray(parsed.questions) && parsed.questions.length > 0) {
+          questions = parsed.questions;
+          flashcards = parsed.flashcards || [];
 
-    // Lưu vào ngân hàng câu hỏi để tái sử dụng
-    for (const q of generatedQuestions) {
-      await pool.query(
-        `INSERT INTO question_bank (subject, difficulty, question, options, answer, explain, usage_count)
-         VALUES ($1, $2, $3, $4, $5, $6, 1)`,
-        [subject, difficulty, q.question, JSON.stringify(q.options), (q.answer || 'A').charAt(0).toUpperCase(), q.explain || '']
-      ).catch(() => {});
+          // Tự động nạp vào bảng question_bank để làm giàu kho CSDL
+          for (const q of questions) {
+            pool.query(
+              `INSERT INTO question_bank (subject, difficulty, question, options, answer, explain, is_verified, usage_count)
+               VALUES ($1, $2, $3, $4, $5, $6, TRUE, 1)`,
+              [subject, difficulty, q.question, JSON.stringify(q.options), (q.answer || 'A').charAt(0).toUpperCase(), q.explain || '']
+            ).catch(() => {});
+          }
+
+          // Lưu cache 24h vào ai_cached_outputs
+          pool.query(
+            `INSERT INTO ai_cached_outputs (content_hash, doc_title, feature_type, payload, created_at)
+             VALUES ($1, $2, 'daily_quiz', $3, CURRENT_TIMESTAMP)`,
+            [contentHash, subject, JSON.stringify({ questions, flashcards })]
+          ).catch(() => {});
+
+          // Ghi nhật ký token
+          const totalTokensEst = Math.round((prompt.length + textOutput.length) / 4);
+          const costUsd = Number(((totalTokensEst / 1000000) * 0.35).toFixed(6));
+          pool.query(
+            `INSERT INTO ai_token_logs (user_id, feature_type, prompt_tokens, completion_tokens, total_tokens, cost_usd)
+             VALUES ($1, 'daily_quiz', $2, $3, $4, $5)`,
+            [userId, Math.round(prompt.length / 4), Math.round(textOutput.length / 4), totalTokensEst, costUsd]
+          ).catch(() => {});
+
+          return res.json({
+            success: true,
+            source: 'gemini_ai',
+            subject,
+            questions,
+            flashcards,
+          });
+        }
+      } catch (aiErr) {
+        console.warn("Lỗi gọi Gemini, chuyển sang fallback CSDL:", aiErr.message);
+      }
     }
 
-    // Ghi cache 24h
-    await pool.query(
-      `INSERT INTO ai_cached_outputs (prompt_hash, prompt_text, output_text, created_at)
-       VALUES ($1, $2, $3, CURRENT_TIMESTAMP)
-       ON CONFLICT (prompt_hash) DO UPDATE SET output_text = EXCLUDED.output_text, created_at = CURRENT_TIMESTAMP`,
-      [cacheHash, cacheKey, JSON.stringify({ questions: generatedQuestions, flashcards: generatedFlashcards })]
-    ).catch(() => {});
+    // TẦNG 4: NẾU GEMINI THẤT BẠI, LẤY BẤT KỲ CÂU NÀO CÓ TRONG QUESTION_BANK
+    const fallbackDb = await pool.query(
+      `SELECT question, options, answer, explain 
+       FROM question_bank 
+       ORDER BY RANDOM() LIMIT $1`,
+      [numQuestions]
+    ).catch(() => ({ rows: [] }));
 
-    // Ghi token logs
-    const totalTokensEst = Math.round((prompt.length + textOutput.length) / 4);
-    const costUsd = Number(((totalTokensEst / 1000000) * 0.35).toFixed(6));
-    await pool.query(
-      `INSERT INTO ai_token_logs (user_id, feature_type, prompt_tokens, completion_tokens, total_tokens, cost_usd)
-       VALUES ($1, 'daily_quiz', $2, $3, $4, $5)`,
-      [userId, Math.round(prompt.length / 4), Math.round(textOutput.length / 4), totalTokensEst, costUsd]
-    ).catch(() => {});
+    if (fallbackDb.rows.length > 0) {
+      questions = fallbackDb.rows.map(q => ({
+        question: q.question,
+        options: typeof q.options === 'string' ? JSON.parse(q.options) : q.options,
+        answer: q.answer,
+        explain: q.explain
+      }));
 
-    // Ghi task thành công
-    await pool.query(
-      `INSERT INTO ai_tasks (feature_id, doc_name, status, error_message, created_at)
-       VALUES ('daily_quiz', $1, 'done', 'Sinh mới thành công từ Gemini AI', CURRENT_TIMESTAMP)`,
-      [subject]
-    ).catch(() => {});
+      flashcards = [
+        { front: `Thuật ngữ ${subject}`, back: `Nguyên lý và cấu trúc dữ liệu cơ bản của môn ${subject}.` },
+        { front: `Chỉ mục trong ${subject}`, back: `Phương pháp tối ưu hóa truy vấn dữ liệu hiệu năng cao.` }
+      ];
 
-    res.json({
-      success: true,
-      source: 'gemini_ai',
-      subject,
-      questions: generatedQuestions,
-      flashcards: generatedFlashcards,
-    });
-  } catch (err) {
-    console.error("Lỗi daily-quiz:", err.message);
+      return res.json({
+        success: true,
+        source: 'database_fallback',
+        subject,
+        questions,
+        flashcards,
+      });
+    }
 
-    await pool.query(
-      `INSERT INTO ai_tasks (feature_id, doc_name, status, error_message, created_at)
-       VALUES ('daily_quiz', $1, 'error', $2, CURRENT_TIMESTAMP)`,
-      [subject, err.message]
-    ).catch(() => {});
-
-    res.status(500).json({
+    return res.status(500).json({
       success: false,
-      error: `Không thể tạo bài tập: ${err.message}`
+      error: 'Không tìm thấy câu hỏi trong CSDL và không thể kết nối tới dịch vụ AI.'
     });
+
+  } catch (err) {
+    console.error("Lỗi controller daily-quiz:", err);
+    res.status(500).json({ success: false, error: err.message });
   }
 });
 

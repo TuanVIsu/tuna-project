@@ -18,7 +18,13 @@ const pool = require('./config/db');
   try {
     await pool.query(`
       ALTER TABLE users 
-      ADD COLUMN IF NOT EXISTS email VARCHAR(255);
+      ADD COLUMN IF NOT EXISTS email VARCHAR(255),
+      ADD COLUMN IF NOT EXISTS is_locked BOOLEAN DEFAULT FALSE,
+      ADD COLUMN IF NOT EXISTS lock_until TIMESTAMP WITH TIME ZONE DEFAULT NULL,
+      ADD COLUMN IF NOT EXISTS lock_reason TEXT DEFAULT NULL,
+      ADD COLUMN IF NOT EXISTS warning_count INT DEFAULT 0,
+      ADD COLUMN IF NOT EXISTS warning_reason TEXT DEFAULT NULL,
+      ADD COLUMN IF NOT EXISTS last_warning_reason TEXT DEFAULT NULL;
     `);
     
     await pool.query(`
@@ -72,7 +78,7 @@ const io = new Server(server, {
 
 app.set('io', io);
 
-// 2. Cấu hình CORS chuẩn cho Express (ĐẶT ĐẦU TIÊN)
+// 2. Cấu hình CORS chuẩn cho Express
 const corsOptions = {
   origin: function (origin, callback) {
     callback(null, true);
@@ -143,17 +149,19 @@ app.use('/uploads', express.static(uploadDir));
 // Kích hoạt Socket
 require('./sockets/chat.socket')(io);
 
-// Đăng ký toàn bộ Router
+// Khai báo các router
 const aiRouter = require('./routes/ai.routes');
 const schedulesRouter = require('./routes/schedules.routes');
 const streakRouter = require('./routes/streak.routes');
+const tasksRouter = require('./routes/tasks.routes');
 const usersRoutes = require('./routes/users.routes');
 
+// Đăng ký các router dịch vụ
 app.use('/api/admin', require('./routes/admin.routes'));
 app.use('/api/auth', require('./routes/auth.routes'));
 app.use('/api/student', require('./routes/student.routes'));
 app.use('/api/documents', require('./routes/documents.routes'));
-app.use('/api/tasks', require('./routes/tasks.routes'));
+app.use('/api/tasks', tasksRouter);
 app.use('/api/library', require('./routes/library.routes'));
 app.use('/api/exams', require('./routes/exams.routes'));
 app.use('/api/community', require('./routes/community.routes'));
@@ -166,7 +174,7 @@ app.use('/api/users', usersRoutes);
 app.use('/api/admin/staff', require('./routes/staff.routes'));
 app.use('/api/curriculum', require('./routes/curriculum.routes'));
 
-// Streak
+// Streak & Leaderboard
 app.use('/api/streak', streakRouter);
 app.use('/api', streakRouter);
 
@@ -174,9 +182,11 @@ app.use('/api', streakRouter);
 app.use('/api/schedules', schedulesRouter);
 app.use('/api', schedulesRouter);
 
-// AI Router (Mount đầy đủ các tiền tố)
+// AI & Daily Quiz Routes
+// Mount thêm cả '/api' để tiếp nhận route /api/daily-quiz/generate
 app.use('/api/admin/ai', aiRouter);
 app.use('/api/ai', aiRouter);
+app.use('/api', aiRouter);
 
 // Middleware xử lý lỗi toàn cục
 app.use((err, req, res, next) => {

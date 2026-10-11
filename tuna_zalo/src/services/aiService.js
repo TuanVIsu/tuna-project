@@ -148,39 +148,56 @@ export const deleteDocumentFromDB = async (id) => {
 };
 
 // ==================== QUẢN LÝ LỊCH SỬ TÁC VỤ (ĐỘC LẬP THEO TÀI KHOẢN) ====================
+// Thay thế đoạn tương ứng trong src/services/aiService.js
+
+// ==================== QUẢN LÝ LỊCH SỬ TÁC VỤ (KHÔNG BAO GIỜ BỊ MẤT) ====================
 export const fetchTasksFromDB = async () => {
   const cacheKey = getTaskCacheKey();
+  let localList = [];
+  try {
+    const local = localStorage.getItem(cacheKey) || localStorage.getItem("tuna_cached_tasks_master");
+    if (local) localList = JSON.parse(local);
+  } catch (e) {}
+
   try {
     const res = await fetchWithTimeout(`${API_BASE}/tasks`, {
       headers: getCommonHeaders(),
-    }, 10000);
-
-    if (res.status === 401) {
-      const local = localStorage.getItem(cacheKey);
-      return local ? JSON.parse(local) : [];
-    }
+    }, 6000);
 
     if (res.ok) {
       const json = await parseJsonResponse(res);
       if (json.success && Array.isArray(json.data)) {
-        localStorage.setItem(cacheKey, JSON.stringify(json.data));
-        return json.data;
+        // HỢP NHẤT (MERGE) THAY VÌ GHI ĐÈ: Không để server rỗng xóa mất bài tập cục bộ
+        const taskMap = new Map();
+        localList.forEach((t) => { if (t && t.id) taskMap.set(String(t.id), t); });
+        json.data.forEach((t) => { if (t && t.id) taskMap.set(String(t.id), t); });
+        const merged = Array.from(taskMap.values());
+        
+        localStorage.setItem(cacheKey, JSON.stringify(merged));
+        localStorage.setItem("tuna_cached_tasks_master", JSON.stringify(merged));
+        return merged;
       }
     }
   } catch (e) {
     console.warn("Dùng cache tasks:", e.message);
   }
-  const local = localStorage.getItem(cacheKey);
-  return local ? JSON.parse(local) : [];
+
+  // Luôn trả về danh sách đã lưu cục bộ nếu server chưa có
+  return localList;
 };
 
 export const saveTaskToDB = async (task) => {
+  if (!task || !task.id) return;
   const cacheKey = getTaskCacheKey();
   try {
-    const local = localStorage.getItem(cacheKey);
-    const list = local ? JSON.parse(local) : [];
-    const updated = [task, ...list.filter((t) => t.id !== task.id)];
+    let localList = [];
+    const local = localStorage.getItem(cacheKey) || localStorage.getItem("tuna_cached_tasks_master");
+    if (local) localList = JSON.parse(local);
+    
+    const updated = [task, ...localList.filter((t) => String(t.id) !== String(task.id))];
     localStorage.setItem(cacheKey, JSON.stringify(updated));
+    // Lưu vào Master Backup để mọi tab đều đọc được đồng bộ
+    localStorage.setItem("tuna_cached_tasks_master", JSON.stringify(updated));
   } catch (e) {}
 
   try {
@@ -188,25 +205,29 @@ export const saveTaskToDB = async (task) => {
       method: "POST",
       headers: getCommonHeaders(),
       body: JSON.stringify(task),
-    }, 15000);
+    }, 8000);
   } catch (e) {}
 };
 
 export const deleteTaskFromDB = async (id) => {
   const cacheKey = getTaskCacheKey();
   try {
-    const local = localStorage.getItem(cacheKey);
-    if (local) {
-      const list = JSON.parse(local).filter((d) => d.id !== id);
-      localStorage.setItem(cacheKey, JSON.stringify(list));
-    }
+    const filterOut = (key) => {
+      const raw = localStorage.getItem(key);
+      if (raw) {
+        const list = JSON.parse(raw).filter((d) => String(d.id) !== String(id));
+        localStorage.setItem(key, JSON.stringify(list));
+      }
+    };
+    filterOut(cacheKey);
+    filterOut("tuna_cached_tasks_master");
   } catch (e) {}
 
   try {
     await fetchWithTimeout(`${API_BASE}/tasks/${id}`, { 
       method: "DELETE",
       headers: getCommonHeaders(),
-    }, 15000);
+    }, 8000);
   } catch (e) {}
 };
 

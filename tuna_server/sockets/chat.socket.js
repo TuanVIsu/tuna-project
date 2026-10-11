@@ -24,7 +24,7 @@ module.exports = (io) => {
 
           if (checkRes.rows.length > 0) {
             const u = checkRes.rows[0];
-            // Kiểm tra nếu có cảnh báo chưa đọc
+            // Nếu có cảnh báo trong DB, gửi ngay khi vừa vào phòng
             if (u.warning_reason) {
               socket.emit('admin_warning_received', {
                 userId,
@@ -59,7 +59,7 @@ module.exports = (io) => {
       }
     });
 
-    // SỰ KIỆN: Admin gửi cảnh báo trực tiếp qua socket
+    // 2. Sự kiện Admin gửi cảnh báo
     socket.on('admin_warn_user', async ({ targetUserId, reason, adminName }) => {
       try {
         await pool.query(
@@ -70,7 +70,8 @@ module.exports = (io) => {
         io.emit('admin_warning_received', {
           userId: String(targetUserId),
           reason: reason || 'Vi phạm nội quy thảo luận cộng đồng',
-          warnedBy: adminName || 'Ban Quản Trị'
+          warnedBy: adminName || 'Ban Quản Trị',
+          timestamp: new Date().toISOString()
         });
       } catch (err) {
         console.error("Lỗi socket admin_warn_user:", err.message);
@@ -82,7 +83,7 @@ module.exports = (io) => {
       socket.leave(category);
     });
 
-    // 2. Nhận và phát tin nhắn
+    // 3. Nhận và phát tin nhắn
     socket.on('send_message', async (data) => {
       const { category = 'all', userId, userName, avatar, content, imageUrl, replyTo, isAnonymous } = data;
       if ((!content || !content.trim()) && !imageUrl) return;
@@ -151,7 +152,7 @@ module.exports = (io) => {
       }
     });
 
-    // 3. Soạn tin
+    // 4. Soạn tin
     socket.on('typing', ({ category = 'all', userName, userId }) => {
       socket.to(category).emit('user_typing', { userName, userId, category });
       if (category !== 'all') socket.to('all').emit('user_typing', { userName, userId, category });
@@ -162,7 +163,7 @@ module.exports = (io) => {
       if (category !== 'all') socket.to('all').emit('user_stop_typing', { userId, category });
     });
 
-    // 4. Thu hồi
+    // 5. Thu hồi
     socket.on('recall_message', async ({ messageId, userId }) => {
       try {
         const checkRes = await pool.query(

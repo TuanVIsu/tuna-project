@@ -6,24 +6,35 @@ const API_BASE = "https://tuna-project.onrender.com/api";
 export const StreakLeaderboardSection = ({ onBack, currentUser }) => {
   const [activeTab, setActiveTab] = useState("streak");
 
-  // Đồng bộ ID người dùng duy nhất
+  // Định danh người dùng thực tế từ session/profile (Không gán cứng B2300001)
   const targetUserId = useMemo(() => {
-    let id = currentUser?.student_code || currentUser?.id || localStorage.getItem("tuna_user_id");
-    if (!id || id === "undefined") {
-      id = "B2300001";
-      localStorage.setItem("tuna_user_id", id);
-    }
-    return String(id);
+    if (currentUser?.student_code) return String(currentUser.student_code).trim();
+    if (currentUser?.id) return String(currentUser.id).trim();
+    if (currentUser?.zalo_id) return String(currentUser.zalo_id).trim();
+
+    try {
+      const savedUser = JSON.parse(
+        localStorage.getItem("user") || 
+        localStorage.getItem("user_info") || 
+        localStorage.getItem("tuna_current_user") || 
+        "{}"
+      );
+      const extracted = savedUser.student_code || savedUser.id || savedUser.zalo_id || savedUser.email;
+      if (extracted) return String(extracted).trim();
+    } catch (e) {}
+
+    return String(localStorage.getItem("tuna_user_id") || "").trim();
   }, [currentUser]);
 
+  // Khởi tạo trạng thái thực tế bằng 0, không gán số liệu ảo
   const [streakData, setStreakData] = useState(() => {
-    const localStreak = Number(localStorage.getItem("user_current_streak") || 3);
-    const localXp = Number(localStorage.getItem("user_study_xp") || 220);
+    const cachedXp = Number(localStorage.getItem("user_study_xp"));
+    const cachedStreak = Number(localStorage.getItem("user_current_streak"));
     return {
-      current_streak: localStreak,
-      longest_streak: Math.max(localStreak, 3),
-      xp_points: localXp,
-      streak_freeze: 1,
+      current_streak: !isNaN(cachedStreak) ? cachedStreak : 0,
+      longest_streak: !isNaN(cachedStreak) ? cachedStreak : 0,
+      xp_points: !isNaN(cachedXp) ? cachedXp : 0,
+      streak_freeze: 0,
       activeDays: [],
     };
   });
@@ -31,39 +42,46 @@ export const StreakLeaderboardSection = ({ onBack, currentUser }) => {
   const [leaderboard, setLeaderboard] = useState([]);
   const [loading, setLoading] = useState(false);
 
-  // Nạp dữ liệu đồng bộ từ PostgreSQL
-  const fetchDbData = useCallback(async () => {
+  // Nạp dữ liệu thời gian thực từ CSDL
+const fetchDbData = useCallback(async () => {
     setLoading(true);
     try {
-      const [lbRes, streakRes] = await Promise.all([
-        fetch(`${API_BASE}/leaderboard`).catch(() => null),
-        fetch(`${API_BASE}/streak/${targetUserId}`).catch(() => null),
-      ]);
+      // 1. Thử gọi /api/leaderboard, nếu không có dữ liệu sẽ tự chuyển sang /api/streak/leaderboard
+      let lbRes = await fetch(`${API_BASE}/leaderboard`).catch(() => null);
+      if (!lbRes || !lbRes.ok) {
+        lbRes = await fetch(`${API_BASE}/streak/leaderboard`).catch(() => null);
+      }
 
       if (lbRes && lbRes.ok) {
         const lbJson = await lbRes.json();
-        if (lbJson.success && Array.isArray(lbJson.leaderboard)) {
+        if (lbJson.success && Array.isArray(lbJson.leaderboard) && lbJson.leaderboard.length > 0) {
           setLeaderboard(lbJson.leaderboard);
         }
       }
 
-      if (streakRes && streakRes.ok) {
-        const sJson = await streakRes.json();
-        if (sJson.success) {
-          const localStreak = Number(localStorage.getItem("user_current_streak") || 0);
-          const finalStreak = Math.max(Number(sJson.current_streak) || 0, localStreak);
-          const finalXp = Number(sJson.xp_points) || Number(localStorage.getItem("user_study_xp")) || 220;
+      // 2. Nạp dữ liệu streak cá nhân
+      if (targetUserId) {
+        const streakRes = await fetch(`${API_BASE}/streak/${encodeURIComponent(targetUserId)}`).catch(() => null);
+        if (streakRes && streakRes.ok) {
+          const sJson = await streakRes.json();
+          if (sJson.success) {
+            const remoteStreak = Number(sJson.current_streak) || 0;
+            const remoteLongest = Number(sJson.longest_streak) || remoteStreak;
+            const remoteXp = Number(sJson.xp_points) || 0;
+            const remoteFreeze = Number(sJson.streak_freeze) || 0;
+            const remoteDays = Array.isArray(sJson.activeDays) ? sJson.activeDays : [];
 
-          setStreakData({
-            current_streak: finalStreak,
-            longest_streak: Math.max(Number(sJson.longest_streak) || 0, finalStreak),
-            xp_points: finalXp,
-            streak_freeze: Number(sJson.streak_freeze) || 1,
-            activeDays: Array.isArray(sJson.activeDays) ? sJson.activeDays : [],
-          });
+            setStreakData({
+              current_streak: remoteStreak,
+              longest_streak: Math.max(remoteLongest, remoteStreak),
+              xp_points: remoteXp,
+              streak_freeze: remoteFreeze,
+              activeDays: remoteDays,
+            });
 
-          localStorage.setItem("user_current_streak", String(finalStreak));
-          localStorage.setItem("user_study_xp", String(finalXp));
+            localStorage.setItem("user_current_streak", String(remoteStreak));
+            localStorage.setItem("user_study_xp", String(remoteXp));
+          }
         }
       }
     } catch (e) {
@@ -77,7 +95,7 @@ export const StreakLeaderboardSection = ({ onBack, currentUser }) => {
     fetchDbData();
   }, [fetchDbData]);
 
-  // Chuẩn hóa định dạng ngày tháng địa phương YYYY-MM-DD
+  // Chuẩn hóa định dạng ngày địa phương YYYY-MM-DD
   const formatLocalDate = (d) => {
     const y = d.getFullYear();
     const m = String(d.getMonth() + 1).padStart(2, "0");
@@ -85,11 +103,8 @@ export const StreakLeaderboardSection = ({ onBack, currentUser }) => {
     return `${y}-${m}-${day}`;
   };
 
-  const todayLocalStr = formatLocalDate(new Date());
-
-  // Tính toán hiển thị 7 ngày gần nhất & thắp sáng đủ số ngày trong streak
+  // Tính 7 ngày gần nhất dựa trên nhật ký CSDL thực tế (activeDays)
   const last7Days = useMemo(() => {
-    const streakCount = streakData.current_streak || 1;
     return Array.from({ length: 7 }).map((_, idx) => {
       const d = new Date();
       const diffFromToday = 6 - idx;
@@ -98,18 +113,16 @@ export const StreakLeaderboardSection = ({ onBack, currentUser }) => {
       const dayLabel = ["CN", "T2", "T3", "T4", "T5", "T6", "T7"][d.getDay()];
       const isToday = diffFromToday === 0;
 
-      // Thắp sáng ngọn lửa nếu ngày có trong DB logs HOẶC nằm trong phạm vi chuỗi streak liên tiếp hiện tại
-      const isDone =
-        streakData.activeDays?.includes(str) ||
-        (diffFromToday >= 0 && diffFromToday < streakCount);
+      // Chỉ thắp sáng nếu ngày có lưu trong nhật ký streak_logs của CSDL
+      const isDone = Boolean(streakData.activeDays && streakData.activeDays.includes(str));
 
       return { str, dayLabel, isToday, isDone };
     });
-  }, [streakData.activeDays, streakData.current_streak]);
+  }, [streakData.activeDays]);
 
   return (
     <div className="flex flex-col min-h-screen bg-[#F8FAFC] pb-24 max-w-lg mx-auto w-full">
-      {/* 1. HEADER TRANG: MỀM MẠI, NÚT BACK VÀ LÀM MỚI CHUẨN UX */}
+      {/* 1. Header toolbar */}
       <div className="bg-gradient-to-r from-amber-500 via-orange-600 to-indigo-700 text-white px-4 py-3.5 shadow-sm flex items-center justify-between mb-3 rounded-b-3xl">
         <div className="flex items-center gap-3">
           <button
@@ -123,7 +136,7 @@ export const StreakLeaderboardSection = ({ onBack, currentUser }) => {
           <div>
             <h2 className="text-base font-black m-0 leading-tight">Thành Tích & Xếp Hạng</h2>
             <span className="text-[11px] text-amber-100 font-medium">
-              Đồng bộ dữ liệu điểm học tập thời gian thực
+              Dữ liệu học tập thực tế từ hệ thống
             </span>
           </div>
         </div>
@@ -143,7 +156,7 @@ export const StreakLeaderboardSection = ({ onBack, currentUser }) => {
         </button>
       </div>
 
-      {/* 2. THANH CHUYỂN TAB CÂN ĐỐI */}
+      {/* 2. Thanh chuyển Tab */}
       <div className="px-3.5 mb-3.5">
         <div className="bg-slate-200/70 p-1 rounded-2xl flex gap-1 shadow-inner border border-slate-200/60">
           <button
@@ -173,10 +186,9 @@ export const StreakLeaderboardSection = ({ onBack, currentUser }) => {
         </div>
       </div>
 
-      {/* 3. NỘI DUNG TAB 1: CHUỖI STREAK */}
+      {/* 3. Tab Chuỗi Streak */}
       {activeTab === "streak" && (
         <div className="px-3.5 space-y-3.5">
-          {/* Card Hero Ngọn Lửa Lớn */}
           <div className="bg-white rounded-3xl p-5 border border-slate-200/80 shadow-xs text-center relative overflow-hidden">
             <div className="w-20 h-20 rounded-3xl bg-amber-50/80 text-amber-500 border border-amber-200/80 flex items-center justify-center text-4xl mx-auto shadow-inner mb-3">
               🔥
@@ -186,12 +198,12 @@ export const StreakLeaderboardSection = ({ onBack, currentUser }) => {
             </h3>
             <p className="text-xs text-slate-500 font-semibold m-0 mt-1 max-w-xs mx-auto leading-relaxed">
               {streakData.current_streak > 0
-                ? "Tuyệt vời! Bạn đang giữ vững nhịp độ ôn luyện mỗi ngày cùng AI."
-                : "Hãy hoàn thành 1 bài trắc nghiệm hôm nay để thắp sáng chuỗi lửa của bạn!"}
+                ? "Bạn đang giữ vững nhịp độ ôn luyện mỗi ngày cùng AI."
+                : "Hoàn thành bài tập hoặc trắc nghiệm hôm nay để bắt đầu chuỗi ngọn lửa!"}
             </p>
           </div>
 
-          {/* Card Lịch Sử 7 Ngày (Đã căn chỉnh thoáng rộng, không rớt chữ) */}
+          {/* Lịch sử 7 ngày */}
           <div className="bg-white rounded-3xl p-4 border border-slate-200/80 shadow-xs">
             <div className="flex justify-between items-center mb-3">
               <span className="text-[11px] font-black text-slate-700 uppercase tracking-wider">
@@ -225,7 +237,7 @@ export const StreakLeaderboardSection = ({ onBack, currentUser }) => {
             </div>
           </div>
 
-          {/* Khối Thống Kê 2 Cột */}
+          {/* Chỉ số thực tế */}
           <div className="grid grid-cols-2 gap-2.5">
             <div className="bg-blue-50/70 border border-blue-200/80 p-3.5 rounded-3xl shadow-xs text-center">
               <span className="text-[10.5px] font-black text-blue-700 block mb-0.5 tracking-wide">
@@ -241,7 +253,6 @@ export const StreakLeaderboardSection = ({ onBack, currentUser }) => {
             </div>
           </div>
 
-          {/* Nút Tiếp Tục Ôn Luyện */}
           <button
             type="button"
             onClick={onBack}
@@ -252,7 +263,7 @@ export const StreakLeaderboardSection = ({ onBack, currentUser }) => {
         </div>
       )}
 
-      {/* 4. NỘI DUNG TAB 2: BẢNG XẾP HẠNG THÀNH TÍCH THỰC TẾ */}
+      {/* 4. Tab Bảng Xếp Hạng Thực Tế */}
       {activeTab === "leaderboard" && (
         <div className="px-3.5 space-y-2.5">
           <div className="flex items-center justify-between px-1">
@@ -275,7 +286,7 @@ export const StreakLeaderboardSection = ({ onBack, currentUser }) => {
                 const isTop1 = idx === 0;
                 const isTop2 = idx === 1;
                 const isTop3 = idx === 2;
-                const isMe = String(user.user_id) === String(targetUserId);
+                const isMe = targetUserId && String(user.user_id) === String(targetUserId);
 
                 return (
                   <div
@@ -312,13 +323,13 @@ export const StreakLeaderboardSection = ({ onBack, currentUser }) => {
                           {user.user_name} {isMe && "(Bạn)"}
                         </span>
                         <span className="text-[10px] text-slate-400 font-semibold block">
-                          🔥 Chuỗi {user.streak} ngày
+                          🔥 Chuỗi {user.streak || 0} ngày
                         </span>
                       </div>
                     </div>
 
                     <div className="text-end shrink-0 pl-2">
-                      <span className="text-xs font-black text-blue-600 block">{user.xp} XP</span>
+                      <span className="text-xs font-black text-blue-600 block">{user.xp || 0} XP</span>
                       <span className="text-[9px] text-slate-400 font-bold block">điểm tích lũy</span>
                     </div>
                   </div>

@@ -6,23 +6,18 @@ const SOCKET_SERVER = "https://tuna-project.onrender.com";
 
 const ANIMATION_STYLES = `
 @keyframes bubbleFadeIn {
-  0% { opacity: 0; transform: translateY(8px) scale(0.96); }
-  100% { opacity: 1; transform: translateY(0) scale(1); }
+  0% { opacity: 0; transform: translateY(6px); }
+  100% { opacity: 1; transform: translateY(0); }
 }
 @keyframes typingBounce {
   0%, 80%, 100% { transform: translateY(0); opacity: 0.35; }
   40% { transform: translateY(-4px); opacity: 1; }
 }
-.msg-bubble-right {
-  animation: bubbleFadeIn 0.18s cubic-bezier(0.16, 1, 0.3, 1) forwards;
-  transform-origin: bottom right;
-}
-.msg-bubble-left {
-  animation: bubbleFadeIn 0.18s cubic-bezier(0.16, 1, 0.3, 1) forwards;
-  transform-origin: bottom left;
+.msg-bubble-anim {
+  animation: bubbleFadeIn 0.15s cubic-bezier(0.16, 1, 0.3, 1) forwards;
 }
 .typing-dot {
-  width: 5px; height: 5px; background-color: #475569; border-radius: 50%; display: inline-block;
+  width: 5px; height: 5px; background-color: #64748b; border-radius: 50%; display: inline-block;
   animation: typingBounce 1.2s infinite ease-in-out;
 }
 .typing-dot:nth-child(1) { animation-delay: 0s; }
@@ -36,12 +31,13 @@ export const ChatSection = ({ currentUser }) => {
   const [selectedImage, setSelectedImage] = useState(null);
   const [selectedImageName, setSelectedImageName] = useState("");
   const [previewModalImg, setPreviewModalImg] = useState(null);
+  const [previewMsgContext, setPreviewMsgContext] = useState(null);
   const [isConnected, setIsConnected] = useState(false);
 
-  // State Trả lời tin nhắn (Reply)
+  // Trả lời tin nhắn
   const [replyingMessage, setReplyingMessage] = useState(null);
 
-  // State Menu thao tác tin nhắn (Menu chọn Trả lời / Thu hồi)
+  // Menu tương tác tin nhắn (Trả lời / Thu hồi)
   const [activeActionMsg, setActiveActionMsg] = useState(null);
 
   const [typingUsers, setTypingUsers] = useState([]);
@@ -53,6 +49,8 @@ export const ChatSection = ({ currentUser }) => {
     setTimeout(() => setToastMessage(null), 3000);
   };
 
+  // Cảnh báo & Khóa từ Admin
+  const [adminWarning, setAdminWarning] = useState(null);
   const [penaltyStatus, setPenaltyStatus] = useState({
     isLocked: false,
     lockUntil: null,
@@ -61,29 +59,33 @@ export const ChatSection = ({ currentUser }) => {
     showLockModal: false,
   });
 
+  // Quản lý danh tính
   const [isAnonymous, setIsAnonymous] = useState(() => {
     return localStorage.getItem("tuna_chat_is_anon") === "true";
   });
   const [nickname, setNickname] = useState(() => {
     return localStorage.getItem("tuna_chat_nickname") || `IT_Student_${Math.floor(100 + Math.random() * 900)}`;
   });
+  const [showIdentityMenu, setShowIdentityMenu] = useState(false);
   const [showNicknameModal, setShowNicknameModal] = useState(false);
   const [tempNickname, setTempNickname] = useState("");
 
   const socketRef = useRef(null);
   const messagesEndRef = useRef(null);
   const fileInputRef = useRef(null);
+  const inputRef = useRef(null);
+  const actionMenuRef = useRef(null);
 
   const myUserId = useMemo(() => {
     try {
       const u = JSON.parse(localStorage.getItem("user") || localStorage.getItem("user_info") || "{}");
-      const id = u.email || u.student_code || u.zalo_id || u.id;
+      const id = u.student_code || u.id || u.email || u.zalo_id;
       if (id) return String(id).trim();
     } catch (e) {}
 
     let savedId = localStorage.getItem("tuna_user_id");
     if (!savedId) {
-      savedId = currentUser?.email || currentUser?.student_code || currentUser?.zalo_id || currentUser?.id || `sv_${Date.now()}`;
+      savedId = currentUser?.student_code || currentUser?.id || currentUser?.email || currentUser?.zalo_id || `sv_${Date.now()}`;
       localStorage.setItem("tuna_user_id", String(savedId));
     }
     return String(savedId);
@@ -98,20 +100,46 @@ export const ChatSection = ({ currentUser }) => {
     messagesEndRef.current?.scrollIntoView({ behavior });
   }, []);
 
-  // Kiểm tra trạng thái khóa
+  // Đóng menu thao tác khi click ra ngoài
+  useEffect(() => {
+    const handleClickOutside = (e) => {
+      if (actionMenuRef.current && !actionMenuRef.current.contains(e.target)) {
+        setActiveActionMsg(null);
+      }
+    };
+    if (activeActionMsg) {
+      document.addEventListener("mousedown", handleClickOutside);
+    }
+    return () => document.removeEventListener("mousedown", handleClickOutside);
+  }, [activeActionMsg]);
+
+  // Kiểm tra trạng thái phạt từ server (Bắt cả warningReason và lastWarningReason)
   const checkMyPenaltyStatus = useCallback(async () => {
     if (!myUserId) return;
     try {
       const res = await fetch(`${SOCKET_SERVER}/api/community/user-status/${encodeURIComponent(myUserId)}`);
       const data = await res.json();
-      if (data.success && data.isLocked) {
-        setPenaltyStatus((prev) => ({
-          ...prev,
-          isLocked: true,
-          lockUntil: data.lockUntil,
-          lockReason: data.lockReason || "Tài khoản bị tạm khóa quyền nhắn tin",
-          durationText: data.durationText || "Tạm đình chỉ",
-        }));
+      if (data.success) {
+        if (data.isLocked) {
+          setPenaltyStatus((prev) => ({
+            ...prev,
+            isLocked: true,
+            lockUntil: data.lockUntil,
+            lockReason: data.lockReason || "Tài khoản bị tạm khóa quyền nhắn tin",
+            durationText: data.durationText || "Tạm đình chỉ",
+          }));
+        }
+
+        const reason = data.warningReason || data.lastWarningReason;
+        if (reason) {
+          const dismissedReason = sessionStorage.getItem("tuna_dismissed_warn");
+          if (dismissedReason !== reason) {
+            setAdminWarning({
+              reason: reason,
+              warnedBy: "Ban Quản Trị",
+            });
+          }
+        }
       }
     } catch (err) {
       console.warn("Lỗi kiểm tra khóa:", err);
@@ -120,9 +148,11 @@ export const ChatSection = ({ currentUser }) => {
 
   useEffect(() => {
     checkMyPenaltyStatus();
+    const interval = setInterval(checkMyPenaltyStatus, 10000);
+    return () => clearInterval(interval);
   }, [checkMyPenaltyStatus]);
 
-  // Kết nối socket
+  // Kết nối Socket và Lắng nghe sự kiện
   useEffect(() => {
     const socket = io(SOCKET_SERVER, {
       transports: ["websocket", "polling"],
@@ -137,6 +167,56 @@ export const ChatSection = ({ currentUser }) => {
 
     socket.on("disconnect", () => setIsConnected(false));
 
+    // Lắng nghe CẢNH BÁO từ Admin (Khớp đa tầng theo ID và Tên)
+    const handleReceiveWarning = (data) => {
+      if (!data) return;
+      const targetId = String(data.userId || "").trim().toLowerCase();
+      const targetName = String(data.userName || "").trim().toLowerCase();
+      const currentId = String(myUserId || "").trim().toLowerCase();
+      const currentName = String(currentUser?.name || localStorage.getItem("tuna_user_name") || "").trim().toLowerCase();
+      const currentNick = String(nickname || "").trim().toLowerCase();
+
+      const isMatchId = targetId && (targetId === currentId || targetId === "all");
+      const isMatchName = targetName && (targetName === currentName || targetName === currentNick);
+
+      if (isMatchId || isMatchName) {
+        setAdminWarning({
+          reason: data.reason || "Vi phạm quy chế thảo luận cộng đồng",
+          warnedBy: data.warnedBy || "Ban Quản Trị",
+        });
+      }
+    };
+
+    socket.on("admin_warning_received", handleReceiveWarning);
+    socket.on("user_warned", handleReceiveWarning);
+
+    // Lắng nghe KHÓA TÀI KHOẢN
+    socket.on("user_locked", (data) => {
+      if (String(data.userId) === myUserId || String(data.userId).toLowerCase() === myUserId.toLowerCase()) {
+        setPenaltyStatus({
+          isLocked: true,
+          lockUntil: data.lockUntil,
+          lockReason: data.reason || "Tài khoản bị khóa nhắn tin",
+          durationText: data.durationText || "Tạm đình chỉ",
+          showLockModal: true,
+        });
+      }
+    });
+
+    socket.on("user_unlocked", (data) => {
+      if (String(data.userId) === myUserId || String(data.userId).toLowerCase() === myUserId.toLowerCase()) {
+        setPenaltyStatus({
+          isLocked: false,
+          lockUntil: null,
+          lockReason: "",
+          durationText: "",
+          showLockModal: false,
+        });
+        showToast("Tài khoản đã được mở quyền nhắn tin!");
+      }
+    });
+
+    // Nhận tin nhắn mới
     socket.on("receive_message", (newMsg) => {
       if (!newMsg) return;
       setMessages((prev) => {
@@ -145,7 +225,7 @@ export const ChatSection = ({ currentUser }) => {
         const isFromMe = String(newMsg.user_id) === myUserId || String(newMsg.userId) === myUserId;
         if (isFromMe) {
           const tempIndex = prev.findIndex(
-            (m) => String(m.id).startsWith("temp_") && m.content === newMsg.content
+            (m) => String(m.id).startsWith("temp_") && (m.content === newMsg.content || m.image_url === newMsg.image_url)
           );
           if (tempIndex !== -1) {
             const nextList = [...prev];
@@ -158,19 +238,29 @@ export const ChatSection = ({ currentUser }) => {
       setTypingUsers((prev) => prev.filter((u) => u.userId !== String(newMsg.user_id)));
     });
 
-    // Sự kiện thu hồi tin nhắn
+    // Thu hồi tin nhắn
     socket.on("message_recalled", ({ messageId }) => {
       setMessages((prev) =>
         prev.map((m) =>
-          Number(m.id) === Number(messageId)
-            ? { ...m, content: "Tin nhắn đã được thu hồi", image_url: null, is_recalled: true }
+          Number(m.id) === Number(messageId) || String(m.id) === String(messageId)
+            ? {
+                ...m,
+                content: "Tin nhắn đã được thu hồi",
+                image_url: null,
+                imageUrl: null,
+                replyTo: null,
+                reply_to: null,
+                is_recalled: true,
+                isRecalled: true,
+              }
             : m
         )
       );
-    });
-
-    socket.on("message_deleted", (deletedMsgId) => {
-      setMessages((prev) => prev.filter((m) => m.id !== deletedMsgId));
+      setActiveActionMsg((prev) => (prev && String(prev.id) === String(messageId) ? null : prev));
+      if (previewMsgContext && String(previewMsgContext.id) === String(messageId)) {
+        setPreviewModalImg(null);
+        setPreviewMsgContext(null);
+      }
     });
 
     socket.on("user_typing", ({ userName, userId }) => {
@@ -189,7 +279,7 @@ export const ChatSection = ({ currentUser }) => {
       socket.emit("leave_room", { category: "all" });
       socket.disconnect();
     };
-  }, [myUserId, myDisplayName]);
+  }, [myUserId, myDisplayName, previewMsgContext, currentUser, nickname]);
 
   // Nạp lịch sử
   useEffect(() => {
@@ -201,7 +291,7 @@ export const ChatSection = ({ currentUser }) => {
           setMessages(data.messages);
         }
       } catch (err) {
-        console.error("Lỗi tải lịch sử chat:", err);
+        console.error("Lỗi nạp tin nhắn:", err);
       }
     };
     fetchHistory();
@@ -221,6 +311,26 @@ export const ChatSection = ({ currentUser }) => {
       typingTimeoutRef.current = setTimeout(() => {
         socketRef.current.emit("stop_typing", { category: "all", userId: myUserId });
       }, 1500);
+    }
+  };
+
+  const handleSelectReply = (msg) => {
+    setActiveActionMsg(null);
+    setPreviewModalImg(null);
+    setReplyingMessage(msg);
+    const targetName = msg.user_name || "Thành viên";
+    setInputValue((prev) => {
+      if (prev.startsWith(`@${targetName} `)) return prev;
+      return `@${targetName} ${prev}`;
+    });
+    setTimeout(() => inputRef.current?.focus(), 80);
+  };
+
+  const handleCancelReply = () => {
+    const targetName = replyingMessage?.user_name || "";
+    setReplyingMessage(null);
+    if (inputValue.startsWith(`@${targetName} `)) {
+      setInputValue((prev) => prev.replace(`@${targetName} `, ""));
     }
   };
 
@@ -244,7 +354,6 @@ export const ChatSection = ({ currentUser }) => {
         const MAX_HEIGHT = 1200;
         let width = img.width;
         let height = img.height;
-
         if (width > height) {
           if (width > MAX_WIDTH) {
             height *= MAX_WIDTH / width;
@@ -268,7 +377,6 @@ export const ChatSection = ({ currentUser }) => {
     e.target.value = "";
   };
 
-  // GỬI TIN NHẮN (KÈM DỮ LIỆU REPLY NẾU CÓ)
   const handleSendMessage = async () => {
     if (penaltyStatus.isLocked) {
       setPenaltyStatus((prev) => ({ ...prev, showLockModal: true }));
@@ -281,13 +389,16 @@ export const ChatSection = ({ currentUser }) => {
       socketRef.current.emit("stop_typing", { category: "all", userId: myUserId });
     }
 
-    // Đóng gói nội dung kèm trích dẫn trả lời nếu có
     let replyPayload = null;
     if (replyingMessage) {
+      const snippet = replyingMessage.content?.trim()
+        ? replyingMessage.content.slice(0, 80)
+        : (replyingMessage.image_url ? "[Hình ảnh]" : "Nội dung");
       replyPayload = {
         id: replyingMessage.id,
         userName: replyingMessage.user_name || "Thành viên",
-        textSnippet: (replyingMessage.content || "Hình ảnh").slice(0, 75),
+        textSnippet: snippet,
+        imageUrl: replyingMessage.image_url || null,
       };
     }
 
@@ -344,48 +455,56 @@ export const ChatSection = ({ currentUser }) => {
     }
   };
 
-  // XỬ LÝ THU HỒI TIN NHẮN (KIỂM TRA 60 PHÚT)
   const handleRecallMessage = async (msg) => {
     setActiveActionMsg(null);
+    setPreviewModalImg(null);
     if (!msg || String(msg.id).startsWith("temp_")) return;
 
-    const createdAt = msg.created_at || msg.createdAt;
-    if (createdAt) {
-      const diffMinutes = (Date.now() - new Date(createdAt).getTime()) / (1000 * 60);
-      if (diffMinutes > 60) {
-        showToast("Đã quá 60 phút, không thể thu hồi tin nhắn này!", "error");
-        return;
-      }
+    const targetId = msg.id;
+
+    setMessages((prev) =>
+      prev.map((m) =>
+        Number(m.id) === Number(targetId) || String(m.id) === String(targetId)
+          ? {
+              ...m,
+              content: "Tin nhắn đã được thu hồi",
+              image_url: null,
+              imageUrl: null,
+              replyTo: null,
+              reply_to: null,
+              is_recalled: true,
+              isRecalled: true,
+            }
+          : m
+      )
+    );
+
+    showToast("Đã thu hồi tin nhắn!");
+
+    if (socketRef.current) {
+      socketRef.current.emit("recall_message", { messageId: targetId, userId: myUserId });
     }
 
     try {
-      const res = await fetch(`${SOCKET_SERVER}/api/community/messages/recall`, {
+      await fetch(`${SOCKET_SERVER}/api/community/messages/recall`, {
         method: "POST",
         headers: { "Content-Type": "application/json", "x-user-id": myUserId },
-        body: JSON.stringify({ messageId: msg.id, userId: myUserId }),
+        body: JSON.stringify({ messageId: targetId, userId: myUserId }),
       });
-      const data = await res.json();
-      if (data.success) {
-        setMessages((prev) =>
-          prev.map((m) =>
-            m.id === msg.id
-              ? { ...m, content: "Tin nhắn đã được thu hồi", image_url: null, is_recalled: true }
-              : m
-          )
-        );
-        showToast("Đã thu hồi tin nhắn!");
-      } else {
-        showToast(data.message || "Không thể thu hồi tin nhắn", "error");
-      }
     } catch (err) {
-      showToast("Lỗi kết nối khi thu hồi tin nhắn!", "error");
+      console.warn("Đã đồng bộ thu hồi qua Socket:", err);
     }
   };
 
-  // KIỂM TRA ĐIỀU KIỆN 60 PHÚT ĐỂ HIỆN NÚT THU HỒI
   const canRecall = (msg) => {
-    const isMe = String(msg.user_id) === myUserId || msg.isMine;
-    if (!isMe || msg.is_recalled || msg.content === "Tin nhắn đã được thu hồi") return false;
+    if (!msg) return false;
+    const isMe = String(msg.user_id) === myUserId || String(msg.userId) === myUserId || msg.isMine;
+    const isRecalled = Boolean(
+      msg.is_recalled ||
+      msg.isRecalled ||
+      msg.content === "Tin nhắn đã được thu hồi"
+    );
+    if (!isMe || isRecalled) return false;
     const timeVal = msg.created_at || msg.createdAt;
     if (!timeVal) return true;
     const diff = (Date.now() - new Date(timeVal).getTime()) / (1000 * 60);
@@ -393,16 +512,13 @@ export const ChatSection = ({ currentUser }) => {
   };
 
   return (
-    <div 
-      className="flex flex-col h-[calc(100vh-140px)] w-full max-w-full relative select-none"
-      onClick={() => { if (activeActionMsg) setActiveActionMsg(null); }}
-    >
+    <div className="flex flex-col h-[calc(100vh-140px)] w-full max-w-full relative select-none bg-[#F4F5F7]">
       <style>{ANIMATION_STYLES}</style>
 
-      {/* TOAST THÔNG BÁO TỔNG QUÁT */}
+      {/* 1. TOAST THÔNG BÁO */}
       {toastMessage && (
         <div 
-          className="fixed top-20 left-4 right-4 z-50 p-3 rounded-2xl shadow-xl flex items-center justify-between text-xs font-bold text-white msg-bubble-right"
+          className="fixed top-20 left-4 right-4 z-50 p-3 rounded-2xl shadow-xl flex items-center justify-between text-xs font-bold text-white msg-bubble-anim"
           style={{ backgroundColor: toastMessage.type === "error" ? "#ef4444" : "#10b981" }}
         >
           <span>{toastMessage.message}</span>
@@ -410,72 +526,79 @@ export const ChatSection = ({ currentUser }) => {
         </div>
       )}
 
-{/* THANH THÔNG TIN NGƯỜI DÙNG (GỌN GÀNG, CHỐNG RỚT DÒNG) */}
-      <div className="bg-white rounded-2xl p-2 px-3 border border-slate-200/80 shadow-2xs mb-2 flex items-center justify-between gap-2 shrink-0">
-        <div className="flex items-center gap-2 min-w-0 flex-1">
-          <div className={`w-8 h-8 rounded-xl flex items-center justify-center text-xs font-black shrink-0 ${
-            isAnonymous ? "bg-purple-100 text-purple-700" : "bg-blue-100 text-blue-700"
-          }`}>
-            <i className={`bi ${isAnonymous ? "bi-incognito" : "bi-person-fill"}`}></i>
-          </div>
-          <div className="min-w-0 flex-1">
-            <div className="text-[12px] font-black text-slate-900 flex items-center gap-1.5 leading-none">
-              <span className="truncate max-w-[120px]">{myDisplayName}</span>
-              {isAnonymous && (
-                <span className="px-1.5 py-0.5 rounded bg-purple-50 text-purple-700 text-[9px] font-bold border border-purple-200 whitespace-nowrap shrink-0">
-                  Ẩn danh
-                </span>
-              )}
+      {/* 2. POPUP CẢNH BÁO TỪ ADMIN */}
+      {adminWarning && (
+        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-3xl p-5 w-full max-w-sm shadow-2xl border border-amber-300">
+            <div className="flex items-center gap-2.5 text-amber-600 mb-2">
+              <span className="w-9 h-9 rounded-2xl bg-amber-100 flex items-center justify-center text-lg">
+                <i className="bi bi-exclamation-triangle-fill"></i>
+              </span>
+              <div>
+                <h5 className="font-black text-sm m-0 text-slate-900">Cảnh Báo Từ Quản Trị Viên</h5>
+                <span className="text-[10.5px] text-slate-400 font-semibold">{adminWarning.warnedBy}</span>
+              </div>
             </div>
-            <span className="text-[9.5px] text-slate-400 block mt-0.5 font-mono truncate max-w-[130px]">
-              {myUserId}
-            </span>
+
+            <div className="my-3 p-3 bg-amber-50 border border-amber-200 rounded-2xl">
+              <span className="text-[10px] font-black uppercase text-amber-800 tracking-wider block mb-1">
+                Lý do cảnh báo:
+              </span>
+              <p className="text-xs text-slate-800 font-bold m-0 leading-relaxed">
+                "{adminWarning.reason}"
+              </p>
+            </div>
+
+            <p className="text-[11px] text-slate-500 font-medium mb-3 leading-tight">
+              Vui lòng giữ gìn văn hóa thảo luận văn minh. Tiếp tục vi phạm sẽ dẫn đến việc khóa chat.
+            </p>
+
+            <button
+              type="button"
+              onClick={() => {
+                if (adminWarning?.reason) {
+                  sessionStorage.setItem("tuna_dismissed_warn", adminWarning.reason);
+                }
+                setAdminWarning(null);
+              }}
+              className="w-full py-2.5 rounded-xl bg-amber-500 hover:bg-amber-600 text-white font-black text-xs border-0 cursor-pointer shadow-xs active:scale-95 transition"
+            >
+              Tôi Đã Đọc & Hiểu
+            </button>
           </div>
         </div>
+      )}
 
-        {/* Cụm nút hành động căn chỉnh 1 dòng */}
-        <div className="flex items-center gap-1.5 shrink-0">
-          <button
-            type="button"
-            onClick={() => { setTempNickname(nickname); setShowNicknameModal(true); }}
-            className="px-2 py-1.5 bg-slate-100 hover:bg-slate-200 active:scale-95 text-slate-700 text-[10.5px] font-bold rounded-xl border-0 cursor-pointer whitespace-nowrap flex items-center gap-1 transition"
-            title="Đổi biệt danh"
-          >
-            <i className="bi bi-pencil-square text-[10px]"></i>
-            <span>Đổi tên</span>
-          </button>
-          
-          <button
-            type="button"
-            onClick={() => {
-              const nextVal = !isAnonymous;
-              setIsAnonymous(nextVal);
-              localStorage.setItem("tuna_chat_is_anon", String(nextVal));
-            }}
-            className={`px-2.5 py-1.5 text-[10.5px] font-bold rounded-xl border-0 cursor-pointer whitespace-nowrap active:scale-95 flex items-center gap-1 transition ${
-              isAnonymous 
-                ? "bg-purple-600 hover:bg-purple-700 text-white shadow-xs shadow-purple-500/20" 
-                : "bg-slate-100 hover:bg-slate-200 text-slate-600"
-            }`}
-          >
-            <i className={`bi ${isAnonymous ? "bi-person-check-fill" : "bi-incognito"} text-[11px]`}></i>
-            <span>{isAnonymous ? "Hiện tên" : "Ẩn danh"}</span>
-          </button>
-
-          <span
-            className={`w-2 h-2 rounded-full ml-0.5 shrink-0 ${isConnected ? "bg-emerald-500 animate-pulse" : "bg-rose-400"}`}
-            title={isConnected ? "Đã kết nối" : "Mất kết nối"}
-          />
+      {/* 3. MODAL KHOÁ CHAT */}
+      {penaltyStatus.showLockModal && (
+        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-3xl p-5 w-full max-w-sm shadow-2xl border border-rose-300 text-center">
+            <div className="w-12 h-12 rounded-2xl bg-rose-100 text-rose-600 flex items-center justify-center text-2xl mx-auto mb-2">
+              <i className="bi bi-slash-circle-fill"></i>
+            </div>
+            <h5 className="font-black text-sm text-slate-900 mb-1">Tài Khoản Đang Bị Khóa Chat</h5>
+            <p className="text-xs text-slate-600 font-bold mb-2">Lý do: {penaltyStatus.lockReason}</p>
+            <span className="text-[11px] text-rose-600 font-bold bg-rose-50 px-3 py-1 rounded-full border border-rose-200 inline-block mb-3">
+              Thời hạn: {penaltyStatus.durationText}
+            </span>
+            <button
+              type="button"
+              onClick={() => setPenaltyStatus((prev) => ({ ...prev, showLockModal: false }))}
+              className="w-full py-2.5 rounded-xl bg-slate-800 text-white font-black text-xs border-0 cursor-pointer"
+            >
+              Đóng
+            </button>
+          </div>
         </div>
-      </div>
+      )}
 
-      {/* DANH SÁCH TIN NHẮN */}
-      <div className="flex-1 overflow-y-auto space-y-3 px-1 pr-1.5 no-scrollbar pb-3">
+      {/* 4. KHU VỰC DANH SÁCH TIN NHẮN */}
+      <div className="flex-1 overflow-y-auto space-y-3.5 p-3 pr-2 no-scrollbar">
         {messages.length === 0 ? (
-          <div className="text-center py-16 text-slate-400">
-            <i className="bi bi-chat-dots text-3xl mb-1 block"></i>
-            <p className="text-xs font-bold mb-0.5">Phòng thảo luận chung</p>
-            <p className="text-[10.5px]">Gửi câu hỏi hoặc chia sẻ học tập để bắt đầu!</p>
+          <div className="text-center py-20 text-slate-400">
+            <i className="bi bi-chat-dots text-4xl mb-2 block opacity-70"></i>
+            <p className="text-xs font-bold mb-0.5">Phòng thảo luận cộng đồng</p>
+            <p className="text-[11px]">Gửi lời chào hoặc đặt câu hỏi bài tập ngay nhé!</p>
           </div>
         ) : (
           messages.map((msg, index) => {
@@ -484,71 +607,124 @@ export const ChatSection = ({ currentUser }) => {
               String(msg.userId) === myUserId ||
               (msg.user_name && msg.user_name === myDisplayName);
 
-            const isRecalled = msg.is_recalled || msg.content === "Tin nhắn đã được thu hồi";
-            const replyData = msg.replyTo || msg.reply_to;
-            const safeKey = `msg_${msg.id || 'tmp'}_${index}_${msg.time || ''}`;
-            const isActionMenuOpen = activeActionMsg?.id === msg.id;
+            const isRecalled = Boolean(
+              msg.is_recalled ||
+              msg.isRecalled ||
+              msg.content === "Tin nhắn đã được thu hồi"
+            );
 
+            const replyData = isRecalled ? null : (msg.replyTo || msg.reply_to);
+            const safeKey = `msg_${msg.id || 'tmp'}_${index}`;
+            const isActionMenuOpen = !isRecalled && activeActionMsg?.id === msg.id;
+
+            // Tin nhắn của tôi
             if (isMe) {
               return (
-                <div key={safeKey} className="flex flex-col items-end msg-bubble-right relative">
-                  <span className="text-[9.5px] text-slate-400 mb-0.5 mr-1">{msg.time}</span>
+                <div 
+                  key={safeKey} 
+                  className={`flex flex-col items-end msg-bubble-anim relative w-full ${isActionMenuOpen ? "z-30" : "z-1"}`}
+                >
+                  <span className="text-[10px] text-slate-400 mb-1 mr-1">{msg.time}</span>
 
-                  <div 
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      if (!isRecalled) setActiveActionMsg(isActionMenuOpen ? null : msg);
-                    }}
-                    className={`p-2.5 px-3.5 rounded-2xl rounded-tr-xs text-xs max-w-[85%] leading-relaxed shadow-sm break-words cursor-pointer transition ${
-                      isRecalled 
-                        ? "bg-slate-200 text-slate-500 italic border border-slate-300" 
-                        : "bg-[#0045ce] text-white active:scale-[0.99]"
-                    }`}
-                  >
-                    {/* KHỐI TRÍCH DẪN REPLY NẾU CÓ */}
-                    {replyData && (
-                      <div className="mb-2 p-2 rounded-xl bg-white/15 border-l-3 border-amber-300 text-[11px] leading-tight text-blue-100">
-                        <span className="font-black text-amber-300 block mb-0.5">↩ {replyData.userName}:</span>
-                        <span className="truncate block opacity-90">{replyData.textSnippet}</span>
-                      </div>
-                    )}
-
-                    {msg.image_url && !isRecalled && (
-                      <img
-                        src={msg.image_url}
-                        alt="Đính kèm"
-                        onClick={(e) => { e.stopPropagation(); setPreviewModalImg(msg.image_url); }}
-                        className="rounded-xl max-w-full max-h-56 object-cover mb-1.5 cursor-pointer hover:opacity-95 transition bg-white/10"
-                      />
-                    )}
-
-                    <div className="flex items-center gap-1.5">
-                      {isRecalled && <i className="bi bi-slash-circle text-xs text-slate-400"></i>}
-                      <span>{msg.content}</span>
+                  {isRecalled ? (
+                    <div className="py-2 px-3 rounded-2xl rounded-tr-xs text-xs italic text-slate-400 bg-slate-200/80 border border-slate-300/80 flex items-center gap-1.5 select-none shadow-2xs">
+                      <i className="bi bi-slash-circle text-[11px]"></i>
+                      <span>Tin nhắn đã được thu hồi</span>
                     </div>
-                  </div>
-
-                  {/* MENU NỔI THAO TÁC (TRẢ LỜI / THU HỒI) */}
-                  {isActionMenuOpen && !isRecalled && (
+                  ) : (
                     <div 
-                      className="absolute right-0 top-full mt-1 bg-white shadow-xl rounded-2xl p-1 border border-slate-200 z-40 flex items-center gap-1 msg-bubble-right"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setActiveActionMsg(isActionMenuOpen ? null : msg);
+                      }}
+                      className="flex flex-col p-2.5 px-3.5 rounded-2xl rounded-tr-xs text-xs max-w-[85%] leading-relaxed shadow-xs break-words cursor-pointer transition bg-[#0068FF] text-white active:scale-[0.99] relative"
+                    >
+                      {replyData && (
+                        <div className="mb-2 p-2 px-2.5 rounded-xl bg-black/15 border-l-4 border-amber-300 text-[11px] leading-tight text-white block select-none">
+                          <div className="flex items-center gap-1 text-amber-300 font-bold mb-0.5">
+                            <i className="bi bi-reply-fill text-xs"></i>
+                            <span>{replyData.userName}</span>
+                          </div>
+                          <div className="flex items-center gap-1.5">
+                            {replyData.imageUrl && (
+                              <img src={replyData.imageUrl} alt="thumb" className="w-5 h-5 rounded object-cover shrink-0 border border-white/20" />
+                            )}
+                            <span className="truncate block text-white/90 font-medium text-[10.5px]">
+                              {replyData.textSnippet || "[Hình ảnh]"}
+                            </span>
+                          </div>
+                        </div>
+                      )}
+
+                      {msg.image_url && (
+                        <div className="relative my-1">
+                          <img
+                            src={msg.image_url}
+                            alt="Đính kèm"
+                            className="rounded-xl max-w-full max-h-56 object-cover border border-white/10"
+                          />
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setPreviewModalImg(msg.image_url);
+                              setPreviewMsgContext(msg);
+                            }}
+                            className="absolute top-2 right-2 w-7 h-7 rounded-lg bg-black/60 hover:bg-black/80 text-white flex items-center justify-center border-0 cursor-pointer shadow-md transition"
+                            title="Phóng to ảnh"
+                          >
+                            <i className="bi bi-arrows-fullscreen text-xs"></i>
+                          </button>
+                        </div>
+                      )}
+
+                      {msg.content && <span className="break-words">{msg.content}</span>}
+                    </div>
+                  )}
+
+                  {/* Menu nổi thao tác (Bên phải) */}
+                  {isActionMenuOpen && (
+                    <div 
+                      ref={actionMenuRef}
+                      className="absolute right-0 bottom-full mb-2 bg-white shadow-2xl rounded-2xl p-1.5 border border-slate-200 z-50 flex items-center gap-1 msg-bubble-anim"
+                      style={{
+                        boxShadow: "0 14px 28px -4px rgba(0, 0, 0, 0.2), 0 6px 12px -2px rgba(0, 0, 0, 0.08)",
+                        transformOrigin: "bottom right"
+                      }}
                       onClick={(e) => e.stopPropagation()}
                     >
                       <button
                         type="button"
-                        onClick={() => { setReplyingMessage(msg); setActiveActionMsg(null); }}
-                        className="px-2.5 py-1 text-[11px] font-bold text-slate-700 hover:bg-slate-50 rounded-xl border-0 bg-transparent flex items-center gap-1 cursor-pointer"
+                        onClick={() => handleSelectReply(msg)}
+                        className="px-3 py-1.5 text-[11.5px] font-bold text-slate-700 hover:bg-slate-50 hover:text-[#0068FF] rounded-xl border-0 bg-transparent flex items-center gap-1.5 cursor-pointer active:scale-95 transition"
                       >
-                        <i className="bi bi-reply-fill text-[#0045ce]"></i> Trả lời
+                        <i className="bi bi-reply-fill text-[#0068FF] text-sm"></i>
+                        <span>Trả lời</span>
                       </button>
+
+                      {msg.image_url && (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setActiveActionMsg(null);
+                            setPreviewModalImg(msg.image_url);
+                            setPreviewMsgContext(msg);
+                          }}
+                          className="px-3 py-1.5 text-[11.5px] font-bold text-slate-700 hover:bg-slate-50 hover:text-emerald-600 rounded-xl border-0 bg-transparent flex items-center gap-1.5 cursor-pointer active:scale-95 transition"
+                        >
+                          <i className="bi bi-zoom-in text-emerald-600 text-sm"></i>
+                          <span>Xem ảnh</span>
+                        </button>
+                      )}
 
                       {canRecall(msg) && (
                         <button
                           type="button"
                           onClick={() => handleRecallMessage(msg)}
-                          className="px-2.5 py-1 text-[11px] font-bold text-rose-600 hover:bg-rose-50 rounded-xl border-0 bg-transparent flex items-center gap-1 cursor-pointer"
+                          className="px-3 py-1.5 text-[11.5px] font-bold text-rose-600 hover:bg-rose-50 rounded-xl border-0 bg-transparent flex items-center gap-1.5 cursor-pointer active:scale-95 transition"
                         >
-                          <i className="bi bi-arrow-counterclockwise"></i> Thu hồi
+                          <i className="bi bi-arrow-counterclockwise text-sm"></i>
+                          <span>Thu hồi</span>
                         </button>
                       )}
                     </div>
@@ -557,64 +733,115 @@ export const ChatSection = ({ currentUser }) => {
               );
             }
 
+            // Tin nhắn của người khác
             return (
-              <div key={safeKey} className="flex items-start gap-2 msg-bubble-left relative">
-                <div className="w-8 h-8 rounded-full bg-gradient-to-br from-slate-700 to-indigo-700 flex items-center justify-center text-xs font-black text-white shrink-0 shadow-2xs uppercase">
+              <div 
+                key={safeKey} 
+                className={`flex items-start gap-2 msg-bubble-anim relative w-full ${isActionMenuOpen ? "z-30" : "z-1"}`}
+              >
+                <div className={`w-8 h-8 rounded-full flex items-center justify-center text-xs font-black text-white shrink-0 shadow-xs uppercase mt-0.5 ${
+                  isRecalled ? "bg-slate-300 text-slate-500 opacity-60" : "bg-gradient-to-br from-blue-700 to-indigo-800"
+                }`}>
                   {msg.user_name ? msg.user_name.substring(0, 2) : "SV"}
                 </div>
-                <div className="max-w-[85%]">
-                  <div className="flex items-center gap-1.5 mb-0.5">
-                    <span className="text-xs font-bold text-slate-800">{msg.user_name}</span>
-                    <span className="text-[9.5px] text-slate-400">• {msg.time}</span>
+                
+                <div className="max-w-[85%] flex flex-col items-start w-full relative">
+                  {/* TIÊU ĐỀ TÊN NGƯỜI GỬI */}
+                  <div className="flex items-center gap-1.5 mb-1 px-1">
+                    <span className="text-xs font-bold text-slate-800 leading-none">{msg.user_name}</span>
+                    <span className="text-[10px] text-slate-400 leading-none">• {msg.time}</span>
                   </div>
 
-                  <div 
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      if (!isRecalled) setActiveActionMsg(isActionMenuOpen ? null : msg);
-                    }}
-                    className={`p-2.5 px-3.5 rounded-2xl rounded-tl-xs text-xs leading-relaxed shadow-2xs break-words cursor-pointer transition ${
-                      isRecalled
-                        ? "bg-slate-100 text-slate-400 italic border border-slate-200"
-                        : "bg-white text-slate-800 border border-slate-200/90 active:scale-[0.99]"
-                    }`}
-                  >
-                    {/* KHỐI TRÍCH DẪN REPLY NẾU CÓ */}
-                    {replyData && (
-                      <div className="mb-2 p-2 rounded-xl bg-slate-50 border-l-3 border-[#0045ce] text-[11px] leading-tight text-slate-600">
-                        <span className="font-black text-[#0045ce] block mb-0.5">↩ {replyData.userName}:</span>
-                        <span className="truncate block">{replyData.textSnippet}</span>
-                      </div>
-                    )}
-
-                    {msg.image_url && !isRecalled && (
-                      <img
-                        src={msg.image_url}
-                        alt="Đính kèm"
-                        onClick={(e) => { e.stopPropagation(); setPreviewModalImg(msg.image_url); }}
-                        className="rounded-xl max-w-full max-h-56 object-cover mb-1.5 cursor-pointer hover:opacity-95 transition border border-slate-100"
-                      />
-                    )}
-
-                    <div className="flex items-center gap-1.5">
-                      {isRecalled && <i className="bi bi-slash-circle text-xs text-slate-400"></i>}
-                      <span>{msg.content}</span>
+                  {isRecalled ? (
+                    <div className="py-2 px-3 rounded-2xl rounded-tl-xs text-xs italic text-slate-400 bg-slate-100 border border-slate-200/80 flex items-center gap-1.5 select-none shadow-2xs">
+                      <i className="bi bi-slash-circle text-[11px]"></i>
+                      <span>Tin nhắn đã được thu hồi</span>
                     </div>
-                  </div>
-
-                  {/* MENU NỔI CHO TIN NHẮN NGƯỜI KHÁC (CHỈ HIỆN NÚT TRẢ LỜI) */}
-                  {isActionMenuOpen && !isRecalled && (
+                  ) : (
                     <div 
-                      className="absolute left-10 top-full mt-1 bg-white shadow-xl rounded-2xl p-1 border border-slate-200 z-40 flex items-center gap-1 msg-bubble-left"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setActiveActionMsg(isActionMenuOpen ? null : msg);
+                      }}
+                      className="flex flex-col p-2.5 px-3.5 rounded-2xl rounded-tl-xs text-xs leading-relaxed shadow-xs break-words cursor-pointer transition bg-white text-slate-900 border border-slate-200/90 active:scale-[0.99] relative"
+                    >
+                      {replyData && (
+                        <div className="mb-2 p-2 px-2.5 rounded-xl bg-slate-100/90 border-l-4 border-[#0068FF] text-[11px] leading-tight text-slate-700 block select-none">
+                          <div className="flex items-center gap-1 text-[#0068FF] font-bold mb-0.5">
+                            <i className="bi bi-reply-fill text-xs"></i>
+                            <span>{replyData.userName}</span>
+                          </div>
+                          <div className="flex items-center gap-1.5">
+                            {replyData.imageUrl && (
+                              <img src={replyData.imageUrl} alt="thumb" className="w-5 h-5 rounded object-cover shrink-0 border border-slate-300" />
+                            )}
+                            <span className="truncate block text-slate-500 font-medium text-[10.5px]">
+                              {replyData.textSnippet || "[Hình ảnh]"}
+                            </span>
+                          </div>
+                        </div>
+                      )}
+
+                      {msg.image_url && (
+                        <div className="relative my-1">
+                          <img
+                            src={msg.image_url}
+                            alt="Đính kèm"
+                            className="rounded-xl max-w-full max-h-56 object-cover border border-slate-100"
+                          />
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setPreviewModalImg(msg.image_url);
+                              setPreviewMsgContext(msg);
+                            }}
+                            className="absolute top-2 right-2 w-7 h-7 rounded-lg bg-black/60 hover:bg-black/80 text-white flex items-center justify-center border-0 cursor-pointer shadow-md transition"
+                            title="Phóng to ảnh"
+                          >
+                            <i className="bi bi-arrows-fullscreen text-xs"></i>
+                          </button>
+                        </div>
+                      )}
+
+                      {msg.content && <span className="break-words">{msg.content}</span>}
+                    </div>
+                  )}
+
+                  {/* Nút trả lời của người khác */}
+                  {isActionMenuOpen && (
+                    <div 
+                      ref={actionMenuRef}
+                      className="absolute right-0 bottom-full mb-2 bg-white shadow-2xl rounded-2xl p-1.5 border border-slate-200 z-50 flex items-center gap-1 msg-bubble-anim"
+                      style={{
+                        boxShadow: "0 14px 28px -4px rgba(0, 0, 0, 0.2), 0 6px 12px -2px rgba(0, 0, 0, 0.08)",
+                        transformOrigin: "bottom right"
+                      }}
                       onClick={(e) => e.stopPropagation()}
                     >
                       <button
                         type="button"
-                        onClick={() => { setReplyingMessage(msg); setActiveActionMsg(null); }}
-                        className="px-2.5 py-1 text-[11px] font-bold text-slate-700 hover:bg-slate-50 rounded-xl border-0 bg-transparent flex items-center gap-1 cursor-pointer"
+                        onClick={() => handleSelectReply(msg)}
+                        className="px-3 py-1.5 text-[11.5px] font-bold text-slate-700 hover:bg-slate-50 hover:text-[#0068FF] rounded-xl border-0 bg-transparent flex items-center gap-1.5 cursor-pointer active:scale-95 transition"
                       >
-                        <i className="bi bi-reply-fill text-[#0045ce]"></i> Trả lời
+                        <i className="bi bi-reply-fill text-[#0068FF] text-sm"></i>
+                        <span>Trả lời</span>
                       </button>
+
+                      {msg.image_url && (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setActiveActionMsg(null);
+                            setPreviewModalImg(msg.image_url);
+                            setPreviewMsgContext(msg);
+                          }}
+                          className="px-3 py-1.5 text-[11.5px] font-bold text-slate-700 hover:bg-slate-50 hover:text-emerald-600 rounded-xl border-0 bg-transparent flex items-center gap-1.5 cursor-pointer active:scale-95 transition"
+                        >
+                          <i className="bi bi-zoom-in text-emerald-600 text-sm"></i>
+                          <span>Xem ảnh</span>
+                        </button>
+                      )}
                     </div>
                   )}
                 </div>
@@ -624,11 +851,11 @@ export const ChatSection = ({ currentUser }) => {
         )}
 
         {typingUsers.length > 0 && (
-          <div className="flex items-center gap-2 pt-1 msg-bubble-left">
+          <div className="flex items-center gap-2 pt-1 msg-bubble-anim">
             <div className="w-7 h-7 rounded-full bg-slate-200 text-slate-600 flex items-center justify-center text-[10px] font-black shrink-0">
               <i className="bi bi-chat-dots-fill"></i>
             </div>
-            <div className="bg-white px-3 py-2 rounded-2xl rounded-tl-xs border border-slate-200/80 shadow-2xs flex items-center gap-2">
+            <div className="bg-white px-3 py-2 rounded-2xl rounded-tl-xs border border-slate-200/80 shadow-xs flex items-center gap-2">
               <div className="flex items-center gap-1 py-0.5">
                 <span className="typing-dot"></span>
                 <span className="typing-dot"></span>
@@ -642,110 +869,200 @@ export const ChatSection = ({ currentUser }) => {
         <div ref={messagesEndRef} />
       </div>
 
-      {/* THANH TRẢ LỜI TIN NHẮN (REPLY BAR) */}
-      {replyingMessage && (
-        <div className="bg-blue-50 border border-blue-200 p-2 px-3 rounded-2xl mb-1.5 shadow-xs flex items-center justify-between msg-bubble-right">
-          <div className="truncate pr-2 border-l-3 border-[#0045ce] pl-2">
-            <span className="text-[11px] font-black text-[#0045ce] block">
-              Đang trả lời {replyingMessage.user_name || "thành viên"}:
-            </span>
-            <span className="text-[10px] text-slate-600 truncate block">
-              {replyingMessage.content || "Hình ảnh đính kèm"}
-            </span>
-          </div>
-          <button
-            type="button"
-            onClick={() => setReplyingMessage(null)}
-            className="w-6 h-6 rounded-full bg-white hover:bg-rose-50 text-slate-400 hover:text-rose-600 flex items-center justify-center border border-slate-200 cursor-pointer shrink-0"
-          >
-            ✕
-          </button>
-        </div>
-      )}
-
-      {/* THANH XEM TRƯỚC ẢNH (PREVIEW BAR) */}
-      {selectedImage && (
-        <div className="bg-white border border-blue-200 p-2 rounded-2xl mb-1.5 shadow-sm flex items-center justify-between msg-bubble-right">
-          <div className="flex items-center gap-2.5 overflow-hidden">
-            <div className="relative w-11 h-11 rounded-xl overflow-hidden border border-slate-200 shrink-0">
-              <img src={selectedImage} alt="Xem trước" className="w-full h-full object-cover" />
+      {/* 5. KHUNG NHẬP LIỆU CHUẨN ZALO CỐ ĐỊNH Ở ĐÁY */}
+      <div className="sticky bottom-0 bg-white border-t border-slate-200 shadow-md z-30">
+        
+        {/* BANNER PREVIEW TRẢ LỜI CHUẨN ZALO */}
+        {replyingMessage && (
+          <div className="bg-white border-b border-slate-100 px-3.5 py-2 flex items-center justify-between msg-bubble-anim">
+            <div className="border-l-3 border-[#0068FF] pl-2.5 truncate flex-1 min-w-0 pr-3 flex items-center gap-2">
+              {replyingMessage.image_url && (
+                <img
+                  src={replyingMessage.image_url}
+                  alt="Ảnh trích dẫn"
+                  className="w-8 h-8 rounded-lg object-cover border border-slate-200 shrink-0"
+                />
+              )}
+              <div className="truncate min-w-0 flex-1">
+                <span className="text-[12px] font-bold text-slate-900 block leading-tight">
+                  {replyingMessage.user_name || "Thành viên"}
+                </span>
+                <span className="text-[11px] text-slate-500 truncate block mt-0.5 leading-tight font-medium">
+                  {replyingMessage.content?.trim() || "[Hình ảnh]"}
+                </span>
+              </div>
             </div>
-            <div className="truncate">
-              <span className="text-[11px] font-black text-slate-800 block truncate">
-                {selectedImageName || "Ảnh chuẩn bị gửi"}
-              </span>
-              <span className="text-[9.5px] text-blue-600 font-bold block">Sẵn sàng gửi</span>
-            </div>
-          </div>
-          <button
-            type="button"
-            onClick={() => { setSelectedImage(null); setSelectedImageName(""); }}
-            className="w-7 h-7 rounded-full bg-slate-100 hover:bg-rose-50 text-slate-400 hover:text-rose-600 flex items-center justify-center border-0 cursor-pointer shrink-0"
-          >
-            ✕
-          </button>
-        </div>
-      )}
-
-      {/* KHUNG NHẬP TIN NHẮN */}
-      <div className="pt-1 sticky bottom-0 bg-[#F8FAFC]">
-        {penaltyStatus.isLocked ? (
-          <div className="bg-rose-50 border border-rose-300 p-3 rounded-2xl flex items-center justify-between shadow-xs">
-            <span className="text-xs font-black text-rose-800 truncate">Tài khoản đang bị tạm khóa nhắn tin</span>
-          </div>
-        ) : (
-          <div className="flex items-center gap-1.5 bg-white rounded-2xl p-1.5 pl-2 border border-slate-200 shadow-sm focus-within:border-blue-500">
-            <input
-              type="file"
-              accept="image/*"
-              ref={fileInputRef}
-              className="hidden"
-              onChange={handleImageSelect}
-            />
-
             <button
               type="button"
-              onClick={() => fileInputRef.current?.click()}
-              className={`w-8 h-8 rounded-xl flex items-center justify-center shrink-0 border-0 cursor-pointer transition ${
-                selectedImage ? "bg-blue-100 text-[#0045ce]" : "bg-slate-100 hover:bg-slate-200 text-slate-600"
-              }`}
+              onClick={handleCancelReply}
+              className="w-7 h-7 rounded-full bg-slate-100 hover:bg-slate-200 text-slate-500 flex items-center justify-center border-0 cursor-pointer shrink-0 transition"
+              title="Hủy trả lời"
             >
-              <i className="bi bi-image text-sm"></i>
-            </button>
-
-            <input
-              type="text"
-              value={inputValue}
-              onChange={handleInputChange}
-              onKeyDown={(e) => {
-                if (e.key === "Enter" && !e.shiftKey) {
-                  e.preventDefault();
-                  handleSendMessage();
-                }
-              }}
-              placeholder={replyingMessage ? "Nhập câu trả lời..." : "Nhập nội dung thảo luận..."}
-              className="flex-1 text-xs text-slate-800 bg-transparent focus:outline-none border-0 px-1"
-            />
-
-            <button
-              type="button"
-              disabled={!inputValue.trim() && !selectedImage}
-              onClick={handleSendMessage}
-              className="w-8 h-8 rounded-xl bg-[#0045ce] disabled:opacity-40 text-white flex items-center justify-center shrink-0 border-0 cursor-pointer shadow-xs active:scale-90 transition-transform"
-            >
-              <i className="bi bi-send-fill text-xs"></i>
+              <i className="bi bi-x-lg text-xs font-black"></i>
             </button>
           </div>
         )}
+
+        {/* XEM TRƯỚC ẢNH ĐÍNH KÈM CHUẨN BỊ GỬI */}
+        {selectedImage && (
+          <div className="bg-slate-50 border-b border-slate-200 p-2 px-3 flex items-center justify-between msg-bubble-anim">
+            <div className="flex items-center gap-2.5 overflow-hidden">
+              <div className="w-10 h-10 rounded-xl overflow-hidden border border-slate-200 shrink-0">
+                <img src={selectedImage} alt="Xem trước" className="w-full h-full object-cover" />
+              </div>
+              <div className="truncate">
+                <span className="text-[11px] font-bold text-slate-800 block truncate">
+                  {selectedImageName || "Ảnh đính kèm"}
+                </span>
+                <span className="text-[9.5px] text-[#0068FF] font-semibold">Sẵn sàng gửi</span>
+              </div>
+            </div>
+            <button
+              type="button"
+              onClick={() => { setSelectedImage(null); setSelectedImageName(""); }}
+              className="w-6 h-6 rounded-full bg-slate-200 hover:bg-rose-100 text-slate-500 hover:text-rose-600 flex items-center justify-center border-0 cursor-pointer shrink-0"
+            >
+              ✕
+            </button>
+          </div>
+        )}
+
+        {/* THANH NHẬP LIỆU CHÍNH */}
+        <div className="p-2 px-3 flex items-center gap-1.5 bg-white">
+          {penaltyStatus.isLocked ? (
+            <div className="bg-rose-50 border border-rose-300 p-2.5 rounded-2xl flex items-center justify-between w-full shadow-xs">
+              <span className="text-xs font-black text-rose-800 truncate">
+                {penaltyStatus.lockReason || "Tài khoản đang bị tạm khóa nhắn tin"}
+              </span>
+              <button
+                onClick={() => setPenaltyStatus((prev) => ({ ...prev, showLockModal: true }))}
+                className="text-[11px] font-bold text-rose-700 underline border-0 bg-transparent cursor-pointer shrink-0"
+              >
+                Chi tiết
+              </button>
+            </div>
+          ) : (
+            <>
+              <input
+                type="file"
+                accept="image/*"
+                ref={fileInputRef}
+                className="hidden"
+                onChange={handleImageSelect}
+              />
+
+              {/* NÚT TÍCH HỢP ẨN DANH / ĐỔI TÊN */}
+              <div className="relative">
+                <button
+                  type="button"
+                  onClick={() => setShowIdentityMenu((prev) => !prev)}
+                  className={`w-9 h-9 rounded-2xl flex items-center justify-center shrink-0 border-0 cursor-pointer transition active:scale-95 ${
+                    isAnonymous ? "bg-purple-100 text-purple-700 shadow-2xs" : "bg-blue-50 text-[#0068FF]"
+                  }`}
+                  title={`Đang dùng: ${myDisplayName}`}
+                >
+                  <i className={`bi ${isAnonymous ? "bi-incognito text-base" : "bi-person-fill text-base"}`}></i>
+                </button>
+
+                {showIdentityMenu && (
+                  <>
+                    <div 
+                      className="fixed inset-0 z-40 bg-black/25 backdrop-blur-[1px]" 
+                      onClick={() => setShowIdentityMenu(false)}
+                    />
+                    <div 
+                      className="absolute bottom-full left-0 mb-3 bg-white rounded-3xl p-3 shadow-2xl border border-slate-200 w-52 z-50 flex flex-col gap-1 msg-bubble-anim"
+                      style={{
+                        boxShadow: "0 20px 30px -10px rgba(0, 0, 0, 0.25), 0 10px 15px -5px rgba(0, 0, 0, 0.1)"
+                      }}
+                    >
+                      <div className="px-2.5 py-1 border-b border-slate-100">
+                        <span className="text-[10px] text-slate-400 font-bold uppercase block">Tên hiển thị:</span>
+                        <span className="text-xs font-black text-slate-900 truncate block">{myDisplayName}</span>
+                      </div>
+
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const nextVal = !isAnonymous;
+                          setIsAnonymous(nextVal);
+                          localStorage.setItem("tuna_chat_is_anon", String(nextVal));
+                          setShowIdentityMenu(false);
+                        }}
+                        className="w-full text-left px-2.5 py-2 text-xs font-bold rounded-xl border-0 bg-transparent hover:bg-slate-50 cursor-pointer flex items-center gap-2"
+                      >
+                        <i className={`bi ${isAnonymous ? "bi-person-check text-[#0068FF]" : "bi-incognito text-purple-600"} text-sm`}></i>
+                        <span>{isAnonymous ? "Hiện tên thật" : "Bật ẩn danh"}</span>
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setShowIdentityMenu(false);
+                          setTempNickname(nickname);
+                          setShowNicknameModal(true);
+                        }}
+                        className="w-full text-left px-2.5 py-2 text-xs font-bold rounded-xl border-0 bg-transparent hover:bg-slate-50 cursor-pointer flex items-center gap-2"
+                      >
+                        <i className="bi bi-pencil-square text-amber-600 text-sm"></i>
+                        <span>Đổi biệt danh</span>
+                      </button>
+                    </div>
+                  </>
+                )}
+              </div>
+
+              {/* Nút gửi ảnh */}
+              <button
+                type="button"
+                onClick={() => fileInputRef.current?.click()}
+                className={`w-9 h-9 rounded-2xl flex items-center justify-center shrink-0 border-0 cursor-pointer transition ${
+                  selectedImage ? "bg-blue-100 text-[#0068FF]" : "bg-slate-100 hover:bg-slate-200 text-slate-600"
+                }`}
+                title="Gửi hình ảnh"
+              >
+                <i className="bi bi-image text-sm"></i>
+              </button>
+
+              {/* Ô nhập tin nhắn */}
+              <div className="flex-1 bg-slate-100 rounded-2xl px-3 py-1.5 flex items-center focus-within:bg-white focus-within:ring-2 focus-within:ring-[#0068FF]/20 border border-transparent focus-within:border-[#0068FF] transition">
+                <input
+                  ref={inputRef}
+                  type="text"
+                  value={inputValue}
+                  onChange={handleInputChange}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" && !e.shiftKey) {
+                      e.preventDefault();
+                      handleSendMessage();
+                    }
+                  }}
+                  placeholder={isAnonymous ? "Nhắn ẩn danh..." : "Nhập nội dung thảo luận..."}
+                  className="w-full text-xs text-slate-800 bg-transparent focus:outline-none border-0 p-0"
+                />
+              </div>
+
+              {/* Nút gửi */}
+              <button
+                type="button"
+                disabled={!inputValue.trim() && !selectedImage}
+                onClick={handleSendMessage}
+                className="w-9 h-9 rounded-2xl bg-[#0068FF] disabled:bg-slate-200 disabled:opacity-50 text-white flex items-center justify-center shrink-0 border-0 cursor-pointer shadow-xs active:scale-95 transition"
+              >
+                <i className="bi bi-send-fill text-sm"></i>
+              </button>
+            </>
+          )}
+        </div>
       </div>
 
       {/* MODAL ĐỔI BIỆT DANH */}
       {showNicknameModal && (
-        <div className="position-fixed top-0 start-0 w-100 h-100 bg-black/50 d-flex align-items-center justify-center p-3 z-50">
+        <div className="fixed inset-0 bg-black/50 backdrop-blur-xs flex items-center justify-center p-3 z-50">
           <div className="bg-white rounded-3xl p-4 w-full max-w-xs shadow-2xl space-y-3">
             <div className="flex items-center justify-between">
               <h5 className="text-sm font-black text-slate-900 m-0">Đặt biệt danh ẩn danh</h5>
-              <button onClick={() => setShowNicknameModal(false)} className="w-6 h-6 rounded-full bg-slate-100 text-slate-500 border-0 cursor-pointer">✕</button>
+              <button onClick={() => setShowNicknameModal(false)} className="w-6 h-6 rounded-full bg-slate-100 text-slate-500 border-0 cursor-pointer text-xs">✕</button>
             </div>
             <input
               type="text"
@@ -766,7 +1083,7 @@ export const ChatSection = ({ currentUser }) => {
                   }
                   setShowNicknameModal(false);
                 }}
-                className="flex-1 py-2 bg-purple-600 text-white rounded-xl text-xs font-bold border-0 cursor-pointer"
+                className="flex-1 py-2 bg-purple-600 text-white rounded-xl text-xs font-bold border-0 cursor-pointer shadow-xs"
               >
                 Lưu
               </button>
@@ -775,13 +1092,54 @@ export const ChatSection = ({ currentUser }) => {
         </div>
       )}
 
-      {/* LIGHTBOX XEM ẢNH */}
+      {/* LIGHTBOX PHÓNG TO ẢNH */}
       {previewModalImg && (
         <div
-          className="position-fixed top-0 start-0 w-100 h-100 bg-black/85 d-flex align-items-center justify-center p-3 z-50 cursor-pointer"
-          onClick={() => setPreviewModalImg(null)}
+          className="fixed inset-0 bg-black/90 flex flex-col items-center justify-between p-4 z-50"
+          onClick={() => {
+            setPreviewModalImg(null);
+            setPreviewMsgContext(null);
+          }}
         >
-          <img src={previewModalImg} alt="Phóng to" className="max-w-[95vw] max-h-[85vh] rounded-2xl shadow-2xl object-contain" />
+          <div className="w-full flex justify-end">
+            <button
+              onClick={() => {
+                setPreviewModalImg(null);
+                setPreviewMsgContext(null);
+              }}
+              className="w-9 h-9 rounded-full bg-white/20 hover:bg-white/30 text-white flex items-center justify-center border-0 cursor-pointer"
+            >
+              <i className="bi bi-x-lg text-sm"></i>
+            </button>
+          </div>
+
+          <div className="flex-1 flex items-center justify-center p-2" onClick={(e) => e.stopPropagation()}>
+            <img src={previewModalImg} alt="Phóng to" className="max-w-[95vw] max-h-[75vh] rounded-2xl shadow-2xl object-contain" />
+          </div>
+
+          {previewMsgContext && (
+            <div className="flex items-center gap-2 p-2 bg-slate-900/80 rounded-2xl border border-white/20 mb-3" onClick={(e) => e.stopPropagation()}>
+              <button
+                type="button"
+                onClick={() => handleSelectReply(previewMsgContext)}
+                className="px-3.5 py-1.5 rounded-xl bg-[#0068FF] text-white font-bold text-xs border-0 cursor-pointer flex items-center gap-1.5"
+              >
+                <i className="bi bi-reply-fill text-sm"></i>
+                <span>Trả lời ảnh này</span>
+              </button>
+
+              {canRecall(previewMsgContext) && (
+                <button
+                  type="button"
+                  onClick={() => handleRecallMessage(previewMsgContext)}
+                  className="px-3.5 py-1.5 rounded-xl bg-rose-600 hover:bg-rose-700 text-white font-bold text-xs border-0 cursor-pointer flex items-center gap-1.5"
+                >
+                  <i className="bi bi-arrow-counterclockwise text-sm"></i>
+                  <span>Thu hồi ảnh</span>
+                </button>
+              )}
+            </div>
+          )}
         </div>
       )}
     </div>

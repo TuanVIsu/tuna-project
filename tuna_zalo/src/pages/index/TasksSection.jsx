@@ -1,5 +1,5 @@
 // tuna_zalo/src/pages/index/TasksSection.jsx
-import React, { useState, useEffect, useMemo, useCallback } from "react";
+import React, { useState, useEffect, useMemo, useCallback, useRef } from "react";
 import { fetchTasksFromDB, saveTaskToDB } from "../../services/aiService";
 
 const API_BASE = "https://tuna-project.onrender.com/api";
@@ -42,22 +42,27 @@ export const TasksSection = ({ onNavigate }) => {
   const [isGeneratingDaily, setIsGeneratingDaily] = useState(false);
   const [currentPage, setCurrentPage] = useState(1);
 
-  // Toast Notification hiện đại thay cho alert()
+  const hasAutoTriggeredRef = useRef(false);
+  const isGeneratingRef = useRef(false);
+
+  // Toast Notification
   const [toastMessage, setToastMessage] = useState(null);
   const showToast = (message, type = "success") => {
     setToastMessage({ message, type });
-    setTimeout(() => {
-      setToastMessage(null);
-    }, 3200);
+    setTimeout(() => setToastMessage(null), 3200);
   };
 
-  // Lấy ID người dùng đồng bộ
   const myUserId = useMemo(() => {
-    return localStorage.getItem("tuna_user_id") || "B2300001";
+    try {
+      const u = JSON.parse(localStorage.getItem("user") || "{}");
+      return u.student_code || u.id || localStorage.getItem("tuna_user_id") || "B2300001";
+    } catch {
+      return localStorage.getItem("tuna_user_id") || "B2300001";
+    }
   }, []);
 
   const [userXp, setUserXp] = useState(() => {
-    return Number(localStorage.getItem("user_study_xp") || 220);
+    return Number(localStorage.getItem("user_study_xp") || 0);
   });
 
   const [activeTaskView, setActiveTaskView] = useState(null);
@@ -71,7 +76,7 @@ export const TasksSection = ({ onNavigate }) => {
   const [isFlipped, setIsFlipped] = useState(false);
   const [masteredCards, setMasteredCards] = useState(new Set());
 
-  // 1. LẤY MÔN HỌC THEO LỘ TRÌNH VÀ DỌN SẠCH TỪ KHÓA 'undefined'
+  // Lấy danh sách môn học từ Profile
   const userProfile = useMemo(() => {
     try {
       const p = localStorage.getItem("user_academic_profile");
@@ -93,7 +98,7 @@ export const TasksSection = ({ onNavigate }) => {
     if (userProfile?.subjects && Array.isArray(userProfile.subjects) && userProfile.subjects.length > 0) {
       return userProfile.subjects[0];
     }
-    return "Cơ sở dữ liệu căn bản";
+    return "Hệ cơ sở dữ liệu đa phương tiện";
   }, [userProfile, selectedSubject]);
 
   const todayStr = useMemo(() => {
@@ -104,113 +109,139 @@ export const TasksSection = ({ onNavigate }) => {
     return `${y}-${m}-${day}`;
   }, []);
 
-  const dailyStorageKey = `daily_tasks_permanent_${todayStr}`;
+  const dailyStorageKey = `daily_tasks_${todaySubject}_${todayStr}`;
 
-  // Kiểm tra hoàn thành theo ngày
-  const [isDailyDone, setIsDailyDone] = useState(() => {
-    return localStorage.getItem(`daily_completed_date_${todayStr}`) === "true";
+  // Kiểm tra trạng thái hoàn thành độc lập
+  const [completedQuizDate, setCompletedQuizDate] = useState(() => {
+    return (
+      localStorage.getItem(`daily_quiz_completed_${todaySubject}_${todayStr}`) === "true" ||
+      localStorage.getItem(`daily_quiz_completed_${todayStr}`) === "true"
+    );
+  });
+  const [completedFlashDate, setCompletedFlashDate] = useState(() => {
+    return (
+      localStorage.getItem(`daily_flash_completed_${todaySubject}_${todayStr}`) === "true" ||
+      localStorage.getItem(`daily_flash_completed_${todayStr}`) === "true"
+    );
   });
 
-  // Tải điểm XP từ Backend
+  const isAllDailyDone = completedQuizDate && completedFlashDate;
+
+  // Lấy XP người dùng
   useEffect(() => {
     const fetchXp = async () => {
       try {
-        const res = await fetch(`${API_BASE}/streak/${myUserId}`);
+        const res = await fetch(`${API_BASE}/streak/${encodeURIComponent(myUserId)}`);
         const data = await res.json();
         if (data.success && data.xp_points !== undefined) {
           setUserXp(data.xp_points);
           localStorage.setItem("user_study_xp", String(data.xp_points));
         }
       } catch (err) {
-        console.warn("Lỗi tải XP:", err);
+        console.warn("Lỗi nạp XP:", err);
       }
     };
     fetchXp();
   }, [myUserId]);
 
-  // 2. TẠO BÀI TẬP VÀ GỌI API
+  // GỌI API GEMINI & CƠ SỞ DỮ LIỆU TẠO BÀI TẬP ĐỘNG
   const generateDailyQuizAndFlash = useCallback(async (subjectName) => {
     const targetSubject = (subjectName && subjectName !== "undefined" && subjectName.trim() !== "")
       ? subjectName
-      : "Cơ sở dữ liệu căn bản";
+      : "Hệ cơ sở dữ liệu đa phương tiện";
 
-    if (isGeneratingDaily) return;
+    if (isGeneratingRef.current) return;
+    isGeneratingRef.current = true;
     setIsGeneratingDaily(true);
 
     try {
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 12000);
+
       const payload = {
         subject: targetSubject,
         targetGoal: userProfile?.targetGoal || "KhaGioi",
-        dailyPace: userProfile?.dailyPace || 15,
         userId: myUserId,
       };
 
-      let res = await fetch(`${API_BASE}/daily-quiz/generate`, {
+      const res = await fetch(`${API_BASE}/daily-quiz/generate`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
+        signal: controller.signal,
         body: JSON.stringify(payload),
       }).catch(() => null);
 
-      if (!res || !res.ok) {
-        res = await fetch(`${API_BASE}/ai/daily-quiz/generate`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(payload),
-        });
+      clearTimeout(timeoutId);
+
+      let generatedQuestions = [];
+      let generatedFlashcards = [];
+
+      if (res && res.ok) {
+        const data = await res.json();
+        if (data.success) {
+          generatedQuestions = data.questions || [];
+          generatedFlashcards = data.flashcards || [];
+        }
       }
 
-      const data = await res.json();
+      if (generatedQuestions.length === 0) {
+        showToast("Máy chủ đang đồng bộ câu hỏi từ CSDL, vui lòng thử lại sau giây lát!", "error");
+        return;
+      }
 
-      if (data.success && Array.isArray(data.questions) && data.questions.length > 0) {
-        const currentTime = new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
-        const newDailyItems = [];
+      const currentTime = new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+      const newDailyItems = [];
 
-        const newQuiz = {
-          id: `daily_quiz_${todayStr}_${Date.now()}`,
-          featureId: "quiz",
-          docName: `[Hàng ngày] ${targetSubject}`,
+      const newQuiz = {
+        id: `daily_quiz_${targetSubject}_${todayStr}`,
+        featureId: "quiz",
+        docName: `[Hôm nay] ${targetSubject}`,
+        status: "done",
+        config: { difficulty: userProfile?.targetGoal === "HocBong" ? "Nâng cao" : "Căn bản" },
+        resultData: generatedQuestions,
+        isSaved: false,
+        isDaily: true,
+        dailyDate: todayStr,
+        isCompleted: false,
+        time: currentTime,
+      };
+      newDailyItems.push(newQuiz);
+      saveTaskToDB(newQuiz).catch(() => {});
+
+      if (generatedFlashcards.length > 0) {
+        const newFlash = {
+          id: `daily_flash_${targetSubject}_${todayStr}`,
+          featureId: "flashcard",
+          docName: `[Thuật ngữ] ${targetSubject}`,
           status: "done",
-          config: { difficulty: userProfile?.targetGoal === "HocBong" ? "Nâng cao" : "Căn bản" },
-          resultData: data.questions,
+          config: { difficulty: "Căn bản" },
+          resultData: generatedFlashcards,
           isSaved: false,
           isDaily: true,
           dailyDate: todayStr,
           isCompleted: false,
           time: currentTime,
         };
-        newDailyItems.push(newQuiz);
-        await saveTaskToDB(newQuiz);
-
-        const flashcards = data.flashcards || [];
-        if (Array.isArray(flashcards) && flashcards.length > 0) {
-          const newFlash = {
-            id: `daily_flash_${todayStr}_${Date.now() + 1}`,
-            featureId: "flashcard",
-            docName: `[Thuật ngữ] ${targetSubject}`,
-            status: "done",
-            config: { difficulty: "Căn bản" },
-            resultData: flashcards,
-            isSaved: false,
-            isDaily: true,
-            dailyDate: todayStr,
-            isCompleted: false,
-            time: currentTime,
-          };
-          newDailyItems.push(newFlash);
-          await saveTaskToDB(newFlash);
-        }
-
-        setTasks((prev) => [...newDailyItems, ...prev.filter((p) => p.dailyDate !== todayStr)]);
-        localStorage.setItem(dailyStorageKey, JSON.stringify(newDailyItems));
+        newDailyItems.push(newFlash);
+        saveTaskToDB(newFlash).catch(() => {});
       }
+
+      localStorage.setItem(dailyStorageKey, JSON.stringify(newDailyItems));
+      setTasks((prev) => [
+        ...newDailyItems,
+        ...prev.filter((p) => p.docName !== `[Hôm nay] ${targetSubject}` && p.docName !== `[Thuật ngữ] ${targetSubject}`)
+      ]);
+      showToast(`Đã nạp câu hỏi từ CSDL & AI cho môn ${targetSubject}!`, "success");
     } catch (err) {
-      console.error("Lỗi gọi API tạo bài tập:", err);
+      console.error("Lỗi sinh bài tập:", err);
+      showToast("Lỗi kết nối khi tải bài tập từ CSDL!", "error");
     } finally {
+      isGeneratingRef.current = false;
       setIsGeneratingDaily(false);
     }
-  }, [isGeneratingDaily, userProfile, myUserId, todayStr, dailyStorageKey]);
+  }, [userProfile, myUserId, todayStr, dailyStorageKey]);
 
-  // Đồng bộ bài tập từ DB
+  // ĐỒNG BỘ DỮ LIỆU
   useEffect(() => {
     let localSavedDaily = [];
     try {
@@ -223,54 +254,50 @@ export const TasksSection = ({ onNavigate }) => {
         const tasksList = Array.isArray(dbTasks) ? dbTasks : [];
         const taskMap = new Map();
         [...localSavedDaily, ...tasksList].forEach((t) => {
-          if (t && t.id) taskMap.set(t.id, t);
+          if (t && t.id) taskMap.set(String(t.id), t);
         });
 
         const merged = Array.from(taskMap.values());
         setTasks(merged);
 
         const hasTodayDaily = merged.some(
-          (t) => (t.isDaily || t.is_daily) && (t.dailyDate === todayStr || t.daily_date === todayStr)
+          (t) => (t.isDaily || t.is_daily) && t.docName?.includes(todaySubject) && (t.dailyDate === todayStr || t.daily_date === todayStr)
         );
 
-        if (!hasTodayDaily && !isDailyDone && localSavedDaily.length === 0) {
+        if (!hasTodayDaily && !isAllDailyDone && localSavedDaily.length === 0 && !hasAutoTriggeredRef.current) {
+          hasAutoTriggeredRef.current = true;
           generateDailyQuizAndFlash(todaySubject);
         }
       })
       .catch(() => {
         if (localSavedDaily.length > 0) {
           setTasks(localSavedDaily);
-        } else if (!isDailyDone) {
+        } else if (!isAllDailyDone && !hasAutoTriggeredRef.current) {
+          hasAutoTriggeredRef.current = true;
           generateDailyQuizAndFlash(todaySubject);
         }
       });
-  }, [dailyStorageKey, todayStr, todaySubject, isDailyDone, generateDailyQuizAndFlash]);
+  }, [dailyStorageKey, todayStr, todaySubject, isAllDailyDone, generateDailyQuizAndFlash]);
 
   const todayQuizTask = useMemo(() => {
-    if (isDailyDone) return null;
     return tasks.find(
       (t) =>
         (t.isDaily || t.is_daily) &&
         t.featureId === "quiz" &&
-        (t.dailyDate === todayStr || t.daily_date === todayStr) &&
-        !t.isCompleted &&
-        !t.isSaved &&
-        !t.is_saved
+        t.docName?.includes(todaySubject) &&
+        (t.dailyDate === todayStr || t.daily_date === todayStr)
     );
-  }, [tasks, isDailyDone, todayStr]);
+  }, [tasks, todaySubject, todayStr]);
 
   const todayFlashTask = useMemo(() => {
-    if (isDailyDone) return null;
     return tasks.find(
       (t) =>
         (t.isDaily || t.is_daily) &&
         t.featureId === "flashcard" &&
-        (t.dailyDate === todayStr || t.daily_date === todayStr) &&
-        !t.isCompleted &&
-        !t.isSaved &&
-        !t.is_saved
+        t.docName?.includes(todaySubject) &&
+        (t.dailyDate === todayStr || t.daily_date === todayStr)
     );
-  }, [tasks, isDailyDone, todayStr]);
+  }, [tasks, todaySubject, todayStr]);
 
   const allSavedTasks = useMemo(() => {
     return tasks.filter((t) => {
@@ -393,44 +420,55 @@ export const TasksSection = ({ onNavigate }) => {
     });
   }
 
-  // =========================================================================
-  // XỬ LÝ NỘP BÀI: CỘNG ĐIỂM VÀ LƯU STREAK VÀO POSTGRESQL CHUẨN XÁC
-  // =========================================================================
+  // NỘP BÀI: ĐỒNG BỘ CẢ 2 KHÓA STORAGE VÀ PHÁT EVENT CHO HOME
   const handleConfirmCompletion = async () => {
     if (!activeTaskView) return;
 
-    if (activeTaskView.isDaily || activeTaskView.is_daily) {
-      const bonusXp = 20;
-      const nextXp = userXp + bonusXp;
-      setUserXp(nextXp);
-      localStorage.setItem("user_study_xp", String(nextXp));
-      localStorage.setItem(`daily_completed_date_${todayStr}`, "true");
+    const isQuiz = activeTaskView.featureId === "quiz";
+    const bonusXp = 10;
+
+    if (isQuiz) {
+      setCompletedQuizDate(true);
+      // Ghi cả 2 khóa để HomeSection đọc theo cách nào cũng trúng
+      localStorage.setItem(`daily_quiz_completed_${todaySubject}_${todayStr}`, "true");
+      localStorage.setItem(`daily_quiz_completed_${todayStr}`, "true");
       localStorage.setItem(`daily_completed_date_${todaySubject}`, todayStr);
-      setIsDailyDone(true);
-
-      const completedTask = { ...activeTaskView, isCompleted: true, is_completed: true };
-      setTasks((prev) => prev.map((t) => (t.id === completedTask.id ? completedTask : t)));
-      saveTaskToDB(completedTask).catch(() => {});
-
-      try {
-        const res = await fetch(`${API_BASE}/streak/check-in`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            userId: myUserId,
-            xpBonus: bonusXp,
-          }),
-        });
-        const data = await res.json();
-        if (data.success && data.current_streak) {
-          localStorage.setItem("user_current_streak", String(data.current_streak));
-        }
-      } catch (err) {
-        console.error("Lỗi lưu streak check-in:", err);
-      }
-      showToast(`Chúc mừng! Bạn nhận được +${bonusXp} XP và giữ vững chuỗi Streak hôm nay!`, "success");
+      localStorage.setItem(`daily_completed_date_${todayStr}`, "true");
+    } else {
+      setCompletedFlashDate(true);
+      localStorage.setItem(`daily_flash_completed_${todaySubject}_${todayStr}`, "true");
+      localStorage.setItem(`daily_flash_completed_${todayStr}`, "true");
     }
 
+    const nextXp = userXp + bonusXp;
+    setUserXp(nextXp);
+    localStorage.setItem("user_study_xp", String(nextXp));
+
+    const completedTask = { ...activeTaskView, isCompleted: true, is_completed: true };
+    setTasks((prev) => prev.map((t) => (t.id === completedTask.id ? completedTask : t)));
+    saveTaskToDB(completedTask).catch(() => {});
+
+    try {
+      const res = await fetch(`${API_BASE}/streak/check-in`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          userId: myUserId,
+          xpBonus: bonusXp,
+        }),
+      });
+      const data = await res.json();
+      if (data.success && data.current_streak) {
+        localStorage.setItem("user_current_streak", String(data.current_streak));
+      }
+    } catch (err) {
+      console.error("Lỗi lưu streak check-in:", err);
+    }
+
+    // Phát custom event thông báo toàn hệ thống để HomeSection tự cập nhật UI
+    window.dispatchEvent(new Event("tuna_study_task_completed"));
+
+    showToast(`Chúc mừng! Bạn nhận được +${bonusXp} XP!`, "success");
     setActiveTaskView(null);
   };
 
@@ -450,14 +488,13 @@ export const TasksSection = ({ onNavigate }) => {
     }
   };
 
-  // ================= MÀN HÌNH LÀM BÀI TOÀN MÀN HÌNH (SAFE AREA CHUẨN IOS) =================
+  // MÀN HÌNH LÀM BÀI TOÀN MÀN HÌNH
   if (activeTaskView) {
     const isQuiz = activeTaskView.featureId === "quiz";
     const isFlashcard = activeTaskView.featureId === "flashcard";
 
     return (
       <div className="position-fixed top-0 start-0 w-100 h-100 bg-[#F8FAFC] d-flex flex-column z-50 overflow-y-auto">
-        {/* Header né Dynamic Island / Tai thỏ chuẩn */}
         <div 
           className="bg-[#0045ce] text-white px-3.5 pb-3 d-flex align-items-center justify-between sticky-top shadow-sm flex-shrink-0"
           style={{ paddingTop: "max(var(--sat, 0px), 38px)" }}
@@ -551,7 +588,7 @@ export const TasksSection = ({ onNavigate }) => {
                       onClick={handleConfirmCompletion}
                       className="w-full py-2.5 bg-amber-400 hover:bg-amber-300 text-slate-950 rounded-xl text-xs font-black border-0 shadow-md active:scale-95 transition cursor-pointer flex items-center justify-center gap-1"
                     >
-                      <i className="bi bi-check-circle-fill"></i> Nộp bài & Nhận +20 XP
+                      <i className="bi bi-check-circle-fill"></i> Nộp bài & Nhận +10 XP
                     </button>
                   </div>
                 </div>
@@ -741,6 +778,16 @@ export const TasksSection = ({ onNavigate }) => {
                   <i className="bi bi-chevron-left"></i> Trước
                 </button>
 
+                {activeCardIndex === currentCards.length - 1 && (
+                  <button
+                    type="button"
+                    onClick={handleConfirmCompletion}
+                    className="px-3.5 py-2 bg-amber-400 hover:bg-amber-300 text-slate-950 rounded-xl text-xs font-black border-0 cursor-pointer shadow-xs active:scale-95 transition flex items-center gap-1"
+                  >
+                    <i className="bi bi-check2-circle"></i> Xong thẻ (+10 XP)
+                  </button>
+                )}
+
                 <button
                   type="button"
                   disabled={activeCardIndex === currentCards.length - 1}
@@ -760,10 +807,8 @@ export const TasksSection = ({ onNavigate }) => {
     );
   }
 
-  // ================= GIAO DIỆN CHÍNH =================
   return (
     <div className="flex flex-col gap-3 pb-24 px-1 w-full max-w-full relative">
-      {/* TOAST THÔNG BÁO HIỆN ĐẠI (TỰ BIẾN MẤT - KHÔNG CHẶN MÀN HÌNH) */}
       {toastMessage && (
         <div 
           className="fixed top-24 left-3 right-3 z-50 flex items-center justify-between p-3.5 rounded-2xl shadow-xl border animate-in slide-in-from-top duration-300 backdrop-blur-md"
@@ -781,7 +826,6 @@ export const TasksSection = ({ onNavigate }) => {
               {toastMessage.message}
             </span>
           </div>
-
           <button
             onClick={() => setToastMessage(null)}
             className="w-6 h-6 rounded-full bg-white/20 text-white flex items-center justify-center border-0 cursor-pointer shrink-0 ml-2"
@@ -818,12 +862,12 @@ export const TasksSection = ({ onNavigate }) => {
         </div>
       </div>
 
-      {/* 2. KHỐI THỬ THÁCH NGÀY HÔM NAY */}
+      {/* 2. KHỐI THỬ THÁCH HÔM NAY */}
       <div className="bg-gradient-to-r from-blue-50 to-indigo-50 border border-blue-200/80 rounded-3xl p-3.5 space-y-2.5 shadow-2xs">
         <div className="flex items-center justify-between gap-2">
           <div className="flex items-center gap-1.5 min-w-0 flex-1">
-            <span className={`px-2 py-0.5 rounded-md text-white font-black text-[10px] uppercase shrink-0 ${isDailyDone ? "bg-emerald-600" : "bg-[#0045ce]"}`}>
-              {isDailyDone ? "ĐÃ HOÀN THÀNH" : "THỬ THÁCH HÔM NAY"}
+            <span className={`px-2 py-0.5 rounded-md text-white font-black text-[10px] uppercase shrink-0 ${isAllDailyDone ? "bg-emerald-600" : "bg-[#0045ce]"}`}>
+              {isAllDailyDone ? "ĐÃ HOÀN THÀNH TẤT CẢ" : "THỬ THÁCH HÔM NAY"}
             </span>
             <span className="text-xs font-black text-slate-800 truncate" title={todaySubject}>
               {todaySubject}
@@ -831,21 +875,21 @@ export const TasksSection = ({ onNavigate }) => {
           </div>
 
           <span className="text-[10.5px] font-bold text-amber-700 flex items-center gap-1 bg-amber-50 px-2.5 py-0.5 rounded-full border border-amber-200 shrink-0">
-            <i className="bi bi-fire text-amber-500"></i> {isDailyDone ? "Đã nhận +20 XP" : "+20 XP"}
+            <i className="bi bi-fire text-amber-500"></i> {isAllDailyDone ? "Đã nhận +20 XP" : "+20 XP"}
           </span>
         </div>
 
-        {isDailyDone ? (
+        {isAllDailyDone ? (
           <div className="bg-white rounded-2xl p-3 border border-emerald-200 flex items-center gap-3">
             <div className="w-9 h-9 rounded-xl bg-emerald-100 text-emerald-600 flex items-center justify-center text-lg font-black shrink-0">
               <i className="bi bi-check2-all"></i>
             </div>
             <div className="flex-1">
               <h5 className="text-xs font-black text-slate-900 m-0 leading-tight">
-                Bạn đã hoàn thành bài tập ngày hôm nay!
+                Tuyệt vời! Bạn đã hoàn thành toàn bộ bài tập hôm nay!
               </h5>
               <p className="text-[10.5px] text-slate-500 m-0 mt-0.5">
-                Quay lại vào ngày mai để duy trì streak và nhận thêm điểm XP.
+                Cả trắc nghiệm và thẻ nhớ đều đã xong. Quay lại vào ngày mai nhé!
               </p>
             </div>
           </div>
@@ -854,45 +898,79 @@ export const TasksSection = ({ onNavigate }) => {
             {todayQuizTask && (
               <div className="bg-white rounded-2xl p-2.5 border border-blue-100 flex items-center justify-between gap-2 shadow-2xs">
                 <div className="truncate flex-1">
-                  <span className="text-[10px] text-[#0045ce] font-extrabold block">
-                    Đề trắc nghiệm ({todayQuizTask.resultData?.length || 4} câu)
-                  </span>
+                  <div className="flex items-center gap-1.5 mb-0.5">
+                    <span className="text-[10px] text-[#0045ce] font-extrabold block">
+                      Đề trắc nghiệm ({todayQuizTask.resultData?.length || 4} câu)
+                    </span>
+                    {completedQuizDate && (
+                      <span className="badge bg-emerald-50 text-emerald-700 border border-emerald-200 text-[9px] font-extrabold py-0.5">
+                        ✓ Đã xong (+10 XP)
+                      </span>
+                    )}
+                  </div>
                   <p className="text-xs font-black text-slate-900 m-0 truncate">
                     {todayQuizTask.docName}
                   </p>
                 </div>
-                <button
-                  onClick={() => openStudy(todayQuizTask)}
-                  className="px-3.5 py-1.5 bg-[#0045ce] text-white rounded-xl text-xs font-black border-0 shadow-sm active:scale-95 transition cursor-pointer shrink-0 flex items-center gap-1"
-                >
-                  Vào thi ngay <i className="bi bi-arrow-right-short text-base leading-none"></i>
-                </button>
+
+                {completedQuizDate ? (
+                  <button
+                    onClick={() => openStudy(todayQuizTask)}
+                    className="px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl text-xs font-black border border-slate-200 transition cursor-pointer shrink-0"
+                  >
+                    Xem lại
+                  </button>
+                ) : (
+                  <button
+                    onClick={() => openStudy(todayQuizTask)}
+                    className="px-3.5 py-1.5 bg-[#0045ce] text-white rounded-xl text-xs font-black border-0 shadow-sm active:scale-95 transition cursor-pointer shrink-0 flex items-center gap-1"
+                  >
+                    Vào thi ngay <i className="bi bi-arrow-right-short text-base leading-none"></i>
+                  </button>
+                )}
               </div>
             )}
 
             {todayFlashTask && (
               <div className="bg-white rounded-2xl p-2.5 border border-emerald-100 flex items-center justify-between gap-2 shadow-2xs">
                 <div className="truncate flex-1">
-                  <span className="text-[10px] text-emerald-600 font-extrabold block">
-                    Bộ thẻ nhớ ({todayFlashTask.resultData?.length || 4} thẻ)
-                  </span>
+                  <div className="flex items-center gap-1.5 mb-0.5">
+                    <span className="text-[10px] text-emerald-600 font-extrabold block">
+                      Bộ thẻ nhớ ({todayFlashTask.resultData?.length || 4} thẻ)
+                    </span>
+                    {completedFlashDate && (
+                      <span className="badge bg-emerald-50 text-emerald-700 border border-emerald-200 text-[9px] font-extrabold py-0.5">
+                        ✓ Đã xong (+10 XP)
+                      </span>
+                    )}
+                  </div>
                   <p className="text-xs font-black text-slate-900 m-0 truncate">
                     {todayFlashTask.docName}
                   </p>
                 </div>
-                <button
-                  onClick={() => openStudy(todayFlashTask)}
-                  className="px-3.5 py-1.5 bg-emerald-600 text-white rounded-xl text-xs font-black border-0 shadow-sm active:scale-95 transition cursor-pointer shrink-0 flex items-center gap-1"
-                >
-                  Lật thẻ <i className="bi bi-arrow-right-short text-base leading-none"></i>
-                </button>
+
+                {completedFlashDate ? (
+                  <button
+                    onClick={() => openStudy(todayFlashTask)}
+                    className="px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl text-xs font-black border border-slate-200 transition cursor-pointer shrink-0"
+                  >
+                    Xem lại
+                  </button>
+                ) : (
+                  <button
+                    onClick={() => openStudy(todayFlashTask)}
+                    className="px-3.5 py-1.5 bg-emerald-600 text-white rounded-xl text-xs font-black border-0 shadow-sm active:scale-95 transition cursor-pointer shrink-0 flex items-center gap-1"
+                  >
+                    Lật thẻ <i className="bi bi-arrow-right-short text-base leading-none"></i>
+                  </button>
+                )}
               </div>
             )}
           </div>
         ) : isGeneratingDaily ? (
           <div className="py-3 bg-white rounded-2xl border border-blue-100 text-center text-xs font-bold text-slate-600 flex items-center justify-center gap-2 shadow-2xs">
             <span className="spinner-border spinner-border-sm text-[#0045ce]"></span>
-            <span>Đang nạp bài tập hôm nay cho môn {todaySubject}...</span>
+            <span>Đang lấy câu hỏi từ CSDL & AI...</span>
           </div>
         ) : (
           <div className="bg-white rounded-2xl p-2.5 border border-blue-100 flex items-center justify-between gap-2">
@@ -940,7 +1018,7 @@ export const TasksSection = ({ onNavigate }) => {
         >
           Tất cả môn
         </button>
-        {(userProfile?.subjects || ["Cơ sở dữ liệu căn bản"])
+        {(userProfile?.subjects || ["Hệ cơ sở dữ liệu đa phương tiện"])
           .filter((s) => s && s !== "undefined" && s.trim() !== "")
           .map((sub, idx) => (
             <button
@@ -1035,7 +1113,7 @@ export const TasksSection = ({ onNavigate }) => {
               );
             })}
 
-            {/* THANH PHÂN TRANG */}
+            {/* PHÂN TRANG */}
             {totalPages > 1 && (
               <div className="d-flex justify-content-center align-items-center mt-3 pt-1">
                 <nav aria-label="Tasks pagination">

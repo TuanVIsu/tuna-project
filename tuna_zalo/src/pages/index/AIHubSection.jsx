@@ -76,15 +76,27 @@ export const AIHubSection = () => {
   const [showRestartMenu, setShowRestartMenu] = useState(false);
   const [isGeneratingMore, setIsGeneratingMore] = useState(false);
 
-  // Toast Notification thay thế alert()
   const [toastMessage, setToastMessage] = useState(null);
   const showToast = (message, type = "success") => {
     setToastMessage({ message, type });
     setTimeout(() => setToastMessage(null), 3200);
   };
 
+  // Nạp dữ liệu tức thì từ Local Cache để chuyển trang không bị trắng / mất
   useEffect(() => {
     let isMounted = true;
+
+    // Đọc ngay lập tức từ bộ nhớ đệm
+    try {
+      const cachedTasks = localStorage.getItem("tuna_cached_tasks_master");
+      if (cachedTasks && isMounted) {
+        const parsed = JSON.parse(cachedTasks);
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          setTasks(parsed);
+        }
+      }
+    } catch (e) {}
+
     const loadData = async () => {
       const docs = await fetchDocumentsFromDB();
       if (isMounted && docs && docs.length > 0) {
@@ -233,6 +245,7 @@ export const AIHubSection = () => {
     showToast("Đã dọn dẹp lịch sử tác vụ!");
   };
 
+  // BẮT ĐẦU TẠO CÂU HỎI: TỰ ĐỘNG LƯU (isSaved = true) ĐỂ KHÔNG BỊ MẤT KHI CHUYỂN TRANG
   const handleStartTask = async (forceRefresh = false, retryFeatureId = null) => {
     const activeDoc = documents.find((d) => d.id === selectedDocId);
     if (!activeDoc) {
@@ -247,6 +260,9 @@ export const AIHubSection = () => {
     const currentDocName = activeDoc.name;
     const currentConfig = { difficulty, questionCount, targetLang };
 
+    const isQuizOrFlash = featureId === "quiz" || featureId === "flashcard";
+    const isDocType = featureId === "summary" || featureId === "translate";
+
     const newTask = {
       id: taskId,
       featureId,
@@ -255,13 +271,13 @@ export const AIHubSection = () => {
       resultData: null,
       config: currentConfig,
       errorMessage: "",
-      isSaved: false,
-      isDocSaved: false,
+      isSaved: isQuizOrFlash,  // TỰ ĐỘNG LƯU: Giúp bài tập hiển thị ngay bên tab "Bài tập & Luyện thi"
+      isDocSaved: isDocType,   // TỰ ĐỘNG LƯU: Giúp tóm tắt hiển thị bên tab "Tài liệu"
       hiddenInHistory: false,
       time: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
     };
 
-    setTasks((prev) => [newTask, ...prev]);
+    setTasks((prev) => [newTask, ...prev.filter((t) => t.id !== taskId)]);
     await saveTaskToDB(newTask);
 
     const contentHash = await computeContentHash(activeDoc.content);
@@ -273,8 +289,14 @@ export const AIHubSection = () => {
         const isArrayValid = Array.isArray(cached.data) && cached.data.length > 0;
 
         if (isStringValid || isArrayValid) {
-          const completedTask = { ...newTask, status: "done", resultData: cached.data };
-          setTasks((prev) => prev.map((t) => (t.id === taskId ? completedTask : t)));
+          const completedTask = { 
+            ...newTask, 
+            status: "done", 
+            resultData: cached.data,
+            isSaved: isQuizOrFlash,
+            isDocSaved: isDocType,
+          };
+          setTasks((prev) => [completedTask, ...prev.filter((t) => t.id !== taskId)]);
           await saveTaskToDB(completedTask);
           showToast("Đã nạp nội dung thành công từ bộ nhớ đệm!");
           return;
@@ -294,9 +316,33 @@ export const AIHubSection = () => {
         output = await translateFromDoc(activeDoc.content, targetLang);
       }
 
-      const completedTask = { ...newTask, status: "done", resultData: output };
-      setTasks((prev) => prev.map((t) => (t.id === taskId ? completedTask : t)));
+      const completedTask = { 
+        ...newTask, 
+        status: "done", 
+        resultData: output,
+        isSaved: isQuizOrFlash,
+        isDocSaved: isDocType,
+      };
+
+      setTasks((prev) => [completedTask, ...prev.filter((t) => t.id !== taskId)]);
       await saveTaskToDB(completedTask);
+
+      // Nếu là Tóm tắt/Dịch văn bản, đồng bộ luôn vào danh sách Tài liệu
+      if (isDocType && output) {
+        const docTitle = featureId === "summary" ? `[Tóm tắt] ${currentDocName}` : `[Bản dịch] ${currentDocName}`;
+        const newDoc = {
+          id: `doc_${taskId}`,
+          name: docTitle,
+          subject: currentDocName || "Tóm tắt kiến thức",
+          size: `${(output.length ? (output.length / 1024).toFixed(1) : 1)} KB`,
+          content: output,
+          type: "AI_SUMMARY",
+          originTaskId: taskId,
+          date: "Vừa lưu từ AI",
+        };
+        await saveDocumentToDB(newDoc);
+        setAllSavedDocs((prev) => [newDoc, ...prev]);
+      }
 
       if (output) {
         await savePostgresCache(contentHash, featureId, output, activeDoc.name, difficulty);
@@ -308,7 +354,7 @@ export const AIHubSection = () => {
         status: "error",
         errorMessage: err.message || "Lỗi xử lý AI",
       };
-      setTasks((prev) => prev.map((t) => (t.id === taskId ? failedTask : t)));
+      setTasks((prev) => [failedTask, ...prev.filter((t) => t.id !== taskId)]);
       await saveTaskToDB(failedTask);
       showToast(err.message || "Lỗi xử lý AI!", "error");
     }
@@ -469,7 +515,7 @@ export const AIHubSection = () => {
 
   const visibleTasks = tasks.filter((t) => !t.hiddenInHistory);
 
-  // MÀN HÌNH XEM CHI TIẾT TÁC VỤ (HEADER 2 TẦNG CHỐNG RỚT DÒNG CHỮ)
+  // MÀN HÌNH XEM CHI TIẾT TÁC VỤ
   if (activeTask) {
     const isDocOutput = activeTask.featureId === "summary" || activeTask.featureId === "translate";
     const isDocActuallyInDB = isDocOutput && allSavedDocs.some(
@@ -530,7 +576,7 @@ export const AIHubSection = () => {
             <div className="w-[105px] shrink-0 pointer-events-none" />
           </div>
 
-          {/* TẦNG 2: Cấp độ + Các nút chức năng ([Lưu bài], [Làm lại]) */}
+          {/* TẦNG 2: Cấp độ + Các nút chức năng */}
           <div className="px-3.5 pb-2.5 flex items-center justify-between gap-2 border-t border-slate-50 pt-2">
             <div className="flex items-center gap-2 min-w-0 flex-1">
               <span className="text-[11px] font-bold text-slate-500 bg-slate-50 px-2 py-0.5 rounded-md border border-slate-200 truncate">
@@ -666,22 +712,21 @@ export const AIHubSection = () => {
                         }
 
                         return (
-<button
-  key={oIdx}
-  disabled={hasAnswered}
-  onClick={() => {
-    const isThisCorrect = correctLetter === optLetter;
-    setSelectedAnswers((prev) => ({ ...prev, [idx]: optLetter }));
-    // Ghi nhận trực tiếp vào bảng quiz_answer_attempts của user hiện tại
-    if (activeTask?.docName) {
-      recordQuizAttempt(activeTask.docName, isThisCorrect);
-    }
-  }}
-  className={`w-100 text-start rounded-3 p-2.5 small font-bold transition border ${btnStyle}`}
-  style={{ fontSize: "12px" }}
->
-  {opt}
-</button> 
+                          <button
+                            key={oIdx}
+                            disabled={hasAnswered}
+                            onClick={() => {
+                              const isCorrect = correctLetter === optLetter;
+                              setSelectedAnswers((prev) => ({ ...prev, [idx]: optLetter }));
+                              if (activeTask?.docName) {
+                                recordQuizAttempt(activeTask.docName, isCorrect);
+                              }
+                            }}
+                            className={`w-100 text-start rounded-3 p-2.5 small font-bold transition border ${btnStyle}`}
+                            style={{ fontSize: "12px" }}
+                          >
+                            {opt}
+                          </button> 
                         );
                       })}
                     </div>
@@ -890,10 +935,9 @@ export const AIHubSection = () => {
     );
   }
 
-  // ================= GIAO DIỆN CHÍNH AI HUB =================
+  // GIAO DIỆN CHÍNH AI HUB
   return (
     <div className="flex flex-col gap-3.5 pb-24 px-1 w-full max-w-full relative">
-      {/* TOAST NỔI */}
       {toastMessage && (
         <div 
           className="fixed top-24 left-3 right-3 z-50 flex items-center justify-between p-3.5 rounded-2xl shadow-xl border animate-in slide-in-from-top duration-300 backdrop-blur-md"
@@ -1034,7 +1078,7 @@ export const AIHubSection = () => {
         </div>
       </div>
 
-      {/* Lịch sử tác vụ AI */}
+      {/* Lịch sử tác vụ AI (Luôn được giữ nguyên, không bị biến mất khi chuyển trang) */}
       {visibleTasks.length > 0 && (
         <div>
           <div className="d-flex align-items-center justify-content-between mb-2 px-1">
@@ -1233,7 +1277,7 @@ export const AIHubSection = () => {
               {configModal === "summary" && (
                 <div className="p-3 rounded-2xl bg-amber-50 border border-amber-200 text-amber-900 leading-relaxed text-[11.5px]">
                   <i className="bi bi-info-circle-fill text-amber-600 me-1"></i>
-                  Bản tóm tắt sẽ được tạo theo cấu trúc luận điểm chính và tự động có thể lưu vào mục <b>Tài liệu</b> để bạn đọc lại bất cứ lúc nào.
+                  Bản tóm tắt sẽ được tạo theo cấu trúc luận điểm chính và tự động lưu vào mục <b>Tài liệu</b> để bạn đọc lại bất cứ lúc nào.
                 </div>
               )}
 
