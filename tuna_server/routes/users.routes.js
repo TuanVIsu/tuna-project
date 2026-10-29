@@ -23,20 +23,13 @@ router.get('/', async (req, res) => {
         COALESCE(u.is_verified, false) AS "isVerified",
         COALESCE(u.verification_status, 'pending') AS "verificationStatus",
         TO_CHAR(u.created_at, 'DD/MM/YYYY') AS "createdAt",
-        COALESCE(s.current_streak, 0) AS "currentStreak",
-        COALESCE(s.longest_streak, 0) AS "longestStreak"
+        COALESCE(u.current_streak, 0) AS "currentStreak",
+        COALESCE(u.longest_streak, 0) AS "longestStreak"
       FROM users u
-      LEFT JOIN user_streaks s ON (
-        s.user_id = u.zalo_id 
-        OR s.user_id = u.student_code 
-        OR s.user_id = u.id::text 
-        OR (u.email IS NOT NULL AND LOWER(s.user_id) = LOWER(u.email))
-      )
-      WHERE 1=1
+      WHERE u.role = 'student'
     `;
     const params = [];
 
-    // Tìm kiếm mở rộng theo Tên, MSSV, Lớp và Email
     if (search && search.trim()) {
       params.push(`%${search.trim().toLowerCase()}%`);
       query += ` AND (
@@ -47,20 +40,17 @@ router.get('/', async (req, res) => {
       )`;
     }
 
-    // Lọc theo Chuyên ngành
     if (major && major !== 'all' && major !== 'Tất cả ngành') {
       params.push(major);
       query += ` AND u.faculty = $${params.length}`;
     }
 
-    // Lọc theo Khóa tuyển sinh
     if (cohort && cohort !== 'all' && cohort !== 'Tất cả khóa') {
       const cohortDigits = cohort.replace(/\D/g, '');
       params.push(`%${cohortDigits}%`);
       query += ` AND (u.class_name ILIKE $${params.length} OR u.class_name ILIKE '%${cohort}%')`;
     }
 
-    // Lọc theo Năm học quy đổi tín chỉ
     if (year && year !== 'all') {
       const y = Number(year);
       if (y === 1) query += ` AND COALESCE(u.total_credits, 0) <= 35`;
@@ -79,9 +69,7 @@ router.get('/', async (req, res) => {
   }
 });
 
-// 2. LẤY DANH SÁCH CHỜ DUYỆT (Đồng nhất cấu trúc trường với GET /)
-// routes/users.routes.js
-// 2. LẤY DANH SÁCH CHỜ DUYỆT (ĐỒNG BỘ STREAK VÀ THÔNG TIN CHÍNH XÁC NHƯ TAB TẤT CẢ)
+// 2. LẤY DANH SÁCH CHỜ DUYỆT
 router.get('/pending', async (req, res) => {
   try {
     const { rows } = await pool.query(
@@ -99,15 +87,9 @@ router.get('/pending', async (req, res) => {
         COALESCE(u.is_verified, false) AS "isVerified",
         COALESCE(u.verification_status, 'pending') AS "verificationStatus",
         TO_CHAR(u.created_at, 'DD/MM/YYYY HH24:MI') AS "createdAt",
-        COALESCE(s.current_streak, 0) AS "currentStreak",
-        COALESCE(s.longest_streak, 0) AS "longestStreak"
+        COALESCE(u.current_streak, 0) AS "currentStreak",
+        COALESCE(u.longest_streak, 0) AS "longestStreak"
        FROM users u
-       LEFT JOIN user_streaks s ON (
-         s.user_id = u.zalo_id 
-         OR s.user_id = u.student_code 
-         OR s.user_id = u.id::text 
-         OR (u.email IS NOT NULL AND LOWER(s.user_id) = LOWER(u.email))
-       )
        WHERE (u.verification_status = 'pending' OR u.is_verified = FALSE) 
          AND u.role = 'student'
        ORDER BY u.created_at DESC`
@@ -213,53 +195,21 @@ router.patch('/:id/toggle-status', async (req, res) => {
   }
 });
 
-// 6. XÓA VĨNH VIỄN SINH VIÊN (DỌN SẠCH CÁC BẢNG LIÊN QUAN TRÁNH LỖI KHÓA NGOẠI)
+// 6. XÓA VĨNH VIỄN SINH VIÊN (ON DELETE CASCADE TỰ ĐỘNG DỌN SẠCH CÁC BẢNG PHỤ THUỘC)
 router.delete('/:id', async (req, res) => {
   const { id } = req.params;
-  const client = await pool.connect();
-
   try {
-    // 1. Lấy toàn bộ định danh của sinh viên
-    const userRes = await client.query(
-      `SELECT id, student_code, email, zalo_id FROM users WHERE id = $1`,
-      [id]
-    );
-
-    if (userRes.rows.length === 0) {
+    const check = await pool.query(`SELECT id FROM users WHERE id = $1`, [id]);
+    if (check.rows.length === 0) {
       return res.status(404).json({ success: false, message: 'Không tìm thấy sinh viên này!' });
     }
 
-    const u = userRes.rows[0];
-    const identifiers = [
-      String(u.id),
-      u.student_code,
-      u.email,
-      u.zalo_id
-    ].filter(Boolean);
-
-    await client.query('BEGIN');
-
-    // 2. Dọn sạch dữ liệu ở các bảng liên quan
-    await client.query(`DELETE FROM user_streaks WHERE user_id = ANY($1)`, [identifiers]).catch(() => {});
-    await client.query(`DELETE FROM streak_logs WHERE user_id = ANY($1)`, [identifiers]).catch(() => {});
-    await client.query(`DELETE FROM ai_tasks WHERE user_id = ANY($1)`, [identifiers]).catch(() => {});
-    await client.query(`DELETE FROM user_documents WHERE user_id = ANY($1)`, [identifiers]).catch(() => {});
-    await client.query(`DELETE FROM community_messages WHERE user_id = ANY($1)`, [identifiers]).catch(() => {});
-    await client.query(`DELETE FROM quiz_answer_attempts WHERE user_id = ANY($1)`, [identifiers]).catch(() => {});
-    await client.query(`DELETE FROM student_verifications WHERE student_code = ANY($1) OR email = ANY($1)`, [identifiers]).catch(() => {});
-
-    // 3. Xóa bản ghi chính trong bảng users
-    await client.query(`DELETE FROM users WHERE id = $1`, [id]);
-
-    await client.query('COMMIT');
+    await pool.query(`DELETE FROM users WHERE id = $1`, [id]);
 
     res.json({ success: true, message: 'Đã xóa sinh viên và toàn bộ dữ liệu liên quan khỏi hệ thống!' });
   } catch (error) {
-    await client.query('ROLLBACK');
     console.error('Lỗi DELETE /users/:id:', error.message);
     res.status(500).json({ success: false, message: 'Lỗi khi xóa: ' + error.message });
-  } finally {
-    client.release();
   }
 });
 

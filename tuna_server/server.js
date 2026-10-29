@@ -13,7 +13,7 @@ const server = http.createServer(app);
 // Khởi tạo kết nối PostgreSQL pool
 const pool = require('./config/db');
 
-// TỰ ĐỘNG MIGRATION CÁC CỘT QUAN TRỌNG KHI SERVER KHỞI ĐỘNG
+// TỰ ĐỘNG ĐỒNG BỘ CẤU TRÚC KHI KHỞI ĐỘNG (AN TOÀN CHO SCHEMA SUPABASE)
 (async () => {
   try {
     await pool.query(`
@@ -26,33 +26,10 @@ const pool = require('./config/db');
       ADD COLUMN IF NOT EXISTS warning_reason TEXT DEFAULT NULL,
       ADD COLUMN IF NOT EXISTS last_warning_reason TEXT DEFAULT NULL;
     `);
-    
-    await pool.query(`
-      CREATE TABLE IF NOT EXISTS user_documents (
-        id VARCHAR(255) PRIMARY KEY,
-        user_id VARCHAR(255),
-        name VARCHAR(255) NOT NULL,
-        size VARCHAR(50),
-        content TEXT,
-        download_url TEXT,
-        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-      );
-    `);
-    await pool.query(`
-      ALTER TABLE user_documents 
-      ADD COLUMN IF NOT EXISTS user_id VARCHAR(255);
-    `);
 
-    await pool.query(`
-      ALTER TABLE community_messages 
-      ADD COLUMN IF NOT EXISTS reply_to JSONB,
-      ADD COLUMN IF NOT EXISTS is_recalled BOOLEAN DEFAULT FALSE,
-      ADD COLUMN IF NOT EXISTS is_ai BOOLEAN DEFAULT FALSE;
-    `);
-
-    console.log("✅ [PostgreSQL Migration] Đã đồng bộ cấu trúc bảng thành công!");
+    console.log("✅ [PostgreSQL Schema Check] Đồng bộ kết nối cơ sở dữ liệu thành công!");
   } catch (err) {
-    console.warn("⚠️ [PostgreSQL Migration Warning]:", err.message);
+    console.warn("⚠️ [PostgreSQL Schema Warning]:", err.message);
   }
 })();
 
@@ -183,7 +160,6 @@ app.use('/api/schedules', schedulesRouter);
 app.use('/api', schedulesRouter);
 
 // AI & Daily Quiz Routes
-// Mount thêm cả '/api' để tiếp nhận route /api/daily-quiz/generate
 app.use('/api/admin/ai', aiRouter);
 app.use('/api/ai', aiRouter);
 app.use('/api', aiRouter);

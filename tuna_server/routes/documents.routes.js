@@ -3,46 +3,31 @@ const express = require('express');
 const router = express.Router();
 const pool = require('../config/db');
 
-// Tự động kiểm tra và tạo cột user_id nếu database chưa có
-(async () => {
-  try {
-    await pool.query(`
-      CREATE TABLE IF NOT EXISTS user_documents (
-        id VARCHAR(255) PRIMARY KEY,
-        user_id VARCHAR(255),
-        name VARCHAR(255) NOT NULL,
-        size VARCHAR(50),
-        content TEXT,
-        download_url TEXT,
-        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-      );
-    `);
-    await pool.query(`
-      ALTER TABLE user_documents 
-      ADD COLUMN IF NOT EXISTS user_id VARCHAR(255);
-    `);
-  } catch (err) {
-    console.warn("Lỗi tự động kiểm tra bảng user_documents:", err.message);
-  }
-})();
-
-// Trích xuất Email / Định danh động từ Header (x-user-id) hoặc Query/Body
-const extractUserEmail = (req) => {
-  return String(
+// Helper: Phân giải user_id (INTEGER) từ header/token/query
+const resolveUserId = async (req) => {
+  if (req.user?.id) return req.user.id;
+  const rawId = String(
     req.headers['x-user-id'] || 
-    req.user?.email || 
     req.query.userId || 
     req.body?.userId || 
     ''
   ).trim();
+
+  if (!rawId || rawId === 'guest_user' || rawId === 'anonymous') return null;
+  if (/^\d+$/.test(rawId)) return parseInt(rawId, 10);
+
+  const uRes = await pool.query(
+    `SELECT id FROM users WHERE LOWER(email) = LOWER($1) OR student_code = $1 OR zalo_id = $1 LIMIT 1`,
+    [rawId]
+  ).catch(() => ({ rows: [] }));
+
+  return uRes.rows[0]?.id || null;
 };
 
-// 1. LẤY DANH SÁCH TÀI LIỆU CỦA ĐÚNG TÀI KHOẢN ĐĂNG NHẬP
+// 1. LẤY DANH SÁCH TÀI LIỆU
 router.get('/', async (req, res) => {
-  const userEmail = extractUserEmail(req);
-
-  // Nếu chưa đăng nhập hoặc là guest_user thì không trả về tài liệu riêng của người khác
-  if (!userEmail || userEmail === 'guest_user' || userEmail === 'anonymous') {
+  const userId = await resolveUserId(req);
+  if (!userId) {
     return res.json({ success: true, data: [] });
   }
 
@@ -51,9 +36,9 @@ router.get('/', async (req, res) => {
       `SELECT id, name, size, content, download_url AS "downloadUrl", 
               TO_CHAR(created_at, 'DD/MM/YYYY HH24:MI') as date 
        FROM user_documents 
-       WHERE LOWER(user_id) = LOWER($1)
+       WHERE user_id = $1
        ORDER BY created_at DESC`,
-      [userEmail]
+      [userId]
     );
 
     res.json({ success: true, data: rows });
@@ -63,9 +48,9 @@ router.get('/', async (req, res) => {
   }
 });
 
-// 2. LƯU TÀI LIỆU VÀO CSDL GẮN CHẶT VỚI EMAIL CỦA TÀI KHOẢN
+// 2. LƯU TÀI LIỆU VÀO CSDL (user_id INTEGER)
 router.post('/', async (req, res) => {
-  const userEmail = extractUserEmail(req);
+  const userId = await resolveUserId(req);
   const { id, name, size, content, downloadUrl } = req.body;
 
   try {
@@ -73,7 +58,7 @@ router.post('/', async (req, res) => {
       return res.status(400).json({ success: false, error: 'Thiếu dữ liệu bắt buộc (id, name, content)' });
     }
 
-    if (!userEmail || userEmail === 'guest_user') {
+    if (!userId) {
       return res.status(401).json({ success: false, error: 'Vui lòng đăng nhập trước khi tải tài liệu!' });
     }
 
@@ -89,7 +74,7 @@ router.post('/', async (req, res) => {
           content = EXCLUDED.content,
           size = EXCLUDED.size,
           download_url = EXCLUDED.download_url`,
-      [String(id), userEmail.toLowerCase(), cleanName, String(size || ''), cleanContent, downloadUrl || '']
+      [String(id), userId, cleanName, String(size || ''), cleanContent, downloadUrl || '']
     );
 
     res.json({ success: true, message: 'Đã lưu tài liệu thành công!' });
@@ -99,13 +84,17 @@ router.post('/', async (req, res) => {
   }
 });
 
-// 3. XÓA TÀI LIỆU (CHỈ CHÍNH CHỦ MỚI CÓ QUYỀN XÓA)
+// 3. XÓA TÀI LIỆU
 router.delete('/:id', async (req, res) => {
-  const userEmail = extractUserEmail(req);
+  const userId = await resolveUserId(req);
+  if (!userId) {
+    return res.status(401).json({ success: false, error: 'Chưa đăng nhập' });
+  }
+
   try {
     await pool.query(
-      `DELETE FROM user_documents WHERE id = $1 AND LOWER(user_id) = LOWER($2)`,
-      [req.params.id, userEmail]
+      `DELETE FROM user_documents WHERE id = $1 AND user_id = $2`,
+      [req.params.id, userId]
     );
     res.json({ success: true, message: 'Đã xóa tài liệu!' });
   } catch (error) {

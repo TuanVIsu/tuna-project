@@ -3,7 +3,7 @@ const express = require('express');
 const router = express.Router();
 const pool = require('../config/db');
 
-// 1. LIÊN KẾT & CẬP NHẬT HỒ SƠ SINH VIÊN (Tránh lỗi trùng lặp zalo_id / student_code)
+// 1. LIÊN KẾT & CẬP NHẬT HỒ SƠ SINH VIÊN
 router.post('/link', async (req, res) => {
   const { zaloId, name, studentCode, className, totalCredits, faculty } = req.body;
 
@@ -17,15 +17,13 @@ router.post('/link', async (req, res) => {
   const cleanFaculty = faculty?.trim() || 'Hệ Thống Thông Tin';
 
   try {
-    // Tìm kiếm xem tài khoản đã tồn tại theo student_code hoặc zalo_id chưa
     const existingCheck = await pool.query(
-      `SELECT id, zalo_id, student_code FROM users 
+      `SELECT id FROM users 
        WHERE student_code = $1 OR zalo_id = $2 LIMIT 1`,
       [cleanStudentCode, cleanZaloId]
     );
 
     let updateRes;
-// Trong routes/student.routes.js -> router.post('/link')
     if (existingCheck.rows.length > 0) {
       const existingId = existingCheck.rows[0].id;
       updateRes = await pool.query(
@@ -60,7 +58,7 @@ router.post('/link', async (req, res) => {
   }
 });
 
-// 2. LẤY HỒ SƠ VÀ THỐNG KÊ (STREAK, XP, RANK)
+// 2. LẤY HỒ SƠ VÀ THỐNG KÊ (STREAK, XP, RANK TỪ BẢNG USERS)
 router.get('/profile/:userId', async (req, res) => {
   try {
     const { userId } = req.params;
@@ -70,9 +68,10 @@ router.get('/profile/:userId', async (req, res) => {
 
     const cleanId = String(userId).trim();
 
-    // 1. Lấy thông tin tài khoản (hỗ trợ qua student_code, zalo_id, id hoặc email)
     const userRes = await pool.query(
-      `SELECT id, name, email, student_code, class_name, faculty, role, is_verified, verification_status 
+      `SELECT id, name, email, student_code, class_name, faculty, role, is_verified, verification_status,
+              COALESCE(current_streak, 0) AS current_streak,
+              COALESCE(xp_points, 0) AS xp_points
        FROM users 
        WHERE student_code = $1 OR zalo_id = $1 OR id::TEXT = $1 OR LOWER(COALESCE(email, '')) = LOWER($1) 
        LIMIT 1`,
@@ -80,21 +79,13 @@ router.get('/profile/:userId', async (req, res) => {
     );
 
     const user = userRes.rows[0] || null;
+    const streak = user?.current_streak || 0;
+    const xp = user?.xp_points || 0;
 
-    // 2. Lấy số ngày Streak và điểm XP tích lũy
-    const targetUserId = user?.email || user?.student_code || cleanId;
-    const streakRes = await pool.query(
-      `SELECT current_streak, xp_points FROM user_streaks WHERE user_id = $1 LIMIT 1`,
-      [targetUserId]
-    );
-    const streak = streakRes.rows[0]?.current_streak || 0;
-    const xp = streakRes.rows[0]?.xp_points || 0;
-
-    // 3. Tính xếp hạng toàn hệ thống
     const rankRes = await pool.query(
       `SELECT COUNT(*) + 1 AS rank 
-       FROM user_streaks 
-       WHERE xp_points > $1 OR (xp_points = $1 AND current_streak > $2)`,
+       FROM users 
+       WHERE role = 'student' AND (xp_points > $1 OR (xp_points = $1 AND current_streak > $2))`,
       [xp, streak]
     );
     const rank = parseInt(rankRes.rows[0]?.rank || 1, 10);
@@ -124,26 +115,28 @@ router.get('/notifications', async (req, res) => {
       return res.status(400).json({ success: false, message: 'Thiếu userId hợp lệ' });
     }
 
+    const cleanId = String(userId).trim();
     const notifications = [];
     const todayStr = new Date().toISOString().slice(0, 10);
 
-    // Kiểm tra Streak ngày hôm nay
-    const streakRes = await pool.query(
+    const userRes = await pool.query(
       `SELECT current_streak, xp_points, last_active_date 
-       FROM user_streaks WHERE user_id = $1 LIMIT 1`,
-      [userId]
+       FROM users 
+       WHERE student_code = $1 OR zalo_id = $1 OR id::TEXT = $1 OR LOWER(COALESCE(email, '')) = LOWER($1)
+       LIMIT 1`,
+      [cleanId]
     ).catch(() => ({ rows: [] }));
 
-    const streakData = streakRes.rows[0];
-    const isDoneStreak = streakData?.last_active_date &&
-      new Date(streakData.last_active_date).toISOString().slice(0, 10) === todayStr;
+    const userData = userRes.rows[0];
+    const isDoneStreak = userData?.last_active_date &&
+      new Date(userData.last_active_date).toISOString().slice(0, 10) === todayStr;
 
     if (!isDoneStreak) {
       notifications.push({
         id: `noti_streak_alert_${todayStr}`,
         type: 'streak',
         title: 'Chưa giữ chuỗi Streak hôm nay! 🔥',
-        desc: `Chuỗi hiện tại là ${streakData?.current_streak || 0} ngày. Hoàn thành 1 bài trắc nghiệm để nhận +20 XP!`,
+        desc: `Chuỗi hiện tại là ${userData?.current_streak || 0} ngày. Hoàn thành 1 bài trắc nghiệm để nhận +20 XP!`,
         time: 'Hôm nay',
         isRead: false,
         targetTab: 'tasks',
@@ -154,7 +147,7 @@ router.get('/notifications', async (req, res) => {
         id: `noti_streak_done_${todayStr}`,
         type: 'streak',
         title: 'Đã hoàn thành mục tiêu ngày 🚀',
-        desc: `Bạn đã giữ vững chuỗi ${streakData.current_streak} ngày liên tiếp (+20 XP tích lũy).`,
+        desc: `Bạn đã giữ vững chuỗi ${userData.current_streak} ngày liên tiếp (+20 XP tích lũy).`,
         time: 'Hôm nay',
         isRead: true,
         targetTab: 'streak',

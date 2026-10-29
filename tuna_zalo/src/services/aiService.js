@@ -6,7 +6,10 @@ const API_BASE = "https://tuna-project.onrender.com/api";
 // 1. HELPER ĐỊNH DANH NGƯỜI DÙNG ĐỘNG THEO EMAIL XÁC THỰC OTP
 export const getCurrentUserId = () => {
   try {
-    const rawUser = localStorage.getItem("user") || localStorage.getItem("user_info") || localStorage.getItem("tuna_current_user");
+    const rawUser =
+      localStorage.getItem("user") ||
+      localStorage.getItem("user_info") ||
+      localStorage.getItem("tuna_current_user");
     if (rawUser) {
       const u = JSON.parse(rawUser);
       const identity = u.email || u.user_email || u.student_code || u.zalo_id || u.id;
@@ -15,7 +18,10 @@ export const getCurrentUserId = () => {
       }
     }
 
-    const verifiedEmail = localStorage.getItem("user_email") || localStorage.getItem("auth_email") || localStorage.getItem("tuna_user_id");
+    const verifiedEmail =
+      localStorage.getItem("user_email") ||
+      localStorage.getItem("auth_email") ||
+      localStorage.getItem("tuna_user_id");
     if (verifiedEmail && verifiedEmail !== "undefined" && verifiedEmail !== "null") {
       return String(verifiedEmail).trim();
     }
@@ -26,7 +32,10 @@ export const getCurrentUserId = () => {
 
 export const getAuthHeaders = () => {
   const userId = getCurrentUserId();
-  const token = localStorage.getItem("token") || localStorage.getItem("user_token") || localStorage.getItem("admin_token");
+  const token =
+    localStorage.getItem("token") ||
+    localStorage.getItem("user_token") ||
+    localStorage.getItem("admin_token");
 
   const headers = {
     "Content-Type": "application/json",
@@ -42,7 +51,7 @@ export const getAuthHeaders = () => {
 
 const getCommonHeaders = () => getAuthHeaders();
 
-// Khóa cache LocalStorage độc lập theo từng Email người dùng
+// Khóa cache LocalStorage độc lập theo từng Email / định danh người dùng
 const getDocCacheKey = () => {
   const userId = getCurrentUserId();
   return `tuna_cached_docs_${userId}`;
@@ -68,9 +77,9 @@ const fetchWithTimeout = async (url, options = {}, timeoutMs = 60000) => {
   } catch (err) {
     clearTimeout(id);
     if (err.name === "AbortError") {
-      throw new Error("Máy chủ Render phản hồi quá lâu (hơn 60s). Vui lòng thử lại!");
+      throw new Error("Máy chủ phản hồi quá lâu (hơn 60s). Vui lòng thử lại!");
     }
-    throw new Error("Không thể kết nối đến máy chủ. Kiểm tra mạng hoặc chờ Render khởi động!");
+    throw new Error("Không thể kết nối đến máy chủ. Kiểm tra mạng hoặc chờ Backend khởi động!");
   }
 };
 
@@ -94,9 +103,13 @@ export const computeContentHash = async (content) => {
 export const fetchDocumentsFromDB = async () => {
   const cacheKey = getDocCacheKey();
   try {
-    const res = await fetchWithTimeout(`${API_BASE}/documents`, {
-      headers: getCommonHeaders(),
-    }, 10000);
+    const res = await fetchWithTimeout(
+      `${API_BASE}/documents`,
+      {
+        headers: getCommonHeaders(),
+      },
+      10000
+    );
     if (res.ok) {
       const json = await parseJsonResponse(res);
       if (json.success && Array.isArray(json.data)) {
@@ -121,11 +134,15 @@ export const saveDocumentToDB = async (doc) => {
   } catch (e) {}
 
   try {
-    await fetchWithTimeout(`${API_BASE}/documents`, {
-      method: "POST",
-      headers: getCommonHeaders(),
-      body: JSON.stringify(doc),
-    }, 15000);
+    await fetchWithTimeout(
+      `${API_BASE}/documents`,
+      {
+        method: "POST",
+        headers: getCommonHeaders(),
+        body: JSON.stringify(doc),
+      },
+      15000
+    );
   } catch (e) {}
 };
 
@@ -140,17 +157,18 @@ export const deleteDocumentFromDB = async (id) => {
   } catch (e) {}
 
   try {
-    await fetchWithTimeout(`${API_BASE}/documents/${id}`, { 
-      method: "DELETE",
-      headers: getCommonHeaders(),
-    }, 15000);
+    await fetchWithTimeout(
+      `${API_BASE}/documents/${id}`,
+      {
+        method: "DELETE",
+        headers: getCommonHeaders(),
+      },
+      15000
+    );
   } catch (e) {}
 };
 
-// ==================== QUẢN LÝ LỊCH SỬ TÁC VỤ (ĐỘC LẬP THEO TÀI KHOẢN) ====================
-// Thay thế đoạn tương ứng trong src/services/aiService.js
-
-// ==================== QUẢN LÝ LỊCH SỬ TÁC VỤ (KHÔNG BAO GIỜ BỊ MẤT) ====================
+// ==================== QUẢN LÝ LỊCH SỬ TÁC VỤ (MERGE KHÔNG MẤT DỮ LIỆU) ====================
 export const fetchTasksFromDB = async () => {
   const cacheKey = getTaskCacheKey();
   let localList = [];
@@ -160,19 +178,27 @@ export const fetchTasksFromDB = async () => {
   } catch (e) {}
 
   try {
-    const res = await fetchWithTimeout(`${API_BASE}/tasks`, {
-      headers: getCommonHeaders(),
-    }, 6000);
+    const res = await fetchWithTimeout(
+      `${API_BASE}/tasks`,
+      {
+        headers: getCommonHeaders(),
+      },
+      6000
+    );
 
     if (res.ok) {
       const json = await parseJsonResponse(res);
       if (json.success && Array.isArray(json.data)) {
-        // HỢP NHẤT (MERGE) THAY VÌ GHI ĐÈ: Không để server rỗng xóa mất bài tập cục bộ
+        // HỢP NHẤT (MERGE) THAY VÌ GHI ĐÈ
         const taskMap = new Map();
-        localList.forEach((t) => { if (t && t.id) taskMap.set(String(t.id), t); });
-        json.data.forEach((t) => { if (t && t.id) taskMap.set(String(t.id), t); });
+        localList.forEach((t) => {
+          if (t && t.id) taskMap.set(String(t.id), t);
+        });
+        json.data.forEach((t) => {
+          if (t && t.id) taskMap.set(String(t.id), t);
+        });
         const merged = Array.from(taskMap.values());
-        
+
         localStorage.setItem(cacheKey, JSON.stringify(merged));
         localStorage.setItem("tuna_cached_tasks_master", JSON.stringify(merged));
         return merged;
@@ -182,7 +208,6 @@ export const fetchTasksFromDB = async () => {
     console.warn("Dùng cache tasks:", e.message);
   }
 
-  // Luôn trả về danh sách đã lưu cục bộ nếu server chưa có
   return localList;
 };
 
@@ -193,19 +218,22 @@ export const saveTaskToDB = async (task) => {
     let localList = [];
     const local = localStorage.getItem(cacheKey) || localStorage.getItem("tuna_cached_tasks_master");
     if (local) localList = JSON.parse(local);
-    
+
     const updated = [task, ...localList.filter((t) => String(t.id) !== String(task.id))];
     localStorage.setItem(cacheKey, JSON.stringify(updated));
-    // Lưu vào Master Backup để mọi tab đều đọc được đồng bộ
     localStorage.setItem("tuna_cached_tasks_master", JSON.stringify(updated));
   } catch (e) {}
 
   try {
-    await fetchWithTimeout(`${API_BASE}/tasks`, {
-      method: "POST",
-      headers: getCommonHeaders(),
-      body: JSON.stringify(task),
-    }, 8000);
+    await fetchWithTimeout(
+      `${API_BASE}/tasks`,
+      {
+        method: "POST",
+        headers: getCommonHeaders(),
+        body: JSON.stringify(task),
+      },
+      8000
+    );
   } catch (e) {}
 };
 
@@ -224,10 +252,14 @@ export const deleteTaskFromDB = async (id) => {
   } catch (e) {}
 
   try {
-    await fetchWithTimeout(`${API_BASE}/tasks/${id}`, { 
-      method: "DELETE",
-      headers: getCommonHeaders(),
-    }, 8000);
+    await fetchWithTimeout(
+      `${API_BASE}/tasks/${id}`,
+      {
+        method: "DELETE",
+        headers: getCommonHeaders(),
+      },
+      8000
+    );
   } catch (e) {}
 };
 
@@ -235,69 +267,47 @@ export const clearAllTasksFromDB = async () => {
   const cacheKey = getTaskCacheKey();
   try {
     localStorage.removeItem(cacheKey);
-    await fetchWithTimeout(`${API_BASE}/tasks`, { 
-      method: "DELETE",
-      headers: getCommonHeaders(),
-    }, 15000);
+    await fetchWithTimeout(
+      `${API_BASE}/tasks`,
+      {
+        method: "DELETE",
+        headers: getCommonHeaders(),
+      },
+      15000
+    );
   } catch (e) {}
 };
 
 // ==================== KHO CACHE POSTGRES ====================
-export const checkPostgresCache = async (hash, feature, requiredCount = 5, difficulty = "Căn bản") => {
-  try {
-    const url = `${API_BASE}/ai/cache?hash=${hash}&feature=${feature}_${difficulty}&limit=${requiredCount}`;
-    const res = await fetchWithTimeout(url, {
-      headers: getCommonHeaders(),
-    }, 8000);
-    if (!res.ok) return null;
-    const result = await parseJsonResponse(res);
-    
-    if (result.success && result.data) {
-      if (typeof result.data === "string" && result.data.trim().length > 0) {
-        return { data: result.data, total: 1 };
-      }
-
-      if (Array.isArray(result.data) && result.data.length >= Number(requiredCount)) {
-        return { data: result.data.slice(0, Number(requiredCount)), total: result.total_stored };
-      }
-    }
-  } catch (e) {
-    console.warn("Lỗi kiểm tra cache:", e.message);
-  }
-  return null;
-};
-
-export const savePostgresCache = async (hash, feature, payload, title, difficulty = "Căn bản") => {
-  try {
-    await fetchWithTimeout(`${API_BASE}/ai/cache`, {
-      method: "POST",
-      headers: getCommonHeaders(),
-      body: JSON.stringify({ hash, feature: `${feature}_${difficulty}`, payload, title }),
-    }, 15000);
-  } catch (e) {}
-};
+// Bộ nhớ đệm 24h đã được xử lý tự động trong Backend tại route /api/ai/generate và /api/daily-quiz/generate
+export const checkPostgresCache = async () => null;
+export const savePostgresCache = async () => {};
 
 // ==================== GỌI GEMINI QUA BACKEND ====================
 const callGemini = async (prompt, isJson = false, featureType = "ai_feature") => {
   try {
     const userId = getCurrentUserId();
 
-    const response = await fetchWithTimeout(`${API_BASE}/ai/generate`, {
-      method: "POST",
-      headers: getCommonHeaders(),
-      body: JSON.stringify({ 
-        prompt, 
-        isJson, 
-        userId, 
-        featureType 
-      }),
-    }, 60000);
+    const response = await fetchWithTimeout(
+      `${API_BASE}/ai/generate`,
+      {
+        method: "POST",
+        headers: getCommonHeaders(),
+        body: JSON.stringify({
+          prompt,
+          isJson,
+          userId,
+          featureType,
+        }),
+      },
+      60000
+    );
 
     const data = await parseJsonResponse(response);
     if (!response.ok || !data.success) {
       throw new Error(data.error || "Lỗi máy chủ AI");
     }
-    
+
     return data.text;
   } catch (error) {
     throw new Error(error.message);

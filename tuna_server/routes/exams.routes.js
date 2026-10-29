@@ -45,7 +45,7 @@ router.get('/admin/list', authenticateToken, async (req, res) => {
   }
 });
 
-// 2. Lấy chi tiết đề thi và câu hỏi (hỗ trợ cả trắc nghiệm lẫn lật thẻ)
+// 2. Lấy chi tiết đề thi và câu hỏi từ bảng questions & exam_test_items
 router.get('/admin/:id', authenticateToken, async (req, res) => {
   try {
     const { id } = req.params;
@@ -55,12 +55,14 @@ router.get('/admin/:id', authenticateToken, async (req, res) => {
     }
 
     const questionsRes = await pool.query(
-      `SELECT id, question_text AS "questionText", option_a AS "optionA",
-              option_b AS "optionB", option_c AS "optionC", option_d AS "optionD",
-              correct_option AS "correctOption", explanation,
-              front_text AS "frontText", back_text AS "backText"
-       FROM exam_questions
-       WHERE exam_id = $1 ORDER BY id ASC`,
+      `SELECT q.id, q.question AS "questionText", q.options,
+              q.answer AS "correctOption", q.explain AS explanation,
+              q.flashcard_data->>'front' AS "frontText", 
+              q.flashcard_data->>'back' AS "backText"
+       FROM questions q
+       JOIN exam_test_items eti ON q.id = eti.question_id
+       WHERE eti.exam_id = $1 
+       ORDER BY eti.order_index ASC`,
       [id]
     );
 
@@ -76,7 +78,7 @@ router.get('/admin/:id', authenticateToken, async (req, res) => {
   }
 });
 
-// 3. Tạo đề thi mới (Trắc nghiệm hoặc Lật thẻ)
+// 3. Tạo đề thi mới (Lưu câu hỏi vào questions và liên kết exam_test_items)
 router.post('/admin/create', authenticateToken, async (req, res) => {
   const client = await pool.connect();
   try {
@@ -87,10 +89,10 @@ router.post('/admin/create', authenticateToken, async (req, res) => {
       facultyMajor,
       academicYear,
       semester,
-      examType, // 'multiple_choice' hoặc 'flashcard'
+      examType,
       durationMinutes,
       passScore,
-      items, // danh sách câu hỏi / thẻ
+      items,
     } = req.body;
 
     if (!title || !subjectName || !Array.isArray(items) || items.length === 0) {
@@ -124,39 +126,53 @@ router.post('/admin/create', authenticateToken, async (req, res) => {
 
     const examId = examRes.rows[0].id;
 
-    for (const item of items) {
+    for (let i = 0; i < items.length; i++) {
+      const item = items[i];
+      let questionId;
+
       if (examType === 'flashcard') {
-        // Lưu dữ liệu Flashcard (Mặt trước - Mặt sau)
-        await client.query(
-          `INSERT INTO exam_questions 
-           (exam_id, question_text, front_text, back_text, explanation)
-           VALUES ($1, $2, $3, $4, $5)`,
+        const qRes = await client.query(
+          `INSERT INTO questions (subject, subject_code, question, options, answer, explain, flashcard_data, is_verified)
+           VALUES ($1, $2, $3, '[]'::jsonb, '', $4, $5, TRUE)
+           RETURNING id`,
           [
-            examId,
+            subjectName.trim(),
+            subjectCode?.trim() || null,
             item.frontText.trim(),
-            item.frontText.trim(),
-            item.backText.trim(),
             item.explanation?.trim() || null,
+            JSON.stringify({ front: item.frontText.trim(), back: item.backText.trim() })
           ]
         );
+        questionId = qRes.rows[0].id;
       } else {
-        // Lưu dữ liệu Trắc nghiệm ABCD
-        await client.query(
-          `INSERT INTO exam_questions 
-           (exam_id, question_text, option_a, option_b, option_c, option_d, correct_option, explanation)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+        const optionsJson = JSON.stringify([
+          { key: 'A', text: item.optionA?.trim() || '' },
+          { key: 'B', text: item.optionB?.trim() || '' },
+          { key: 'C', text: item.optionC?.trim() || '' },
+          { key: 'D', text: item.optionD?.trim() || '' },
+        ]);
+
+        const qRes = await client.query(
+          `INSERT INTO questions (subject, subject_code, question, options, answer, explain, is_verified)
+           VALUES ($1, $2, $3, $4, $5, $6, TRUE)
+           RETURNING id`,
           [
-            examId,
+            subjectName.trim(),
+            subjectCode?.trim() || null,
             item.questionText.trim(),
-            item.optionA?.trim() || '',
-            item.optionB?.trim() || '',
-            item.optionC?.trim() || '',
-            item.optionD?.trim() || '',
+            optionsJson,
             item.correctOption || 'A',
             item.explanation?.trim() || null,
           ]
         );
+        questionId = qRes.rows[0].id;
       }
+
+      await client.query(
+        `INSERT INTO exam_test_items (exam_id, question_id, order_index)
+         VALUES ($1, $2, $3)`,
+        [examId, questionId, i + 1]
+      );
     }
 
     await client.query('COMMIT');
@@ -193,40 +209,37 @@ router.delete('/admin/:id', authenticateToken, async (req, res) => {
     res.status(500).json({ success: false, message: err.message });
   }
 });
-// Thêm vào routes/exams.routes.js
 
-// 6. Ghi nhận nỗ lực làm bài tập / trắc nghiệm (Đóng kín vòng lặp thuật toán SWRR)
+// 6. Ghi nhận nỗ lực làm bài tập / trắc nghiệm (user_id INTEGER)
 router.post('/attempt', async (req, res) => {
   try {
-    const userEmail = String(
-      req.headers['x-user-id'] || 
-      req.user?.email || 
-      req.body?.userId || 
-      'guest_user'
-    ).trim();
+    let rawUserId = req.user?.id || req.headers['x-user-id'] || req.body?.userId;
+    let userId = null;
 
-    const { subject, isCorrect, examId = null } = req.body;
+    if (rawUserId && /^\d+$/.test(String(rawUserId))) {
+      userId = parseInt(rawUserId, 10);
+    } else if (rawUserId) {
+      const uRes = await pool.query(
+        `SELECT id FROM users WHERE LOWER(email) = LOWER($1) OR student_code = $1 OR zalo_id = $1 LIMIT 1`,
+        [String(rawUserId)]
+      ).catch(() => ({ rows: [] }));
+      userId = uRes.rows[0]?.id || null;
+    }
+
+    if (!userId) {
+      return res.status(401).json({ success: false, message: 'Cần đăng nhập để ghi nhận bài tập' });
+    }
+
+    const { subject, isCorrect, questionId = null } = req.body;
 
     if (!subject) {
       return res.status(400).json({ success: false, message: 'Thiếu thông tin môn học' });
     }
 
-    // Đảm bảo bảng tồn tại trước khi chèn
-    await pool.query(`
-      CREATE TABLE IF NOT EXISTS quiz_answer_attempts (
-        id SERIAL PRIMARY KEY,
-        user_id VARCHAR(255) NOT NULL,
-        subject VARCHAR(255) NOT NULL,
-        is_correct BOOLEAN NOT NULL DEFAULT FALSE,
-        exam_id INT,
-        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-      )
-    `).catch(() => {});
-
     await pool.query(
-      `INSERT INTO quiz_answer_attempts (user_id, subject, is_correct, exam_id)
+      `INSERT INTO quiz_answer_attempts (user_id, question_id, subject, is_correct)
        VALUES ($1, $2, $3, $4)`,
-      [userEmail, String(subject).trim(), Boolean(isCorrect), examId ? Number(examId) : null]
+      [userId, questionId ? Number(questionId) : null, String(subject).trim(), Boolean(isCorrect)]
     );
 
     res.json({ success: true, message: 'Đã ghi nhận kết quả bài làm thành công!' });
@@ -235,6 +248,5 @@ router.post('/attempt', async (req, res) => {
     res.json({ success: false, error: err.message });
   }
 });
-
 
 module.exports = router;

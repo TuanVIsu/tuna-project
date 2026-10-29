@@ -25,8 +25,8 @@ router.get('/stats', async (req, res) => {
       pool.query(`SELECT COUNT(*) AS total FROM users WHERE verification_status = 'pending'`).catch(() => ({ rows: [{ total: 0 }] })),
       // 3. Yêu cầu cấp quyền staff chờ duyệt
       pool.query(`SELECT COUNT(*) AS total FROM admin_access_requests WHERE status = 'pending'`).catch(() => ({ rows: [{ total: 0 }] })),
-      // 4. Lịch học & thi
-      pool.query(`SELECT COUNT(*) AS total FROM academic_schedules`).catch(() => ({ rows: [{ total: 0 }] })),
+      // 4. Lịch học & thi (Truy vấn từ bảng schedules đã tối ưu)
+      pool.query(`SELECT COUNT(*) AS total FROM schedules WHERE schedule_scope = 'academic'`).catch(() => ({ rows: [{ total: 0 }] })),
       // 5. Tài liệu
       pool.query(`SELECT COUNT(*) AS total FROM admin_library_resources WHERE resource_type = 'doc'`).catch(() => ({ rows: [{ total: 0 }] })),
       // 6. Video bài giảng
@@ -59,21 +59,17 @@ router.get('/stats', async (req, res) => {
         LIMIT 6
       `).catch(() => ({ rows: [] })),
 
-      // 11. Bảng vàng Streak từ bảng user_streaks JOIN users (theo Email / Mã sinh viên)
+      // 11. Bảng vàng Streak từ bảng users đã chuẩn hóa
       pool.query(`
         SELECT 
-          s.user_id, 
-          s.current_streak, 
-          s.longest_streak, 
-          COALESCE(u.name, SPLIT_PART(s.user_id, '@', 1)) AS student_name, 
-          COALESCE(u.class_name, 'Khoa CNTT') AS class_name
-        FROM user_streaks s
-        LEFT JOIN users u ON (
-          LOWER(u.email) = LOWER(s.user_id) 
-          OR u.student_code = s.user_id 
-          OR u.zalo_id = s.user_id
-        )
-        ORDER BY s.current_streak DESC, s.longest_streak DESC 
+          id AS user_id, 
+          current_streak, 
+          longest_streak, 
+          name AS student_name, 
+          COALESCE(class_name, 'Khoa CNTT') AS class_name
+        FROM users
+        WHERE role = 'student' AND current_streak > 0
+        ORDER BY current_streak DESC, longest_streak DESC 
         LIMIT 4
       `).catch(() => ({ rows: [] })),
 
@@ -131,7 +127,7 @@ router.post('/toggle-ai', async (req, res) => {
     await pool.query(`
       INSERT INTO admin_audit_logs (actor_id, actor_name, actor_role, action, target, details)
       VALUES ($1, $2, $3, $4, $5, $6)
-    `, ['admin_root', 'Quản Trị Viên', 'super_admin', 'GATEWAY_AI_TOGGLE', 'Gemini AI', `Chuyển trạng thái sang ${enabled ? 'Hoạt động' : 'Tạm dừng'}`]).catch(() => {});
+    `, [null, 'Quản Trị Viên', 'super_admin', 'GATEWAY_AI_TOGGLE', 'Gemini AI', `Chuyển trạng thái sang ${enabled ? 'Hoạt động' : 'Tạm dừng'}`]).catch(() => {});
 
     res.json({ success: true, enabled });
   } catch (error) {

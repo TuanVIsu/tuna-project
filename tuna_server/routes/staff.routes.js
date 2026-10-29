@@ -11,11 +11,16 @@ router.use(authenticateToken);
 router.get('/', async (req, res) => {
   try {
     const { rows } = await pool.query(
-      `SELECT id, username, email, full_name AS "fullName", role, 
+      `SELECT id, 
+              COALESCE(student_code, email) AS username, 
+              email, 
+              name AS "fullName", 
+              role, 
               assigned_subject AS "assignedSubject",
               COALESCE(is_active, true) AS "isActive",
               TO_CHAR(created_at, 'DD/MM/YYYY HH24:MI') AS "createdAt"
-       FROM admin_users 
+       FROM users 
+       WHERE role IN ('super_admin', 'instructor', 'moderator')
        ORDER BY id ASC`
     );
     res.json({ success: true, data: rows });
@@ -38,12 +43,6 @@ router.post('/', async (req, res) => {
       .replace(/[^a-zA-Z0-9_]/g, '')
       .toLowerCase();
 
-    // Kiểm tra trùng username, nếu có thêm số ngẫu nhiên
-    const checkUser = await pool.query(`SELECT id FROM admin_users WHERE username = $1`, [baseUsername]);
-    const finalUsername = checkUser.rows.length > 0 
-      ? `${baseUsername}_${Math.floor(100 + Math.random() * 900)}` 
-      : baseUsername;
-
     const rawPassword = password?.trim() || 'Admin@123';
     const hashedPassword = await bcrypt.hash(rawPassword, 10);
     const permissions = role === 'super_admin' 
@@ -53,10 +52,10 @@ router.post('/', async (req, res) => {
       : ['community'];
 
     const insertRes = await pool.query(
-      `INSERT INTO admin_users (username, email, full_name, role, password, assigned_subject, is_active, custom_permissions)
+      `INSERT INTO users (student_code, email, name, role, password_hash, assigned_subject, is_active, custom_permissions)
        VALUES ($1, $2, $3, $4, $5, $6, true, $7)
-       RETURNING id, username, email, full_name AS "fullName", role, is_active AS "isActive"`,
-      [finalUsername, cleanEmail, fullName.trim(), role || 'instructor', hashedPassword, assignedSubject || null, permissions]
+       RETURNING id, student_code AS username, email, name AS "fullName", role, is_active AS "isActive"`,
+      [baseUsername, cleanEmail, fullName.trim(), role || 'instructor', hashedPassword, assignedSubject || null, permissions]
     );
 
     res.json({ success: true, message: 'Tạo tài khoản quản trị thành công!', data: insertRes.rows[0] });
@@ -66,22 +65,21 @@ router.post('/', async (req, res) => {
   }
 });
 
-// 3. Cập nhật thông tin tài khoản Quản trị viên (Khắc phục lỗi trùng email & lỗi column updated_at)
+// 3. Cập nhật thông tin tài khoản Quản trị viên
 router.put('/:id', async (req, res) => {
   const { id } = req.params;
   const { fullName, role, email, password } = req.body;
 
   try {
-    const check = await pool.query(`SELECT id, username, role, password FROM admin_users WHERE id = $1`, [id]);
+    const check = await pool.query(`SELECT id, password_hash FROM users WHERE id = $1 AND role IN ('super_admin', 'instructor', 'moderator')`, [id]);
     if (check.rows.length === 0) {
       return res.status(404).json({ success: false, message: 'Không tìm thấy tài khoản quản trị!' });
     }
 
     const cleanEmail = email.trim().toLowerCase();
 
-    // Kiểm tra email có bị trùng với tài khoản người khác hay không (bỏ qua chính ID này)
     const checkEmail = await pool.query(
-      `SELECT id FROM admin_users WHERE LOWER(email) = $1 AND id != $2`,
+      `SELECT id FROM users WHERE LOWER(email) = $1 AND id != $2`,
       [cleanEmail, id]
     );
     if (checkEmail.rows.length > 0) {
@@ -94,17 +92,16 @@ router.put('/:id', async (req, res) => {
       ? ['library', 'schedules', 'broadcast'] 
       : ['community'];
 
-    let finalPassword = check.rows[0].password;
+    let finalPassword = check.rows[0].password_hash;
     if (password && password.trim() !== '') {
       finalPassword = await bcrypt.hash(password.trim(), 10);
     }
 
-    // UPDATE an toàn theo schema: Không gán updated_at và không ghi đè username cũ
     const updateRes = await pool.query(
-      `UPDATE admin_users 
-       SET full_name = $1, email = $2, role = $3, password = $4, custom_permissions = $5
+      `UPDATE users 
+       SET name = $1, email = $2, role = $3, password_hash = $4, custom_permissions = $5
        WHERE id = $6
-       RETURNING id, username, email, full_name AS "fullName", role, is_active AS "isActive"`,
+       RETURNING id, COALESCE(student_code, email) AS username, email, name AS "fullName", role, is_active AS "isActive"`,
       [fullName.trim(), cleanEmail, role, finalPassword, permissions, id]
     );
 
@@ -119,7 +116,7 @@ router.put('/:id', async (req, res) => {
 router.patch('/:id/toggle', async (req, res) => {
   const { id } = req.params;
   try {
-    const check = await pool.query(`SELECT id, role, is_active FROM admin_users WHERE id = $1`, [id]);
+    const check = await pool.query(`SELECT id, role, is_active FROM users WHERE id = $1`, [id]);
     if (check.rows.length === 0) {
       return res.status(404).json({ success: false, message: 'Tài khoản không tồn tại!' });
     }
@@ -129,7 +126,7 @@ router.patch('/:id/toggle', async (req, res) => {
     }
 
     const newStatus = !check.rows[0].is_active;
-    await pool.query(`UPDATE admin_users SET is_active = $1 WHERE id = $2`, [newStatus, id]);
+    await pool.query(`UPDATE users SET is_active = $1 WHERE id = $2`, [newStatus, id]);
 
     res.json({ 
       success: true, 
@@ -146,7 +143,7 @@ router.patch('/:id/toggle', async (req, res) => {
 router.delete('/:id', async (req, res) => {
   const { id } = req.params;
   try {
-    const check = await pool.query(`SELECT role FROM admin_users WHERE id = $1`, [id]);
+    const check = await pool.query(`SELECT role FROM users WHERE id = $1`, [id]);
     if (check.rows.length === 0) {
       return res.status(404).json({ success: false, message: 'Không tìm thấy tài khoản!' });
     }
@@ -154,7 +151,7 @@ router.delete('/:id', async (req, res) => {
       return res.status(400).json({ success: false, message: 'Không thể xóa tài khoản Super Admin!' });
     }
 
-    await pool.query(`DELETE FROM admin_users WHERE id = $1`, [id]);
+    await pool.query(`DELETE FROM users WHERE id = $1`, [id]);
     res.json({ success: true, message: 'Đã xóa tài khoản khỏi hệ thống!' });
   } catch (err) {
     console.error('Lỗi DELETE /admin/staff/:id:', err);
@@ -187,9 +184,9 @@ router.get('/password-resets', async (req, res) => {
       `SELECT r.id, r.email, r.note, 
               COALESCE(r.status, 'pending') AS status,
               TO_CHAR(r.created_at, 'DD/MM/YYYY HH24:MI') AS "createdAt",
-              u.full_name AS "fullName", u.role, u.username
+              u.name AS "fullName", u.role, COALESCE(u.student_code, u.email) AS username
        FROM admin_password_resets r
-       LEFT JOIN admin_users u ON LOWER(u.email) = LOWER(r.email)
+       LEFT JOIN users u ON LOWER(u.email) = LOWER(r.email)
        ORDER BY r.created_at DESC`
     );
     res.json({ success: true, data: rows });
@@ -212,20 +209,14 @@ router.post('/approve-access', async (req, res) => {
 
     const baseUsername = cleanEmail.split('@')[0].replace(/[^a-zA-Z0-9_]/g, '');
     const permissions = role === 'instructor' ? ['library', 'schedules', 'broadcast'] : ['community'];
-
-    const checkUsername = await pool.query(`SELECT id FROM admin_users WHERE username = $1`, [baseUsername]);
-    const finalUsername = checkUsername.rows.length > 0 
-      ? `${baseUsername}_${Math.floor(100 + Math.random() * 900)}`
-      : baseUsername;
-
     const defaultHashedPassword = await bcrypt.hash('Admin@123', 10);
 
     await pool.query(
-      `INSERT INTO admin_users (username, email, full_name, role, password, is_active, custom_permissions)
+      `INSERT INTO users (student_code, email, name, role, password_hash, is_active, custom_permissions)
        VALUES ($1, $2, $3, $4, $5, true, $6)
        ON CONFLICT (email) DO UPDATE 
        SET role = EXCLUDED.role, is_active = true, custom_permissions = EXCLUDED.custom_permissions`,
-      [finalUsername, cleanEmail, fullName, role || 'instructor', defaultHashedPassword, permissions]
+      [baseUsername, cleanEmail, fullName, role || 'instructor', defaultHashedPassword, permissions]
     );
 
     await pool.query(`UPDATE admin_access_requests SET status = 'approved' WHERE id = $1`, [requestId]);
@@ -249,7 +240,7 @@ router.post('/approve-reset-password', async (req, res) => {
     const hashedPassword = await bcrypt.hash(newPassword.trim(), 10);
 
     await pool.query(
-      `UPDATE admin_users SET password = $1 WHERE LOWER(email) = $2`,
+      `UPDATE users SET password_hash = $1 WHERE LOWER(email) = $2`,
       [hashedPassword, cleanEmail]
     );
 

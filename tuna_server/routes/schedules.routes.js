@@ -4,26 +4,34 @@ const router = express.Router();
 const pool = require('../config/db');
 const { authenticateToken } = require('../middlewares/auth');
 
-// Đường dẫn service Python WRR trên Render
 const WRR_SERVICE_URL = process.env.WRR_SERVICE_URL || 'https://tuna-wrr-service.onrender.com';
 
-// Helper trích xuất Email / Định danh động nhất quán (Ưu tiên đúng người dùng hiện tại)
-const extractUserEmail = (req) => {
-  const val = (
+// Helper trích xuất user_id nguyên số từ request
+const resolveUserId = async (req) => {
+  if (req.user?.id) return req.user.id;
+  const rawId = String(
     req.body?.userId ||
     req.query?.userId ||
     req.headers['x-user-id'] ||
     req.query?.identifier ||
-    req.user?.email ||
     req.body?.email ||
     req.query?.email ||
     ''
   ).trim();
-  return val || 'guest_user';
+
+  if (!rawId || rawId === 'guest_user') return null;
+  if (/^\d+$/.test(rawId)) return parseInt(rawId, 10);
+
+  const userRes = await pool.query(
+    `SELECT id FROM users WHERE LOWER(email) = LOWER($1) OR student_code = $1 OR zalo_id = $1 LIMIT 1`,
+    [rawId]
+  ).catch(() => ({ rows: [] }));
+
+  return userRes.rows[0]?.id || null;
 };
 
 // =============================================================================
-// 1. LẤY DANH MỤC NGÀNH VÀ KHÓA TỰ ĐỘNG TỪ CSDL (CHO ADMIN BỘ LỌC & MODAL)
+// 1. LẤY DANH MỤC NGÀNH VÀ KHÓA TỰ ĐỘNG TỪ CSDL
 // =============================================================================
 router.get('/admin/meta-options', authenticateToken, async (req, res) => {
   try {
@@ -63,7 +71,7 @@ router.get('/admin/meta-options', authenticateToken, async (req, res) => {
 });
 
 // =============================================================================
-// 2. GỢI Ý TỰ ĐỘNG HỌC PHẦN TỪ KHUNG CTĐT CHO THỜI KHÓA BIỂU (AUTO-FILL)
+// 2. GỢI Ý TỰ ĐỘNG HỌC PHẦN TỪ KHUNG CTĐT CHO THỜI KHÓA BIỂU
 // =============================================================================
 router.get('/available-subjects', authenticateToken, async (req, res) => {
   try {
@@ -86,9 +94,9 @@ router.get('/available-subjects', authenticateToken, async (req, res) => {
         cp.subject_type,
         cp.prerequisite,
         EXISTS (
-          SELECT 1 FROM academic_schedules sch 
-          WHERE sch.class_name = cp.class_name 
-            AND sch.semester_index = cp.semester_index 
+          SELECT 1 FROM schedules sch 
+          WHERE sch.schedule_scope = 'academic'
+            AND sch.class_name = cp.class_name 
             AND sch.subject_code = cp.subject_code
         ) AS is_scheduled
       FROM curriculum_plans cp
@@ -108,23 +116,22 @@ router.get('/available-subjects', authenticateToken, async (req, res) => {
 });
 
 // =============================================================================
-// 3. QUẢN TRỊ THỜI KHÓA BIỂU DÀNH CHO GIẢNG VIÊN / ADMIN (ACADEMIC SCHEDULES)
+// 3. QUẢN TRỊ THỜI KHÓA BIỂU ADMIN (BẢNG SCHEDULES TỐI ƯU)
 // =============================================================================
 router.get('/admin/list', authenticateToken, async (req, res) => {
   const { major, cohort, year, semester, type, className } = req.query;
   try {
     let query = `
       SELECT id, faculty_major AS "facultyMajor", cohort, class_name AS "className",
-             academic_year AS "academicYear", semester, semester_index AS "semesterIndex",
              curriculum_plan_id AS "curriculumPlanId", credits,
-             subject_code AS "subjectCode", subject_name AS "subjectName",
+             subject_code AS "subjectCode", title AS "subjectName",
              schedule_type AS "scheduleType", day_of_week AS "dayOfWeek",
              TO_CHAR(specific_date, 'YYYY-MM-DD') AS "specificDate",
              start_period AS "startPeriod", end_period AS "endPeriod",
              room, teacher_name AS "teacherName", note,
              TO_CHAR(created_at, 'DD/MM/YYYY HH24:MI') AS "createdAt"
-      FROM academic_schedules
-      WHERE 1=1
+      FROM schedules
+      WHERE schedule_scope = 'academic'
     `;
     const params = [];
 
@@ -139,14 +146,6 @@ router.get('/admin/list', authenticateToken, async (req, res) => {
     if (className && className !== 'all') {
       params.push(className);
       query += ` AND class_name = $${params.length}`;
-    }
-    if (year && year !== 'all') {
-      params.push(Number(year));
-      query += ` AND academic_year = $${params.length}`;
-    }
-    if (semester && semester !== 'all') {
-      params.push(Number(semester));
-      query += ` AND semester = $${params.length}`;
     }
     if (type && type !== 'all') {
       params.push(type);
@@ -166,9 +165,6 @@ router.post('/admin/create', authenticateToken, async (req, res) => {
     facultyMajor,
     cohort,
     className,
-    academicYear,
-    semester,
-    semesterIndex,
     curriculumPlanId,
     credits,
     subjectCode,
@@ -191,7 +187,6 @@ router.post('/admin/create', authenticateToken, async (req, res) => {
     const finalRoom = (room || '').trim();
     const finalTeacher = (teacherName || req.user?.full_name || 'Giảng viên').trim();
     const finalScheduleType = scheduleType || 'study';
-    const finalSemIndex = semesterIndex ? Number(semesterIndex) : 1;
     const finalPlanId = curriculumPlanId ? Number(curriculumPlanId) : null;
     const finalCredits = Number(credits) || 3;
     const finalMajor = facultyMajor || 'Hệ Thống Thông Tin';
@@ -209,17 +204,16 @@ router.post('/admin/create', authenticateToken, async (req, res) => {
     const computedDayOfWeek = jsDay === 0 ? 8 : jsDay + 1;
 
     const insertRes = await pool.query(
-      `INSERT INTO academic_schedules 
-        (faculty_major, cohort, class_name, academic_year, semester, semester_index,
-         curriculum_plan_id, credits, subject_code, subject_name, schedule_type, 
-         day_of_week, specific_date, start_period, end_period, room, teacher_name, note)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)
+      `INSERT INTO schedules 
+        (schedule_scope, faculty_major, cohort, class_name, curriculum_plan_id, credits, 
+         subject_code, title, schedule_type, day_of_week, specific_date, 
+         start_period, end_period, room, teacher_name, note)
+       VALUES ('academic', $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
        RETURNING id`,
       [
-        finalMajor, finalCohort, finalClassName, Number(academicYear) || 1, Number(semester) || 1,
-        finalSemIndex, finalPlanId, finalCredits, finalSubjectCode, finalSubjectName,
-        finalScheduleType, computedDayOfWeek, specificDate, finalStartPeriod, finalEndPeriod,
-        finalRoom, finalTeacher, note || null,
+        finalMajor, finalCohort, finalClassName, finalPlanId, finalCredits,
+        finalSubjectCode, finalSubjectName, finalScheduleType, computedDayOfWeek, specificDate,
+        finalStartPeriod, finalEndPeriod, finalRoom, finalTeacher, note || null,
       ]
     );
 
@@ -235,9 +229,6 @@ router.put('/admin/:id', authenticateToken, async (req, res) => {
     facultyMajor,
     cohort,
     className,
-    academicYear,
-    semester,
-    semesterIndex,
     curriculumPlanId,
     credits,
     subjectCode,
@@ -254,19 +245,16 @@ router.put('/admin/:id', authenticateToken, async (req, res) => {
 
   try {
     await pool.query(
-      `UPDATE academic_schedules
-       SET faculty_major = $1, cohort = $2, class_name = $3, academic_year = $4, semester = $5,
-           semester_index = $6, curriculum_plan_id = $7, credits = $8, subject_code = $9,
-           subject_name = $10, schedule_type = $11, day_of_week = $12, specific_date = $13,
-           start_period = $14, end_period = $15, room = $16, teacher_name = $17, note = $18
-       WHERE id = $19`,
+      `UPDATE schedules
+       SET faculty_major = $1, cohort = $2, class_name = $3, curriculum_plan_id = $4,
+           credits = $5, subject_code = $6, title = $7, schedule_type = $8,
+           day_of_week = $9, specific_date = $10, start_period = $11, end_period = $12,
+           room = $13, teacher_name = $14, note = $15
+       WHERE id = $16 AND schedule_scope = 'academic'`,
       [
         facultyMajor,
         cohort,
         className?.trim() || null,
-        Number(academicYear) || 1,
-        Number(semester) || 1,
-        semesterIndex ? Number(semesterIndex) : null,
         curriculumPlanId ? Number(curriculumPlanId) : null,
         Number(credits) || 3,
         subjectCode?.trim() || null,
@@ -290,7 +278,7 @@ router.put('/admin/:id', authenticateToken, async (req, res) => {
 
 router.delete('/admin/:id', authenticateToken, async (req, res) => {
   try {
-    await pool.query(`DELETE FROM academic_schedules WHERE id = $1`, [req.params.id]);
+    await pool.query(`DELETE FROM schedules WHERE id = $1 AND schedule_scope = 'academic'`, [req.params.id]);
     res.json({ success: true, message: 'Đã xóa lịch khỏi hệ thống!' });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });
@@ -298,11 +286,11 @@ router.delete('/admin/:id', authenticateToken, async (req, res) => {
 });
 
 // =============================================================================
-// 4. DÀNH CHO ZALO MINI APP (LẤY LỊCH HỌC SINH VIÊN - KIỂM TRA PHÊ DUYỆT)
+// 4. LẤY LỊCH HỌC SINH VIÊN (KIỂM TRA DUYỆT TỪ USERS)
 // =============================================================================
 router.get('/student-schedule', async (req, res) => {
   const { studentCode, zaloId, identifier, month, year } = req.query;
-  const currentIdentity = (identifier || studentCode || zaloId || extractUserEmail(req) || '').trim();
+  const currentIdentity = (identifier || studentCode || zaloId || '').trim();
 
   try {
     if (!currentIdentity || currentIdentity === 'guest_user') {
@@ -368,7 +356,7 @@ router.get('/student-schedule', async (req, res) => {
     let scheduleQuery = `
       SELECT 
         id,
-        subject_name AS title,
+        title,
         TO_CHAR(specific_date, 'YYYY-MM-DD') AS date,
         'Tiết ' || start_period || ' - ' || end_period AS time,
         room,
@@ -378,8 +366,9 @@ router.get('/student-schedule', async (req, res) => {
           WHEN schedule_type = 'exam' THEN 'Lịch thi'
           ELSE 'Lịch học'
         END AS category
-      FROM academic_schedules
-      WHERE faculty_major = $1 
+      FROM schedules
+      WHERE schedule_scope = 'academic'
+        AND faculty_major = $1 
         AND (cohort = $2 OR cohort IS NULL OR cohort = '')
         AND ($3::text IS NULL OR class_name IS NULL OR class_name = '' OR class_name = $3)
         AND specific_date IS NOT NULL
@@ -414,29 +403,21 @@ router.get('/student-schedule', async (req, res) => {
 });
 
 // =============================================================================
-// 5. MÔN HỌC KHUNG CHƯƠNG TRÌNH ĐÀO TẠO
+// 5. MÔN HỌC KHUNG CHƯƠNG TRÌNH ĐÀO TẠO (TỪ CURRICULUM_PLANS)
 // =============================================================================
 router.get(['/curriculum', '/curriculum-subjects', '/curriculum/subjects'], async (req, res) => {
-  const { major, year, semester } = req.query;
+  const { major } = req.query;
   try {
     let query = `
       SELECT subject_name AS "subjectName", credits, difficulty_base AS "difficultyBase"
-      FROM curriculum_subjects
+      FROM curriculum_plans
       WHERE 1=1
     `;
     const params = [];
 
     if (major && major !== 'all') {
-      params.push(major);
-      query += ` AND faculty_major = $${params.length}`;
-    }
-    if (year) {
-      params.push(Number(year));
-      query += ` AND academic_year = $${params.length}`;
-    }
-    if (semester) {
-      params.push(Number(semester));
-      query += ` AND semester = $${params.length}`;
+      params.push(`%${major}%`);
+      query += ` AND major_name ILIKE $${params.length}`;
     }
 
     query += ` ORDER BY id ASC`;
@@ -448,11 +429,13 @@ router.get(['/curriculum', '/curriculum-subjects', '/curriculum/subjects'], asyn
 });
 
 // =============================================================================
-// 6. LỘ TRÌNH THÍCH ỨNG (TIMELINES & THUẬT TOÁN SWRR - ĐỒNG BỘ CHUẨN XÁC)
+// 6. LỘ TRÌNH THÍCH ỨNG (TIMELINES & SWRR)
 // =============================================================================
 router.get(['/timelines', '/api/timelines'], async (req, res) => {
-  const currentUserId = extractUserEmail(req);
+  const userId = await resolveUserId(req);
   const { startDate, endDate } = req.query;
+
+  if (!userId) return res.json({ success: true, data: [] });
 
   try {
     let query = `
@@ -462,9 +445,9 @@ router.get(['/timelines', '/api/timelines'], async (req, res) => {
              title, description, duration_minutes AS "durationMinutes",
              is_completed AS "isCompleted", action_target AS "actionTarget"
       FROM learning_timelines
-      WHERE (LOWER(user_id) = LOWER($1) OR user_id = $1)
+      WHERE user_id = $1
     `;
-    const params = [currentUserId];
+    const params = [userId];
 
     if (startDate && endDate) {
       params.push(startDate, endDate);
@@ -482,11 +465,13 @@ router.get(['/timelines', '/api/timelines'], async (req, res) => {
 });
 
 router.post(['/timelines', '/api/timelines'], async (req, res) => {
-  const currentUserId = extractUserEmail(req);
+  const userId = await resolveUserId(req);
   const {
     timelineDate, timeSlot, taskType, title, description,
     durationMinutes, subject, goalLevel, actionTarget
   } = req.body;
+
+  if (!userId) return res.status(401).json({ success: false, message: 'Cần đăng nhập' });
 
   try {
     const finalDate = timelineDate || new Date().toISOString().slice(0, 10);
@@ -500,7 +485,7 @@ router.post(['/timelines', '/api/timelines'], async (req, res) => {
                  time_slot AS "timeSlot", task_type AS "taskType", title, description,
                  duration_minutes AS "durationMinutes", is_completed AS "isCompleted", action_target AS "actionTarget"`,
       [
-        currentUserId, subject || 'Học phần chung', goalLevel || 'KhaGioi',
+        userId, subject || 'Học phần chung', goalLevel || 'KhaGioi',
         finalDate, timeSlot || '19:30 - 20:15', taskType || 'quiz',
         title || 'Ca ôn tập mới', description || '', Number(durationMinutes) || 15,
         finalTarget
@@ -551,11 +536,11 @@ router.delete(['/timelines/:id', '/api/timelines/:id'], async (req, res) => {
 });
 
 router.post(['/generate-wrr-plan', '/timelines/generate-wrr-plan'], async (req, res) => {
-  const currentUserId = extractUserEmail(req);
+  const userId = await resolveUserId(req);
+  if (!userId) return res.status(401).json({ success: false, message: 'Cần đăng nhập' });
+
   const {
     facultyMajor = 'Hệ Thống Thông Tin',
-    year = 4,
-    semester = 1,
     subjects = [],
     subjectLevels = {},
     goalLevel = 'KhaGioi',
@@ -569,7 +554,6 @@ router.post(['/generate-wrr-plan', '/timelines/generate-wrr-plan'], async (req, 
   try {
     let targetSubjects = Array.isArray(subjects) && subjects.length > 0 ? subjects : [];
     
-    // Nếu chưa chọn môn, tự động tìm các môn của đúng chuyên ngành từ curriculum_plans hoặc curriculum_subjects
     if (targetSubjects.length === 0) {
       const planRes = await pool.query(
         `SELECT DISTINCT subject_name FROM curriculum_plans 
@@ -580,18 +564,8 @@ router.post(['/generate-wrr-plan', '/timelines/generate-wrr-plan'], async (req, 
       if (planRes.rows.length > 0) {
         targetSubjects = planRes.rows.map((r) => r.subject_name);
       } else {
-        const currRes = await pool.query(
-          `SELECT subject_name FROM curriculum_subjects 
-           WHERE faculty_major ILIKE $1 
-           LIMIT 4`,
-          [`%${facultyMajor}%`]
-        ).catch(() => ({ rows: [] }));
-        targetSubjects = currRes.rows.map((r) => r.subject_name);
+        targetSubjects = ['Cơ sở dữ liệu', 'Phân tích và thiết kế HTTT'];
       }
-    }
-
-    if (targetSubjects.length === 0) {
-      targetSubjects = ['Cơ sở dữ liệu', 'Phân tích và thiết kế HTTT'];
     }
 
     const payloadSubjects = [];
@@ -605,14 +579,14 @@ router.post(['/generate-wrr-plan', '/timelines/generate-wrr-plan'], async (req, 
 
       const quizRes = await pool.query(
         `SELECT COUNT(*) as total, COUNT(*) FILTER (WHERE is_correct = true) as correct
-         FROM quiz_answer_attempts WHERE (LOWER(user_id) = LOWER($1) OR user_id = $1) AND subject ILIKE $2`,
-        [currentUserId, `%${sub}%`]
+         FROM quiz_answer_attempts WHERE user_id = $1 AND subject ILIKE $2`,
+        [userId, `%${sub}%`]
       ).catch(() => ({ rows: [{ total: 0, correct: 0 }] }));
 
       const examRes = await pool.query(
-        `SELECT 1 FROM academic_schedules 
-         WHERE schedule_type = 'exam'
-           AND subject_name ILIKE $1
+        `SELECT 1 FROM schedules 
+         WHERE schedule_scope = 'academic' AND schedule_type = 'exam'
+           AND title ILIKE $1
            AND specific_date BETWEEN CURRENT_DATE AND CURRENT_DATE + INTERVAL '14 days'
          LIMIT 1`,
         [`%${sub}%`]
@@ -650,7 +624,6 @@ router.post(['/generate-wrr-plan', '/timelines/generate-wrr-plan'], async (req, 
         pyData = await pyResponse.json();
       }
     } catch (e) {
-      console.warn("⚠️ Gọi Python Microservice thất bại, kích hoạt Fallback local SWRR:", e.message);
       pyData = {
         success: true,
         weights: payloadSubjects.map((s) => ({ subject: s.subject_name, weight: 1.0 })),
@@ -662,7 +635,6 @@ router.post(['/generate-wrr-plan', '/timelines/generate-wrr-plan'], async (req, 
       };
     }
 
-    // Cập nhật bảng trọng số
     for (const w of (pyData?.weights || [])) {
       await pool.query(
         `INSERT INTO subject_learning_weights 
@@ -670,15 +642,13 @@ router.post(['/generate-wrr-plan', '/timelines/generate-wrr-plan'], async (req, 
          VALUES ($1, $2, $3, CURRENT_TIMESTAMP)
          ON CONFLICT (user_id, subject_name)
          DO UPDATE SET calculated_weight = EXCLUDED.calculated_weight, updated_at = CURRENT_TIMESTAMP`,
-        [currentUserId, w.subject, w.weight]
+        [userId, w.subject, w.weight]
       ).catch(() => {});
     }
 
-    // Xóa lịch cũ của đúng người dùng này
-    await pool.query(`DELETE FROM learning_timelines WHERE LOWER(user_id) = LOWER($1) OR user_id = $1`, [currentUserId]).catch(() => {});
+    await pool.query(`DELETE FROM learning_timelines WHERE user_id = $1`, [userId]).catch(() => {});
     const insertedRows = [];
 
-    // Chuyển đổi mốc ngày chính xác theo giờ địa phương (tránh lỗi lệch múi giờ UTC)
     let startYear, startMonth, startDay;
     if (startDate && /^\d{4}-\d{2}-\d{2}$/.test(startDate)) {
       const parts = startDate.split('-').map(Number);
@@ -724,7 +694,7 @@ router.post(['/generate-wrr-plan', '/timelines/generate-wrr-plan'], async (req, 
                      time_slot AS "timeSlot", task_type AS "taskType", title, description,
                      duration_minutes AS "durationMinutes", is_completed AS "isCompleted", action_target AS "actionTarget"`,
           [
-            currentUserId,
+            userId,
             task.subject,
             goalLevel,
             dateStr,
@@ -735,10 +705,7 @@ router.post(['/generate-wrr-plan', '/timelines/generate-wrr-plan'], async (req, 
             pace,
             actionTarget,
           ]
-        ).catch((e) => {
-          console.error("Lỗi insert timeline:", e.message);
-          return { rows: [] };
-        });
+        ).catch(() => ({ rows: [] }));
 
         if (insertRes.rows && insertRes.rows[0]) {
           insertedRows.push(insertRes.rows[0]);
@@ -762,42 +729,41 @@ router.post(['/generate-wrr-plan', '/timelines/generate-wrr-plan'], async (req, 
 });
 
 // =============================================================================
-// 7. QUẢN LÝ ĐIỂM DANH STREAK & TÍCH LŨY ĐIỂM XP
+// 7. QUẢN LÝ ĐIỂM DANH STREAK TRỰC TIẾP TRONG BẢNG USERS
 // =============================================================================
 router.get('/streak/:userId', async (req, res) => {
-  const currentUserId = req.params.userId || extractUserEmail(req);
+  const userId = await resolveUserId(req);
+  if (!userId) return res.json({ success: true, current_streak: 1, longest_streak: 1, xp_points: 20 });
+
   try {
-    const query = `SELECT * FROM user_streaks WHERE LOWER(user_id) = LOWER($1) OR user_id = $1`;
-    const result = await pool.query(query, [currentUserId]).catch(() => ({ rows: [] }));
+    const query = `SELECT current_streak, longest_streak, xp_points, last_active_date FROM users WHERE id = $1`;
+    const result = await pool.query(query, [userId]).catch(() => ({ rows: [] }));
 
     if (result.rows.length === 0) {
       return res.json({ success: true, current_streak: 1, longest_streak: 1, xp_points: 20, last_completed_date: null });
     }
 
-    const streakData = result.rows[0];
+    const userData = result.rows[0];
     const today = new Date();
     today.setHours(0, 0, 0, 0);
 
-    if (streakData.last_completed_date) {
-      const lastDate = new Date(streakData.last_completed_date);
+    if (userData.last_active_date) {
+      const lastDate = new Date(userData.last_active_date);
       lastDate.setHours(0, 0, 0, 0);
       const diffDays = Math.floor((today - lastDate) / (1000 * 60 * 60 * 24));
 
       if (diffDays > 1) {
-        await pool.query(
-          `UPDATE user_streaks SET current_streak = 0, updated_at = CURRENT_TIMESTAMP WHERE LOWER(user_id) = LOWER($1) OR user_id = $1`,
-          [currentUserId]
-        ).catch(() => {});
-        streakData.current_streak = 0;
+        await pool.query(`UPDATE users SET current_streak = 0 WHERE id = $1`, [userId]).catch(() => {});
+        userData.current_streak = 0;
       }
     }
 
     res.json({
       success: true,
-      current_streak: streakData.current_streak || 1,
-      longest_streak: streakData.longest_streak || 1,
-      xp_points: streakData.xp_points || 20,
-      last_completed_date: streakData.last_completed_date,
+      current_streak: userData.current_streak || 1,
+      longest_streak: userData.longest_streak || 1,
+      xp_points: userData.xp_points || 20,
+      last_completed_date: userData.last_active_date,
     });
   } catch (error) {
     res.json({ success: true, current_streak: 1, longest_streak: 1, xp_points: 20 });
@@ -805,67 +771,63 @@ router.get('/streak/:userId', async (req, res) => {
 });
 
 router.post('/streak/complete', async (req, res) => {
-  const currentUserId = req.body?.userId || extractUserEmail(req);
-  try {
-    const checkQuery = `SELECT * FROM user_streaks WHERE LOWER(user_id) = LOWER($1) OR user_id = $1`;
-    const checkResult = await pool.query(checkQuery, [currentUserId]).catch(() => ({ rows: [] }));
+  const userId = await resolveUserId(req);
+  if (!userId) return res.status(401).json({ success: false, message: 'Cần đăng nhập' });
 
+  try {
+    const checkResult = await pool.query(`SELECT id, current_streak, longest_streak, xp_points, last_active_date FROM users WHERE id = $1`, [userId]);
+    if (checkResult.rows.length === 0) return res.status(404).json({ success: false, message: 'User không tồn tại' });
+
+    const u = checkResult.rows[0];
     const today = new Date();
     today.setHours(0, 0, 0, 0);
     const todayStr = today.toISOString().split('T')[0];
 
-    if (checkResult.rows.length === 0) {
-      const insertQuery = `
-        INSERT INTO user_streaks (user_id, current_streak, longest_streak, xp_points, last_completed_date, updated_at)
-        VALUES ($1, 1, 1, 20, $2, CURRENT_TIMESTAMP) RETURNING *;
-      `;
-      const insertResult = await pool.query(insertQuery, [currentUserId, todayStr]).catch(() => ({ rows: [] }));
-      return res.json({ success: true, streak: insertResult.rows[0] });
-    }
-
-    const streakRecord = checkResult.rows[0];
-    const lastDate = streakRecord.last_completed_date ? new Date(streakRecord.last_completed_date) : null;
-
+    const lastDate = u.last_active_date ? new Date(u.last_active_date) : null;
     if (lastDate) {
       lastDate.setHours(0, 0, 0, 0);
       const diffDays = Math.floor((today - lastDate) / (1000 * 60 * 60 * 24));
-
       if (diffDays === 0) {
-        return res.json({ success: true, streak: streakRecord, message: 'Đã điểm danh hôm nay' });
+        return res.json({ success: true, streak: u, message: 'Đã điểm danh hôm nay' });
       }
-
-      let newStreak = diffDays === 1 ? Number(streakRecord.current_streak) + 1 : 1;
-      const newLongest = Math.max(newStreak, Number(streakRecord.longest_streak || 0));
-
-      const updateQuery = `
-        UPDATE user_streaks
-        SET current_streak = $1, 
-            longest_streak = $2, 
-            xp_points = COALESCE(xp_points, 0) + 20,
-            last_completed_date = $3, 
-            updated_at = CURRENT_TIMESTAMP
-        WHERE id = $4 RETURNING *;
-      `;
-      const updateResult = await pool.query(updateQuery, [newStreak, newLongest, todayStr, streakRecord.id]).catch(() => ({ rows: [] }));
-      return res.json({ success: true, streak: updateResult.rows[0] });
     }
+
+    let newStreak = (lastDate && Math.floor((today - lastDate) / (1000 * 60 * 60 * 24)) === 1) ? Number(u.current_streak) + 1 : 1;
+    let newLongest = Math.max(newStreak, Number(u.longest_streak || 0));
+
+    const updateRes = await pool.query(
+      `UPDATE users 
+       SET current_streak = $1, longest_streak = $2, xp_points = COALESCE(xp_points, 0) + 20, last_active_date = $3
+       WHERE id = $4
+       RETURNING current_streak, longest_streak, xp_points, last_active_date`,
+      [newStreak, newLongest, todayStr, userId]
+    );
+
+    // Lưu log hoạt động
+    await pool.query(
+      `INSERT INTO streak_logs (user_id, activity_date, xp_earned) VALUES ($1, $2, 20)
+       ON CONFLICT (user_id, activity_date) DO NOTHING`,
+      [userId, todayStr]
+    ).catch(() => {});
+
+    return res.json({ success: true, streak: updateRes.rows[0] });
   } catch (error) {
     res.json({ success: true, streak: { current_streak: 1, xp_points: 20 } });
   }
 });
 
 // =============================================================================
-// 8. THỜI KHÓA BIỂU CÁ NHÂN TỰ TẠO (CUSTOM SCHEDULES)
+// 8. THỜI KHÓA BIỂU CÁ NHÂN (SCHEDULE_SCOPE = 'PERSONAL')
 // =============================================================================
 router.get('/', authenticateToken, async (req, res) => {
   try {
     const { rows } = await pool.query(
-      `SELECT id, title, TO_CHAR(schedule_date, 'YYYY-MM-DD') AS date, 
-              time_slot AS time, location, category
-       FROM custom_schedules 
-       WHERE user_id = $1 OR zalo_id = $2 
-       ORDER BY schedule_date ASC, time_slot ASC`,
-      [req.user.id, req.user.zaloId]
+      `SELECT id, title, TO_CHAR(specific_date, 'YYYY-MM-DD') AS date, 
+              time_slot AS time, room AS location, schedule_type AS category
+       FROM schedules 
+       WHERE schedule_scope = 'personal' AND user_id = $1 
+       ORDER BY specific_date ASC, time_slot ASC`,
+      [req.user.id]
     ).catch(() => ({ rows: [] }));
     res.json({ success: true, data: rows });
   } catch (error) {
@@ -877,9 +839,10 @@ router.post('/', authenticateToken, async (req, res) => {
   const { title, date, time, location, category } = req.body;
   try {
     const result = await pool.query(
-      `INSERT INTO custom_schedules (user_id, zalo_id, title, schedule_date, time_slot, location, category)
-       VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING *`,
-      [req.user.id, req.user.zaloId, title, date, time, location || 'Phòng học', category || 'Chính khóa']
+      `INSERT INTO schedules (schedule_scope, user_id, title, specific_date, time_slot, room, schedule_type)
+       VALUES ('personal', $1, $2, $3, $4, $5, 'custom') 
+       RETURNING id, title, TO_CHAR(specific_date, 'YYYY-MM-DD') AS date, time_slot AS time, room AS location`,
+      [req.user.id, title, date, time, location || 'Phòng học']
     );
     res.json({ success: true, data: result.rows[0] });
   } catch (error) {
@@ -890,10 +853,10 @@ router.post('/', authenticateToken, async (req, res) => {
 router.delete('/:id', authenticateToken, async (req, res) => {
   try {
     await pool.query(
-      `DELETE FROM custom_schedules WHERE id = $1 AND (user_id = $2 OR zalo_id = $3)`,
-      [req.params.id, req.user.id, req.user.zaloId]
+      `DELETE FROM schedules WHERE id = $1 AND schedule_scope = 'personal' AND user_id = $2`,
+      [req.params.id, req.user.id]
     );
-    res.json({ success: true, message: 'Đã xóa lịch học' });
+    res.json({ success: true, message: 'Đã xóa lịch học cá nhân' });
   } catch (error) {
     res.status(500).json({ success: false, error: error.message });
   }

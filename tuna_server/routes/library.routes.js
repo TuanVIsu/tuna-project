@@ -22,13 +22,11 @@ const storage = multer.diskStorage({
 });
 const upload = multer({ storage });
 
-// 1. Lấy danh sách học liệu kèm bộ lọc (Đã bỏ view_count & download_count)
-// GET /api/library - Lấy toàn bộ tài liệu & đề thi (UNION ALL)
+// 1. Lấy danh sách học liệu kèm bộ lọc (UNION ALL cả admin_library_resources và exam_tests)
 router.get('/', async (req, res) => {
   try {
     const { major, year, semester, isReference, subCategory, isPublished, search } = req.query;
 
-    // Câu lệnh kết hợp: Tài liệu thông thường + Đề thi trắc nghiệm
     let baseUnionQuery = `
       SELECT 
         id::text AS id,
@@ -77,7 +75,6 @@ router.get('/', async (req, res) => {
       FROM exam_tests
     `;
 
-    // Bọc ngoài để áp dụng các bộ lọc dùng chung
     let query = `
       SELECT * FROM (${baseUnionQuery}) AS combined_library
       WHERE 1=1
@@ -122,7 +119,7 @@ router.get('/', async (req, res) => {
   }
 });
 
-// 2. Lấy danh mục môn học đồng bộ từ Khung CTĐT (Curriculum Auto-Sync)
+// 2. Lấy danh mục môn học đồng bộ từ Khung CTĐT
 router.get('/curriculum-sync-subjects', async (req, res) => {
   try {
     const query = `
@@ -143,7 +140,7 @@ router.get('/curriculum-sync-subjects', async (req, res) => {
   }
 });
 
-// 3. Đổi nhanh trạng thái hiển thị / ẩn học liệu (Status Toggle)
+// 3. Đổi nhanh trạng thái hiển thị
 router.patch('/:id/toggle-status', authenticateToken, async (req, res) => {
   try {
     const rawId = req.params.id;
@@ -167,7 +164,7 @@ router.patch('/:id/toggle-status', authenticateToken, async (req, res) => {
   }
 });
 
-// 4. Đăng tải học liệu hàng loạt (Upload Batch Document & Video)
+// 4. Đăng tải học liệu hàng loạt
 router.post('/batch', authenticateToken, upload.array('files'), async (req, res) => {
   try {
     const {
@@ -229,7 +226,7 @@ router.post('/batch', authenticateToken, upload.array('files'), async (req, res)
           downloadUrl,
           embedUrl,
           duration,
-          author ? author.trim() : (req.user?.full_name || 'Ban Đào Tạo'),
+          author ? author.trim() : (req.user?.name || req.user?.full_name || 'Ban Đào Tạo'),
         ]
       );
       insertedIds.push(insertRes.rows[0].id);
@@ -242,7 +239,6 @@ router.post('/batch', authenticateToken, upload.array('files'), async (req, res)
 });
 
 // 5. Cập nhật thông tin học liệu đơn lẻ
-// routes/library.routes.js -> PUT /:id (Cập nhật cả tài liệu lẫn đề thi)
 router.put('/:id', authenticateToken, upload.single('file'), async (req, res) => {
   try {
     const rawId = String(req.params.id);
@@ -263,7 +259,6 @@ router.put('/:id', authenticateToken, upload.single('file'), async (req, res) =>
       embedUrl,
     } = req.body;
 
-    // 1. NẾU LÀ ĐỀ THI TRẮC NGHIỆM / FLASHCARD -> CẬP NHẬT BẢNG exam_tests
     if (isExam) {
       const parsedMajors = typeof facultyMajors === 'string' ? JSON.parse(facultyMajors) : facultyMajors;
       const majorName = Array.isArray(parsedMajors) && parsedMajors.length > 0 ? parsedMajors[0] : 'Hệ Thống Thông Tin';
@@ -292,7 +287,6 @@ router.put('/:id', authenticateToken, upload.single('file'), async (req, res) =>
       return res.json({ success: true, message: 'Cập nhật đề thi thành công!', data: result.rows[0] });
     }
 
-    // 2. NẾU LÀ TÀI LIỆU / VIDEO -> CẬP NHẬT BẢNG admin_library_resources
     const parsedMajors = typeof facultyMajors === 'string' ? JSON.parse(facultyMajors) : facultyMajors;
 
     let updateQuery = `
@@ -369,7 +363,8 @@ router.delete('/:id', authenticateToken, async (req, res) => {
     res.status(500).json({ success: false, error: error.message });
   }
 });
-// GET /api/library/majors - Lấy danh mục tất cả ngành học từ CSDL
+
+// 7. Lấy danh mục ngành
 router.get('/majors', async (req, res) => {
   try {
     const query = `
@@ -389,4 +384,5 @@ router.get('/majors', async (req, res) => {
     res.status(500).json({ success: false, error: error.message });
   }
 });
+
 module.exports = router;

@@ -6,19 +6,6 @@ const bcrypt = require('bcryptjs');
 const { OAuth2Client } = require('google-auth-library');
 const pool = require('../config/db');
 
-// Tự động kiểm tra và bổ sung cột email nếu cơ sở dữ liệu chưa có
-(async () => {
-  try {
-    await pool.query(`
-      ALTER TABLE users 
-      ADD COLUMN IF NOT EXISTS email VARCHAR(255);
-    `);
-  } catch (e) {
-    console.warn("Lỗi kiểm tra cột email:", e.message);
-  }
-})();
-
-// Lấy JWT_SECRET
 let JWT_SECRET = process.env.JWT_SECRET || 'tuna_secret_jwt_key_2026';
 try {
   const authMiddleware = require('../middlewares/auth');
@@ -29,9 +16,9 @@ try {
 
 const googleClient = new OAuth2Client(process.env.GOOGLE_CLIENT_ID || '');
 
-// ==========================================
-// 1. CỔNG XÁC THỰC EMAIL (.ctuet.edu.vn)
-// ==========================================
+// =============================================================================
+// 1. CỔNG XÁC THỰC EMAIL SINH VIÊN (.ctuet.edu.vn)
+// =============================================================================
 router.post('/send-otp', async (req, res) => {
   try {
     const { email } = req.body;
@@ -51,17 +38,27 @@ router.post('/send-otp', async (req, res) => {
     const otp = Math.floor(100000 + Math.random() * 900000).toString();
     const expiresAt = new Date(Date.now() + 5 * 60 * 1000);
 
-    // Lưu mã xác thực vào cơ sở dữ liệu
-    await pool.query(
-      `INSERT INTO student_verifications (student_code, email, otp_code, expires_at)
-       VALUES ($1, $2, $3, $4)`,
-      [targetEmail, targetEmail, otp, expiresAt]
-    );
+    // Lưu mã OTP trực tiếp vào bảng users
+    const existing = await pool.query(`SELECT id FROM users WHERE LOWER(email) = $1 LIMIT 1`, [targetEmail]);
+    if (existing.rows.length > 0) {
+      await pool.query(
+        `UPDATE users SET otp_code = $1, otp_expires_at = $2 WHERE id = $3`,
+        [otp, expiresAt, existing.rows[0].id]
+      );
+    } else {
+      const cleanCode = targetEmail.split('@')[0].toUpperCase();
+      const generatedZaloId = `ctut_${cleanCode.toLowerCase()}`;
+      await pool.query(
+        `INSERT INTO users (zalo_id, student_code, email, name, role, otp_code, otp_expires_at, is_verified, verification_status)
+         VALUES ($1, $2, $3, $4, 'student', $5, $6, FALSE, 'pending')`,
+        [generatedZaloId, cleanCode, targetEmail, `Sinh viên ${cleanCode}`, otp, expiresAt]
+      );
+    }
 
     const emailPayload = {
       sender: { 
         name: "TUNA - Trợ Lý Học Tập", 
-        email: process.env.SMTP_USER || "nguyentuan452016@gmail.com" 
+        email: process.env.SMTP_USER 
       },
       to: [{ email: targetEmail }],
       subject: `[TUNA] Mã xác thực tài khoản: ${otp}`,
@@ -80,7 +77,6 @@ router.post('/send-otp', async (req, res) => {
       `,
     };
 
-    // Gửi thư thông qua Brevo API
     fetch('https://api.brevo.com/v3/smtp/email', {
       method: 'POST',
       headers: {
@@ -89,18 +85,7 @@ router.post('/send-otp', async (req, res) => {
         'content-type': 'application/json',
       },
       body: JSON.stringify(emailPayload),
-    })
-      .then(async (response) => {
-        const resData = await response.json();
-        if (!response.ok) {
-          console.error(`❌ [Brevo API] Lỗi gửi thư tới ${targetEmail}:`, resData);
-        } else {
-          console.log(`✅ [Brevo API] Đã gửi OTP thành công tới: ${targetEmail}`, resData.messageId);
-        }
-      })
-      .catch((err) => {
-        console.error(`❌ [Brevo API] Lỗi mạng:`, err.message);
-      });
+    }).catch((err) => console.error(`❌ [Brevo API] Lỗi mạng:`, err.message));
 
     return res.json({
       success: true,
@@ -123,10 +108,11 @@ router.post('/verify-otp', async (req, res) => {
     const cleanEmail = email.trim().toLowerCase();
     const cleanCode = (userCode || cleanEmail.split('@')[0]).trim().toUpperCase();
 
+    // Kiểm tra OTP trực tiếp trong bảng users
     const otpCheck = await pool.query(
-      `SELECT * FROM student_verifications 
-       WHERE email = $1 AND otp_code = $2 AND expires_at > NOW() AND is_verified = FALSE
-       ORDER BY id DESC LIMIT 1`,
+      `SELECT * FROM users 
+       WHERE LOWER(email) = $1 AND otp_code = $2 AND otp_expires_at > NOW()
+       LIMIT 1`,
       [cleanEmail, otp.trim()]
     );
 
@@ -134,43 +120,18 @@ router.post('/verify-otp', async (req, res) => {
       return res.status(400).json({ success: false, message: 'Mã OTP không đúng hoặc đã hết hạn!' });
     }
 
-    await pool.query('UPDATE student_verifications SET is_verified = TRUE WHERE id = $1', [otpCheck.rows[0].id]);
-
-    const isStudent = cleanEmail.includes('student.') || /^[A-Z]{2,5}\d{4,}/i.test(cleanCode);
-    const assignedRole = isStudent ? 'student' : 'member';
-    const generatedZaloId = `ctut_${cleanCode.toLowerCase()}`;
-
-    // Tìm kiếm tài khoản đã tồn tại theo student_code, email hoặc zalo_id
-    const existing = await pool.query(
-      `SELECT * FROM users WHERE student_code = $1 OR email = $2 OR zalo_id = $3 LIMIT 1`,
-      [cleanCode, cleanEmail, generatedZaloId]
+    const updateRes = await pool.query(
+      `UPDATE users 
+       SET otp_code = NULL, 
+           otp_expires_at = NULL,
+           name = COALESCE($1, name), 
+           student_code = $2 
+       WHERE id = $3 
+       RETURNING *`,
+      [name || null, cleanCode, otpCheck.rows[0].id]
     );
 
-    let finalUser = null;
-
-// Trong routes/auth.routes.js -> router.post('/verify-otp')
-    if (existing.rows.length > 0) {
-      // Tài khoản đã có: giữ nguyên trạng thái xác thực cũ của họ, chỉ cập nhật email nếu cần
-      const updateRes = await pool.query(
-        `UPDATE users 
-         SET email = $1, 
-             name = COALESCE($2, name), 
-             student_code = $3 
-         WHERE id = $4 
-         RETURNING *`,
-        [cleanEmail, name || null, cleanCode, existing.rows[0].id]
-      );
-      finalUser = updateRes.rows[0];
-    } else {
-      // Tài khoản MỚI: BẮT BUỘC để is_verified = FALSE và verification_status = 'pending'
-      const insertRes = await pool.query(
-        `INSERT INTO users (zalo_id, student_code, email, name, role, is_verified, verification_status)
-         VALUES ($1, $2, $3, $4, $5, FALSE, 'pending') 
-         RETURNING *`,
-        [generatedZaloId, cleanCode, cleanEmail, name || `Thành viên ${cleanCode}`, assignedRole]
-      );
-      finalUser = insertRes.rows[0];
-    }
+    const finalUser = updateRes.rows[0];
 
     const token = jwt.sign(
       { id: finalUser.id, role: finalUser.role, studentCode: finalUser.student_code, email: finalUser.email },
@@ -190,9 +151,9 @@ router.post('/verify-otp', async (req, res) => {
   }
 });
 
-// ==========================================
-// 2. CỔNG ĐĂNG NHẬP ADMIN & QUẢN TRỊ VIÊN
-// ==========================================
+// =============================================================================
+// 2. CỔNG ĐĂNG NHẬP & QUẢN TRỊ ADMIN (TRUY VẤN TỪ BẢNG USERS GỘP)
+// =============================================================================
 router.post('/admin-google-login', async (req, res) => {
   const { credential, intent = 'login' } = req.body;
 
@@ -213,7 +174,9 @@ router.post('/admin-google-login', async (req, res) => {
     const googleSub = payload.sub;
 
     let adminRes = await pool.query(
-      `SELECT * FROM admin_users WHERE LOWER(email) = $1 LIMIT 1`,
+      `SELECT * FROM users 
+       WHERE LOWER(email) = $1 AND role IN ('instructor', 'moderator', 'super_admin') 
+       LIMIT 1`,
       [googleEmail]
     );
 
@@ -244,12 +207,11 @@ router.post('/admin-google-login', async (req, res) => {
       return res.status(403).json({ success: false, message: 'Tài khoản này đang bị tạm khóa!' });
     }
 
-    await pool.query(`UPDATE admin_users SET google_id = $1 WHERE id = $2`, [googleSub, admin.id]);
+    await pool.query(`UPDATE users SET google_id = $1 WHERE id = $2`, [googleSub, admin.id]);
 
     const token = jwt.sign(
       {
         id: admin.id,
-        username: admin.username,
         email: admin.email,
         role: admin.role,
         permissions: admin.custom_permissions || ['all'],
@@ -263,9 +225,8 @@ router.post('/admin-google-login', async (req, res) => {
       token,
       admin: {
         id: admin.id,
-        username: admin.username,
         email: admin.email,
-        full_name: admin.full_name,
+        full_name: admin.name,
         role: admin.role,
         permissions: admin.custom_permissions || ['all'],
       },
@@ -285,9 +246,10 @@ router.post('/admin-password-login', async (req, res) => {
     }
 
     const result = await pool.query(
-      `SELECT id, username, email, full_name, role, password, custom_permissions, is_active 
-       FROM admin_users 
-       WHERE LOWER(username) = LOWER($1) OR LOWER(COALESCE(email, '')) = LOWER($1) 
+      `SELECT id, email, name, role, password_hash, custom_permissions, is_active 
+       FROM users 
+       WHERE (LOWER(email) = LOWER($1) OR student_code = $1) 
+         AND role IN ('instructor', 'moderator', 'super_admin')
        LIMIT 1`,
       [account.trim()]
     );
@@ -303,10 +265,11 @@ router.post('/admin-password-login', async (req, res) => {
     }
 
     let isMatch = false;
-    if (admin.password.startsWith('$2a$') || admin.password.startsWith('$2b$')) {
-      isMatch = await bcrypt.compare(password, admin.password);
+    const storedHash = admin.password_hash || '';
+    if (storedHash.startsWith('$2a$') || storedHash.startsWith('$2b$')) {
+      isMatch = await bcrypt.compare(password, storedHash);
     } else {
-      isMatch = (admin.password === password || password === 'Admin@123');
+      isMatch = (storedHash === password || password === 'Admin@123');
     }
 
     if (!isMatch) {
@@ -316,7 +279,6 @@ router.post('/admin-password-login', async (req, res) => {
     const token = jwt.sign(
       {
         id: admin.id,
-        username: admin.username,
         email: admin.email,
         role: admin.role,
         permissions: admin.custom_permissions || ['all'],
@@ -330,9 +292,8 @@ router.post('/admin-password-login', async (req, res) => {
       token,
       admin: {
         id: admin.id,
-        username: admin.username,
         email: admin.email,
-        full_name: admin.full_name,
+        full_name: admin.name,
         role: admin.role,
         permissions: admin.custom_permissions || ['all'],
       },
@@ -353,7 +314,7 @@ router.post('/admin-request-access', async (req, res) => {
     const cleanEmail = email.trim().toLowerCase();
 
     const existingUser = await pool.query(
-      `SELECT id, role, is_active FROM admin_users WHERE LOWER(email) = $1 LIMIT 1`,
+      `SELECT id, role, is_active FROM users WHERE LOWER(email) = $1 AND role IN ('instructor', 'moderator', 'super_admin') LIMIT 1`,
       [cleanEmail]
     );
 
@@ -394,7 +355,9 @@ router.post('/admin-request-reset-password', async (req, res) => {
     const cleanEmail = email.trim().toLowerCase();
 
     const checkUser = await pool.query(
-      `SELECT id, full_name FROM admin_users WHERE LOWER(email) = $1 LIMIT 1`,
+      `SELECT id, name FROM users 
+       WHERE LOWER(email) = $1 AND role IN ('instructor', 'moderator', 'super_admin') 
+       LIMIT 1`,
       [cleanEmail]
     );
 
@@ -425,9 +388,9 @@ router.post('/admin-request-reset-password', async (req, res) => {
   }
 });
 
-// ==========================================
+// =============================================================================
 // 3. ĐĂNG NHẬP QUA ZALO CŨ (DỰ PHÒNG)
-// ==========================================
+// =============================================================================
 router.post('/zalo-login', async (req, res) => {
   const { zaloId, name, avatar } = req.body;
   try {

@@ -3,24 +3,34 @@ const express = require('express');
 const router = express.Router();
 const pool = require('../config/db');
 
-// Trích xuất Email động từ Header (x-user-id) hoặc Query/Body
-const extractUserEmail = (req) => {
-  return String(
+// Helper: Phân giải user_id (INTEGER) từ thông tin request
+const resolveUserId = async (req) => {
+  if (req.user?.id) return req.user.id;
+  const rawId = String(
     req.headers['x-user-id'] || 
-    req.user?.email || 
     req.query.userId || 
     req.query.email || 
     req.body?.userId || 
     req.body?.email || 
-    'guest_user'
+    ''
   ).trim();
+
+  if (!rawId || rawId === 'guest_user') return null;
+  if (/^\d+$/.test(rawId)) return parseInt(rawId, 10);
+
+  const uRes = await pool.query(
+    `SELECT id FROM users WHERE LOWER(email) = LOWER($1) OR student_code = $1 OR zalo_id = $1 LIMIT 1`,
+    [rawId]
+  ).catch(() => ({ rows: [] }));
+
+  return uRes.rows[0]?.id || null;
 };
 
-// 1. LẤY DANH SÁCH LỊCH SỬ TÁC VỤ CỦA TÀI KHOẢN EMAIL
+// 1. LẤY DANH SÁCH LỊCH SỬ TÁC VỤ
 router.get('/', async (req, res) => {
-  const userEmail = extractUserEmail(req);
+  const userId = await resolveUserId(req);
   try {
-    const query = `
+    let query = `
       SELECT 
         id, 
         user_id AS "userId",
@@ -31,15 +41,21 @@ router.get('/', async (req, res) => {
         config,
         error_message AS "errorMessage",
         COALESCE(is_saved, false) AS "isSaved",
-        COALESCE(is_doc_saved, false) AS "isDocSaved",
         COALESCE(hidden_in_history, false) AS "hiddenInHistory",
         created_at AS "createdAt",
         TO_CHAR(created_at, 'HH24:MI') AS "time"
       FROM ai_tasks
-      WHERE user_id = $1 OR user_id = 'guest_user'
-      ORDER BY created_at DESC
     `;
-    const { rows } = await pool.query(query, [userEmail]).catch(() => ({ rows: [] }));
+    const params = [];
+    if (userId) {
+      params.push(userId);
+      query += ` WHERE user_id = $1 OR user_id IS NULL`;
+    } else {
+      query += ` WHERE user_id IS NULL`;
+    }
+    query += ` ORDER BY created_at DESC`;
+
+    const { rows } = await pool.query(query, params).catch(() => ({ rows: [] }));
     res.json({ success: true, data: rows });
   } catch (err) {
     console.error('Lỗi GET /api/tasks:', err.message);
@@ -49,10 +65,10 @@ router.get('/', async (req, res) => {
 
 // 2. LƯU HOẶC CẬP NHẬT TÁC VỤ AI
 router.post('/', async (req, res) => {
-  const userEmail = extractUserEmail(req);
+  const userId = await resolveUserId(req);
   const {
     id, featureId, docName, status, resultData,
-    config, errorMessage, isSaved, isDocSaved, hiddenInHistory
+    config, errorMessage, isSaved, hiddenInHistory
   } = req.body;
 
   try {
@@ -61,23 +77,22 @@ router.post('/', async (req, res) => {
     const query = `
       INSERT INTO ai_tasks (
         id, user_id, feature_id, doc_name, status, result_data,
-        config, error_message, is_saved, is_doc_saved, hidden_in_history, created_at
+        config, error_message, is_saved, hidden_in_history, created_at
       )
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, CURRENT_TIMESTAMP)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, CURRENT_TIMESTAMP)
       ON CONFLICT (id) DO UPDATE SET
         status = EXCLUDED.status,
         result_data = COALESCE(EXCLUDED.result_data, ai_tasks.result_data),
         config = COALESCE(EXCLUDED.config, ai_tasks.config),
         error_message = COALESCE(EXCLUDED.error_message, ai_tasks.error_message),
         is_saved = COALESCE(EXCLUDED.is_saved, ai_tasks.is_saved),
-        is_doc_saved = COALESCE(EXCLUDED.is_doc_saved, ai_tasks.is_doc_saved),
         hidden_in_history = COALESCE(EXCLUDED.hidden_in_history, ai_tasks.hidden_in_history)
       RETURNING *
     `;
 
     const values = [
       taskId,
-      userEmail,
+      userId,
       featureId || 'quiz',
       docName || 'Tài liệu học tập',
       status || 'done',
@@ -85,21 +100,10 @@ router.post('/', async (req, res) => {
       typeof config === 'object' ? JSON.stringify(config) : config,
       errorMessage || '',
       Boolean(isSaved),
-      Boolean(isDocSaved),
       Boolean(hiddenInHistory)
     ];
 
-    const result = await pool.query(query, values).catch(async () => {
-      // Fallback nếu schema cũ chưa có cột user_id
-      return await pool.query(
-        `INSERT INTO ai_tasks (id, feature_id, doc_name, status, result_data)
-         VALUES ($1, $2, $3, $4, $5)
-         ON CONFLICT (id) DO UPDATE SET status = EXCLUDED.status, result_data = EXCLUDED.result_data
-         RETURNING *`,
-        [taskId, featureId, docName, status, typeof resultData === 'object' ? JSON.stringify(resultData) : resultData]
-      );
-    });
-
+    const result = await pool.query(query, values);
     res.json({ success: true, data: result.rows[0] });
   } catch (err) {
     console.error('Lỗi POST /api/tasks:', err.message);
@@ -117,13 +121,15 @@ router.delete('/:id', async (req, res) => {
   }
 });
 
-// 4. XÓA TOÀN BỘ LỊCH SỬ CỦA TÀI KHOẢN
+// 4. XÓA TOÀN BỘ LỊCH SỬ
 router.delete('/', async (req, res) => {
-  const userEmail = extractUserEmail(req);
+  const userId = await resolveUserId(req);
   try {
-    await pool.query(`DELETE FROM ai_tasks WHERE user_id = $1`, [userEmail]).catch(async () => {
-      await pool.query(`DELETE FROM ai_tasks`);
-    });
+    if (userId) {
+      await pool.query(`DELETE FROM ai_tasks WHERE user_id = $1`, [userId]);
+    } else {
+      await pool.query(`DELETE FROM ai_tasks WHERE user_id IS NULL`);
+    }
     res.json({ success: true, message: 'Đã dọn dẹp toàn bộ lịch sử tác vụ!' });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });

@@ -8,15 +8,11 @@ const xlsx = require('xlsx');
 const upload = multer({ storage: multer.memoryStorage() });
 
 // =============================================================================
-// 1. ROUTE LẤY DANH MỤC NGÀNH, KHÓA, LỚP (METADATA DÙNG CHO BỘ LỌC)
-// =============================================================================
-// =============================================================================
 // 1. ROUTE LẤY DANH MỤC NGÀNH, KHÓA, LỚP ĐỘNG 100% TỪ CƠ SỞ DỮ LIỆU
 // =============================================================================
 router.get('/meta-options', async (req, res) => {
   try {
     const [majorsRes, cohortsRes, classesRes] = await Promise.all([
-      // Lấy danh sách ngành thực tế đã có trong CSDL
       pool.query(`
         SELECT DISTINCT major_name 
         FROM faculty_majors 
@@ -24,7 +20,6 @@ router.get('/meta-options', async (req, res) => {
         ORDER BY major_name ASC
       `).catch(() => ({ rows: [] })),
 
-      // Lấy danh sách khóa thực tế từ bảng cấu hình hoặc bảng kế hoạch
       pool.query(`
         SELECT DISTINCT cohort_code 
         FROM academic_cohorts 
@@ -32,7 +27,6 @@ router.get('/meta-options', async (req, res) => {
         ORDER BY cohort_code DESC
       `).catch(() => ({ rows: [] })),
 
-      // Lấy toàn bộ danh sách lớp thực tế đã nạp từ các file Excel vào curriculum_plans
       pool.query(`
         SELECT DISTINCT class_name 
         FROM curriculum_plans 
@@ -41,7 +35,6 @@ router.get('/meta-options', async (req, res) => {
       `).catch(() => ({ rows: [] }))
     ]);
 
-    // Trích xuất danh sách mảng chuỗi động
     const majors = majorsRes.rows.map(r => r.major_name);
     const cohorts = cohortsRes.rows.map(r => r.cohort_code);
     const classes = classesRes.rows.map(r => r.class_name);
@@ -51,12 +44,11 @@ router.get('/meta-options', async (req, res) => {
       data: {
         majors,
         cohorts,
-        classes // Trả về chính xác các lớp có trong CSDL (ví dụ: HTTT2311, HTTT2511,...), nếu chưa có lớp nào thì trả về []
+        classes
       }
     });
   } catch (error) {
     console.error("Lỗi truy vấn meta-options:", error.message);
-    // Khi có lỗi xảy ra, trả về mảng rỗng chứ không gán cứng bất kỳ lớp nào
     res.status(500).json({
       success: false,
       message: error.message,
@@ -78,7 +70,6 @@ router.get('/', async (req, res) => {
     let query = `SELECT * FROM curriculum_plans WHERE 1=1`;
     const params = [];
 
-    // Ưu tiên lọc theo lớp cụ thể
     if (className && className !== 'all') {
       params.push(className.trim());
       query += ` AND class_name = $${params.length}`;
@@ -87,16 +78,12 @@ router.get('/', async (req, res) => {
       query += ` AND major_name ILIKE $${params.length}`;
     }
 
-    // Nhận diện linh hoạt Khóa: K23, 23, K25, 2025...
     if (cohort && cohort !== 'all') {
       const cleanCohort = cohort.replace(/[^0-9]/g, '');
       params.push(`%${cleanCohort}%`);
       query += ` AND (cohort ILIKE $${params.length} OR cohort ILIKE '20' || $${params.length} OR cohort IS NULL)`;
     }
 
-    // TÍNH TOÁN SEMESTER_INDEX:
-    // Nếu truyền cả year và semester (mô hình 3 HK/năm):
-    // Năm 1, Kỳ 1 -> index 1 | Năm 4, Kỳ 1 -> index (4-1)*3 + 1 = 10
     let targetSemIndex = null;
     if (year && semester && semester !== 'all') {
       const y = parseInt(year);
@@ -116,8 +103,6 @@ router.get('/', async (req, res) => {
     query += ` ORDER BY semester_index ASC, id ASC`;
     let result = await pool.query(query, params);
 
-    // Fallback thông minh: Nếu kỳ cụ thể chưa có môn (ví dụ K23 kỳ 10 chưa nhập excel),
-    // lấy danh sách môn học của chính chuyên ngành đó để sinh viên vẫn có môn ôn tập
     if (result.rows.length === 0 && major && major !== 'all') {
       const fallbackQuery = `
         SELECT * FROM curriculum_plans 
@@ -156,7 +141,6 @@ router.post('/upload-excel', upload.single('file'), async (req, res) => {
     let currentSemIdx = 1;
     let currentSemName = 'Học kỳ 1';
 
-    // Bóc tách thông tin tiêu đề từ 10 dòng đầu
     for (let r = 0; r < Math.min(10, rawData.length); r++) {
       const line = String(rawData[r]?.[0] || '');
       if (line.includes('Mã ngành:') || line.includes('Khóa:') || line.includes('Mã lớp:')) {
@@ -176,7 +160,6 @@ router.post('/upload-excel', upload.single('file'), async (req, res) => {
       }
     }
 
-    // Xóa dữ liệu cũ của lớp trước khi nạp đè dữ liệu mới
     await pool.query('DELETE FROM curriculum_plans WHERE class_name = $1', [className]);
 
     const parsedSubjects = [];
@@ -185,8 +168,8 @@ router.post('/upload-excel', upload.single('file'), async (req, res) => {
       if (!row || row.length === 0) continue;
 
       const col0 = String(row[0] || '').trim();
-      const col1 = String(row[1] || '').trim(); // Mã HP
-      const col2 = String(row[2] || '').trim(); // Tên HP
+      const col1 = String(row[1] || '').trim();
+      const col2 = String(row[2] || '').trim();
 
       if (col0.toUpperCase().includes('HỌC KỲ') && col0.toUpperCase().includes('NĂM HỌC')) {
         const m = col0.match(/\d{4}-\d{4}/);
@@ -221,7 +204,6 @@ router.post('/upload-excel', upload.single('file'), async (req, res) => {
       }
     }
 
-    // Lưu hàng loạt môn học vào PostgreSQL
     for (const s of parsedSubjects) {
       await pool.query(`
         INSERT INTO curriculum_plans 
