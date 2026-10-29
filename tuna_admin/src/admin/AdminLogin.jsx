@@ -191,7 +191,7 @@ export const AdminLogin = ({ onLoginSuccess, onBackToApp }) => {
       const data = await res.json();
       if (data.success) {
         setShowPermissionModal(false);
-        setSuccessMsg("✅ Đã gửi đơn thành công! Vui lòng chờ Super Admin phê duyệt.");
+        setSuccessMsg("Đã gửi đơn thành công! Vui lòng chờ Super Admin phê duyệt.");
         setRequestReason("");
       } else {
         alert(data.message || "Lỗi khi gửi yêu cầu.");

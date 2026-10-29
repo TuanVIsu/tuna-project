@@ -3,9 +3,12 @@ import React, { useState, useEffect, useMemo } from "react";
 
 const API_BASE = import.meta.env.VITE_API_URL || "https://tuna-project.onrender.com/api";
 
-export const AdminDashboard = ({ onNavigate }) => {
+export const AdminDashboard = ({ onNavigate, currentAdmin }) => {
   const [loading, setLoading] = useState(false);
   const [togglingAi, setTogglingAi] = useState(false);
+  const [actionAlert, setActionAlert] = useState("");
+
+  const isSuperAdmin = currentAdmin?.role === "super_admin";
 
   const [stats, setStats] = useState({
     totalDocs: 0,
@@ -70,7 +73,13 @@ export const AdminDashboard = ({ onNavigate }) => {
     fetchDashboardData();
   }, []);
 
+  // Bật / tắt AI: Chặn ngay nếu không phải Super Admin
   const handleToggleAi = async () => {
+    if (!isSuperAdmin) {
+      setActionAlert("Bạn không có quyền thay đổi trạng thái Gemini AI Gateway. Quyền này chỉ dành cho Super Admin!");
+      return;
+    }
+
     const targetStatus = !aiData.enabled;
     setTogglingAi(true);
     try {
@@ -90,13 +99,16 @@ export const AdminDashboard = ({ onNavigate }) => {
     }
   };
 
-  const totalPending = stats.pendingStudents + stats.pendingStaff;
+  const totalPending = isSuperAdmin
+    ? stats.pendingStudents + stats.pendingStaff
+    : stats.pendingStudents;
+
   const tokenUsagePercent = useMemo(() => {
     if (!aiData.tokenLimit || aiData.tokenLimit <= 0) return 0;
     return Math.min(Math.round((aiData.dailyTokens / aiData.tokenLimit) * 100), 100);
   }, [aiData.dailyTokens, aiData.tokenLimit]);
 
-  // Bộ 6 thẻ chỉ số chuẩn hóa
+  // Bộ 6 thẻ chỉ số: Cả Giảng viên và Admin đều bấm xem & chuyển tab bình thường
   const statCards = [
     {
       label: "Sinh viên vào lớp",
@@ -159,6 +171,25 @@ export const AdminDashboard = ({ onNavigate }) => {
     <div className="w-100 min-vh-100 bg-[#f8fafc]" style={{ padding: "32px 40px 64px 40px", color: "#1e293b" }}>
       <div className="d-flex flex-column gap-4 mx-auto" style={{ maxWidth: "1520px" }}>
         
+        {/* CẢNH BÁO KHI BỊ CHẶN HÀNH ĐỘNG TRỰC TIẾP TẠI CHỖ */}
+        {actionAlert && (
+          <div
+            className="rounded-4 p-3 border d-flex align-items-center justify-content-between gap-3 shadow-sm"
+            style={{ backgroundColor: "#fff1f2", borderColor: "#fecdd3", color: "#9f1239" }}
+          >
+            <div className="d-flex align-items-center gap-2.5">
+              <i className="bi bi-exclamation-triangle-fill fs-5 text-danger"></i>
+              <span style={{ fontSize: "13px", fontWeight: "600" }}>{actionAlert}</span>
+            </div>
+            <button
+              onClick={() => setActionAlert("")}
+              className="btn btn-sm btn-link p-0 text-danger border-0 cursor-pointer"
+            >
+              <i className="bi bi-x-lg"></i>
+            </button>
+          </div>
+        )}
+
         {/* 1. Header Banner */}
         <div
           className="rounded-4 p-4 text-white shadow-sm position-relative overflow-hidden border-0"
@@ -167,18 +198,6 @@ export const AdminDashboard = ({ onNavigate }) => {
             boxShadow: "0 10px 25px -5px rgba(37, 99, 235, 0.25)",
           }}
         >
-          <div
-            className="position-absolute rounded-circle pointer-events-none"
-            style={{
-              width: "320px",
-              height: "320px",
-              background: "rgba(255, 255, 255, 0.08)",
-              top: "-80px",
-              right: "-40px",
-              filter: "blur(40px)",
-            }}
-          />
-
           <div className="d-flex flex-wrap justify-content-between align-items-center gap-3 position-relative z-1">
             <div className="space-y-1">
               <div className="d-flex align-items-center gap-2 mb-2">
@@ -194,7 +213,7 @@ export const AdminDashboard = ({ onNavigate }) => {
                 Bảng Điều Khiển Trung Tâm
               </h3>
               <p className="text-white-50 m-0 small pt-1">
-                Giám sát hạn mức AI Gemini, chuỗi học tập và vận hành hệ thống Zalo Mini App.
+                Giám sát hạn mức AI Gemini, kế hoạch đào tạo, lịch học và kiểm duyệt sinh viên.
               </p>
             </div>
 
@@ -202,18 +221,7 @@ export const AdminDashboard = ({ onNavigate }) => {
               onClick={fetchDashboardData}
               disabled={loading}
               className="btn btn-white bg-white text-primary rounded-pill px-4 py-2.5 fw-bold shadow-sm d-inline-flex align-items-center gap-2 border-0 cursor-pointer"
-              style={{
-                fontSize: "13px",
-                transition: "all 0.2s ease",
-              }}
-              onMouseEnter={(e) => {
-                e.currentTarget.style.transform = "translateY(-2px)";
-                e.currentTarget.style.boxShadow = "0 8px 20px rgba(0,0,0,0.12)";
-              }}
-              onMouseLeave={(e) => {
-                e.currentTarget.style.transform = "translateY(0)";
-                e.currentTarget.style.boxShadow = "0 2px 4px rgba(0,0,0,0.06)";
-              }}
+              style={{ fontSize: "13px" }}
             >
               <i className={`bi bi-arrow-clockwise ${loading ? "spinner-border spinner-border-sm" : ""}`}></i>
               <span>{loading ? "Đang đồng bộ..." : "Đồng bộ dữ liệu"}</span>
@@ -243,7 +251,11 @@ export const AdminDashboard = ({ onNavigate }) => {
                   Đang có {totalPending} yêu cầu chờ phê duyệt vào hệ thống
                 </div>
                 <div className="text-secondary small mt-0.5">
-                  Gồm <b>{stats.pendingStudents}</b> sinh viên đăng ký lớp và <b>{stats.pendingStaff}</b> yêu cầu cấp quyền quản trị.
+                  {isSuperAdmin ? (
+                    <>Gồm <b>{stats.pendingStudents}</b> sinh viên đăng ký lớp và <b>{stats.pendingStaff}</b> yêu cầu cấp quyền quản trị.</>
+                  ) : (
+                    <>Có <b>{stats.pendingStudents}</b> sinh viên đăng ký chờ Giảng viên xác nhận vào lớp.</>
+                  )}
                 </div>
               </div>
             </div>
@@ -253,18 +265,12 @@ export const AdminDashboard = ({ onNavigate }) => {
                 <button
                   onClick={() => onNavigate && onNavigate("users")}
                   className="btn btn-warning text-white fw-bold px-3.5 py-2 rounded-pill border-0 shadow-xs cursor-pointer"
-                  style={{
-                    fontSize: "12.5px",
-                    backgroundColor: "#d97706",
-                    transition: "all 0.2s",
-                  }}
-                  onMouseEnter={(e) => e.currentTarget.style.transform = "scale(1.03)"}
-                  onMouseLeave={(e) => e.currentTarget.style.transform = "scale(1)"}
+                  style={{ fontSize: "12.5px", backgroundColor: "#d97706" }}
                 >
                   Duyệt sinh viên ({stats.pendingStudents}) →
                 </button>
               )}
-              {stats.pendingStaff > 0 && (
+              {stats.pendingStaff > 0 && isSuperAdmin && (
                 <button
                   onClick={() => onNavigate && onNavigate("staff")}
                   className="btn btn-outline-secondary fw-bold px-3.5 py-2 rounded-pill bg-white shadow-xs"
@@ -277,7 +283,7 @@ export const AdminDashboard = ({ onNavigate }) => {
           </div>
         )}
 
-        {/* 3. LƯỚI 6 THẺ CHỈ SỐ: Trải đều 6 cột thẳng hàng */}
+        {/* 3. LƯỚI 6 THẺ CHỈ SỐ */}
         <div>
           <div className="d-flex align-items-center gap-2 mb-3 px-1">
             <span
@@ -307,17 +313,7 @@ export const AdminDashboard = ({ onNavigate }) => {
                   padding: "18px 22px",
                   borderColor: c.isPendingAlert ? "#f59e0b" : "#f1f5f9",
                   boxShadow: "0 2px 6px rgba(0,0,0,0.02)",
-                  transition: "all 0.25s cubic-bezier(0.16, 1, 0.3, 1)",
-                }}
-                onMouseEnter={(e) => {
-                  e.currentTarget.style.transform = "translateY(-4px)";
-                  e.currentTarget.style.boxShadow = `0 12px 24px -6px rgba(0,0,0,0.08), 0 0 0 1px ${c.borderHover}`;
-                  e.currentTarget.style.borderColor = c.borderHover;
-                }}
-                onMouseLeave={(e) => {
-                  e.currentTarget.style.transform = "translateY(0)";
-                  e.currentTarget.style.boxShadow = "0 2px 6px rgba(0,0,0,0.02)";
-                  e.currentTarget.style.borderColor = c.isPendingAlert ? "#f59e0b" : "#f1f5f9";
+                  transition: "all 0.2s ease",
                 }}
               >
                 <div className="pe-2">
@@ -346,7 +342,7 @@ export const AdminDashboard = ({ onNavigate }) => {
           </div>
         </div>
 
-        {/* 4. PHÍM TẮT QUẢN TRỊ */}
+        {/* 4. PHÍM TẮT QUẢN TRỊ (Đã bỏ ban cán sự, thay bằng Khung đào tạo & kiểm duyệt) */}
         <div>
           <div className="d-flex align-items-center gap-2 mb-3 px-1">
             <span
@@ -368,10 +364,10 @@ export const AdminDashboard = ({ onNavigate }) => {
             }}
           >
             {[
-              { label: "Duyệt sinh viên vào lớp", sub: "Hồ sơ đăng ký tài khoản", icon: "bi-person-check", action: "users", color: "#059669", bg: "#ecfdf5" },
-              { label: "Cập nhật thời khóa biểu", sub: "Lịch học & phòng máy", icon: "bi-calendar-plus", action: "schedules", color: "#2563eb", bg: "#eff6ff" },
-              { label: "Tải lên giáo trình & đề thi", sub: "Slide, tài liệu học tập", icon: "bi-cloud-arrow-up", action: "library", color: "#dc2626", bg: "#fef2f2" },
-              { label: "Phân quyền ban cán sự", sub: "Quản lý moderator & giảng viên", icon: "bi-shield-lock", action: "staff", color: "#475569", bg: "#f1f5f9" },
+              { label: "Duyệt sinh viên vào lớp", sub: "Xác nhận hồ sơ vào danh sách lớp", icon: "bi-person-check", action: "users", color: "#059669", bg: "#ecfdf5" },
+              { label: "Kế hoạch khung đào tạo", sub: "Nhập file Excel & quản lý môn học", icon: "bi-journal-bookmark", action: "curriculum", color: "#d97706", bg: "#fffbeb" },
+              { label: "Cập nhật thời khóa biểu", sub: "Lịch học, lịch thi & phòng máy", icon: "bi-calendar-plus", action: "schedules", color: "#2563eb", bg: "#eff6ff" },
+              { label: "Kiểm duyệt thảo luận", sub: "Xử phạt & cảnh báo vi phạm nội quy", icon: "bi-chat-square-text", action: "community", color: "#dc2626", bg: "#fef2f2" },
             ].map((act, idx) => (
               <div
                 key={idx}
@@ -381,17 +377,7 @@ export const AdminDashboard = ({ onNavigate }) => {
                   padding: "16px 20px",
                   borderColor: "#f1f5f9",
                   boxShadow: "0 2px 6px rgba(0,0,0,0.02)",
-                  transition: "all 0.25s cubic-bezier(0.16, 1, 0.3, 1)",
-                }}
-                onMouseEnter={(e) => {
-                  e.currentTarget.style.transform = "translateY(-3px)";
-                  e.currentTarget.style.boxShadow = "0 8px 20px rgba(0,0,0,0.06)";
-                  e.currentTarget.style.borderColor = act.color;
-                }}
-                onMouseLeave={(e) => {
-                  e.currentTarget.style.transform = "translateY(0)";
-                  e.currentTarget.style.boxShadow = "0 2px 6px rgba(0,0,0,0.02)";
-                  e.currentTarget.style.borderColor = "#f1f5f9";
+                  transition: "all 0.2s ease",
                 }}
               >
                 <div
@@ -413,13 +399,10 @@ export const AdminDashboard = ({ onNavigate }) => {
           </div>
         </div>
 
-        {/* 5. GATEWAY GEMINI AI: Trải dài full-width cao cấp, cực kỳ rộng rãi */}
+        {/* 5. GATEWAY GEMINI AI: Giảng viên chỉ xem thống kê, bấm công tắc bật/tắt sẽ bị chặn ngay */}
         <div
           className="bg-white rounded-4 border overflow-hidden"
-          style={{
-            borderColor: "#f1f5f9",
-            boxShadow: "0 4px 14px rgba(0,0,0,0.03)",
-          }}
+          style={{ borderColor: "#f1f5f9", boxShadow: "0 4px 14px rgba(0,0,0,0.03)" }}
         >
           <div className="d-flex align-items-center justify-content-between px-4 py-3.5 border-bottom bg-slate-50/50" style={{ borderColor: "#f1f5f9" }}>
             <div className="fw-black text-slate-900 d-flex align-items-center gap-2" style={{ fontSize: "15px" }}>
@@ -430,17 +413,26 @@ export const AdminDashboard = ({ onNavigate }) => {
               <span className="badge bg-primary-subtle text-primary border border-primary-subtle px-3 py-1.5 rounded-pill">
                 Model: <b>{aiData.modelName}</b> (Cache {aiData.cacheHours}h)
               </span>
-              <div className="form-check form-switch mb-0 d-flex align-items-center gap-2">
+              <div
+                className="form-check form-switch mb-0 d-flex align-items-center gap-2"
+                onClick={(e) => {
+                  if (!isSuperAdmin) {
+                    e.preventDefault();
+                    handleToggleAi();
+                  }
+                }}
+              >
                 <input
-                  className="form-check-input cursor-pointer m-0"
+                  className={`form-check-input ${isSuperAdmin ? "cursor-pointer" : "cursor-not-allowed"} m-0`}
                   type="checkbox"
                   role="switch"
                   checked={aiData.enabled}
-                  disabled={togglingAi}
+                  disabled={togglingAi || !isSuperAdmin}
                   onChange={handleToggleAi}
                 />
                 <label className="form-check-label small fw-bold text-secondary">
                   {aiData.enabled ? "Đang bật" : "Tạm dừng"}
+                  {!isSuperAdmin && " (Chỉ Admin)"}
                 </label>
               </div>
             </div>
@@ -448,7 +440,6 @@ export const AdminDashboard = ({ onNavigate }) => {
 
           <div className="p-4">
             <div className="row g-4 align-items-center">
-              {/* Thước đo Token ngang rộng rãi */}
               <div className="col-12 col-lg-7">
                 <div className="p-3.5 rounded-3 bg-slate-50 border border-slate-100">
                   <div className="d-flex justify-content-between align-items-center mb-2">
@@ -470,7 +461,6 @@ export const AdminDashboard = ({ onNavigate }) => {
                 </div>
               </div>
 
-              {/* 2 chỉ số chi phí & lượt gọi */}
               <div className="col-12 col-lg-5">
                 <div className="row g-3">
                   <div className="col-6">
@@ -491,13 +481,10 @@ export const AdminDashboard = ({ onNavigate }) => {
           </div>
         </div>
 
-        {/* 6. BẢNG AUDIT LOGS KIỂM VẾT HỆ THỐNG */}
+        {/* 6. BẢNG AUDIT LOGS: Hiển thị đúng Super Admin & Giảng viên */}
         <div
           className="bg-white rounded-4 border overflow-hidden"
-          style={{
-            borderColor: "#f1f5f9",
-            boxShadow: "0 4px 14px rgba(0,0,0,0.03)",
-          }}
+          style={{ borderColor: "#f1f5f9", boxShadow: "0 4px 14px rgba(0,0,0,0.03)" }}
         >
           <div className="d-flex justify-content-between align-items-center px-4 py-3.5 border-bottom bg-slate-50/50" style={{ borderColor: "#f1f5f9" }}>
             <div className="fw-black text-slate-900 d-flex align-items-center gap-2" style={{ fontSize: "15px" }}>
@@ -521,7 +508,7 @@ export const AdminDashboard = ({ onNavigate }) => {
               <tbody>
                 {auditLogs.length > 0 ? (
                   auditLogs.map((log, idx) => (
-                    <tr key={idx} style={{ transition: "background-color 0.15s ease" }}>
+                    <tr key={idx}>
                       <td className="ps-4 fw-bold text-slate-800">
                         {log.actor_name || "Quản trị viên"}
                       </td>
@@ -530,13 +517,11 @@ export const AdminDashboard = ({ onNavigate }) => {
                           className={`badge rounded-pill px-2.5 py-1 ${
                             log.actor_role === "super_admin"
                               ? "bg-danger-subtle text-danger border border-danger-subtle"
-                              : log.actor_role === "instructor"
-                              ? "bg-primary-subtle text-primary border border-primary-subtle"
-                              : "bg-secondary-subtle text-secondary border border-secondary-subtle"
+                              : "bg-primary-subtle text-primary border border-primary-subtle"
                           }`}
                           style={{ fontSize: "11px" }}
                         >
-                          {log.actor_role === "super_admin" ? "Super Admin" : log.actor_role === "instructor" ? "Giảng viên" : "Moderator"}
+                          {log.actor_role === "super_admin" ? "Super Admin" : "Giảng viên"}
                         </span>
                       </td>
                       <td>
