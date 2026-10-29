@@ -19,20 +19,56 @@ router.get('/stats', async (req, res) => {
       topStreaksRes,
       topResourcesRes
     ] = await Promise.all([
-      // 1. Số sinh viên đã duyệt
-      pool.query(`SELECT COUNT(*) AS total FROM users WHERE role = 'student' AND (verification_status = 'approved' OR is_verified = true)`).catch(() => ({ rows: [{ total: 0 }] })),
-      // 2. Sinh viên chờ duyệt
-      pool.query(`SELECT COUNT(*) AS total FROM users WHERE verification_status = 'pending'`).catch(() => ({ rows: [{ total: 0 }] })),
-      // 3. Yêu cầu cấp quyền staff chờ duyệt
-      pool.query(`SELECT COUNT(*) AS total FROM admin_access_requests WHERE status = 'pending'`).catch(() => ({ rows: [{ total: 0 }] })),
-      // 4. Lịch học & thi (Truy vấn từ bảng schedules đã tối ưu)
-      pool.query(`SELECT COUNT(*) AS total FROM schedules WHERE schedule_scope = 'academic'`).catch(() => ({ rows: [{ total: 0 }] })),
-      // 5. Tài liệu
-      pool.query(`SELECT COUNT(*) AS total FROM admin_library_resources WHERE resource_type = 'doc'`).catch(() => ({ rows: [{ total: 0 }] })),
+      // 1. Số sinh viên đã duyệt chính thức
+      pool.query(`
+        SELECT COUNT(*) AS total 
+        FROM users 
+        WHERE role = 'student' 
+          AND (verification_status = 'approved' OR is_verified = true)
+      `).catch(() => ({ rows: [{ total: 0 }] })),
+
+      // 2. Sinh viên chờ duyệt vào lớp (CHỈ LỌC role = 'student' để tránh nhầm với giảng viên)
+      pool.query(`
+        SELECT COUNT(*) AS total 
+        FROM users 
+        WHERE role = 'student' 
+          AND (verification_status = 'pending' OR is_verified = false)
+      `).catch(() => ({ rows: [{ total: 0 }] })),
+
+      // 3. Yêu cầu cấp quyền Giảng viên chờ duyệt (LỌC TRỰC TIẾP từ bảng users: role = 'teacher' pending)
+      pool.query(`
+        SELECT COUNT(*) AS total 
+        FROM users 
+        WHERE role = 'teacher' 
+          AND verification_status = 'pending'
+      `).catch(() => ({ rows: [{ total: 0 }] })),
+
+      // 4. Lịch học & thi
+      pool.query(`
+        SELECT COUNT(*) AS total 
+        FROM schedules 
+        WHERE schedule_scope = 'academic'
+      `).catch(() => ({ rows: [{ total: 0 }] })),
+
+      // 5. Tài liệu học tập
+      pool.query(`
+        SELECT COUNT(*) AS total 
+        FROM admin_library_resources 
+        WHERE resource_type = 'doc'
+      `).catch(() => ({ rows: [{ total: 0 }] })),
+
       // 6. Video bài giảng
-      pool.query(`SELECT COUNT(*) AS total FROM admin_library_resources WHERE resource_type = 'video'`).catch(() => ({ rows: [{ total: 0 }] })),
+      pool.query(`
+        SELECT COUNT(*) AS total 
+        FROM admin_library_resources 
+        WHERE resource_type = 'video'
+      `).catch(() => ({ rows: [{ total: 0 }] })),
+
       // 7. Tin nhắn thảo luận
-      pool.query(`SELECT COUNT(*) AS total FROM community_messages`).catch(() => ({ rows: [{ total: 0 }] })),
+      pool.query(`
+        SELECT COUNT(*) AS total 
+        FROM community_messages
+      `).catch(() => ({ rows: [{ total: 0 }] })),
 
       // 8. Thống kê sử dụng AI trong ngày từ bảng ai_token_logs
       pool.query(`

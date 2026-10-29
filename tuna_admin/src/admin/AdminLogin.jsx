@@ -593,7 +593,7 @@ export const AdminLogin = ({ onLoginSuccess, onBackToApp }) => {
                       }}
                     >
                       <option value="instructor">Giảng viên / Trợ giảng (Quản lý học liệu, lịch thi, thông báo)</option>
-                      <option value="moderator">Ban cán sự / Moderator (Kiểm duyệt bài viết cộng đồng)</option>
+                    
                     </select>
                   </div>
 
