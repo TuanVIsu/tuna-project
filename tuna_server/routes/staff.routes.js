@@ -7,7 +7,7 @@ const { authenticateToken } = require('../middlewares/auth');
 
 router.use(authenticateToken);
 
-// 1. Danh sách tài khoản Quản trị viên
+// 1. Danh sách Quản trị viên & Giảng viên chính thức
 router.get('/', async (req, res) => {
   try {
     const { rows } = await pool.query(
@@ -20,17 +20,17 @@ router.get('/', async (req, res) => {
               COALESCE(is_active, true) AS "isActive",
               TO_CHAR(created_at, 'DD/MM/YYYY HH24:MI') AS "createdAt"
        FROM users 
-       WHERE role IN ('super_admin', 'instructor', 'moderator')
+       WHERE role IN ('super_admin', 'teacher') 
+         AND verification_status = 'approved'
        ORDER BY id ASC`
     );
     res.json({ success: true, data: rows });
   } catch (err) {
-    console.error('Lỗi GET /admin/staff:', err);
     res.status(500).json({ success: false, message: err.message });
   }
 });
 
-// 2. Tạo thủ công tài khoản Quản trị viên
+// 2. Tạo thủ công tài khoản Quản trị / Giảng viên
 router.post('/', async (req, res) => {
   const { username, email, fullName, role, password, assignedSubject } = req.body;
   try {
@@ -43,40 +43,35 @@ router.post('/', async (req, res) => {
       .replace(/[^a-zA-Z0-9_]/g, '')
       .toLowerCase();
 
+    const targetRole = role === 'super_admin' ? 'super_admin' : 'teacher';
     const rawPassword = password?.trim() || 'Admin@123';
     const hashedPassword = await bcrypt.hash(rawPassword, 10);
-    const permissions = role === 'super_admin' 
-      ? ['all'] 
-      : role === 'instructor' 
-      ? ['library', 'schedules', 'broadcast'] 
-      : ['community'];
+    const permissions = targetRole === 'super_admin' ? ['all'] : ['curriculum', 'schedules', 'users', 'library', 'community'];
 
     const insertRes = await pool.query(
-      `INSERT INTO users (student_code, email, name, role, password_hash, assigned_subject, is_active, custom_permissions)
-       VALUES ($1, $2, $3, $4, $5, $6, true, $7)
+      `INSERT INTO users (student_code, email, name, role, password_hash, assigned_subject, is_active, is_verified, verification_status, custom_permissions)
+       VALUES ($1, $2, $3, $4, $5, $6, true, true, 'approved', $7)
        RETURNING id, student_code AS username, email, name AS "fullName", role, is_active AS "isActive"`,
-      [baseUsername, cleanEmail, fullName.trim(), role || 'instructor', hashedPassword, assignedSubject || null, permissions]
+      [baseUsername, cleanEmail, fullName.trim(), targetRole, hashedPassword, assignedSubject || null, permissions]
     );
 
     res.json({ success: true, message: 'Tạo tài khoản quản trị thành công!', data: insertRes.rows[0] });
   } catch (err) {
-    console.error('Lỗi POST /admin/staff:', err);
-    res.status(500).json({ success: false, message: 'Email hoặc Tên đăng nhập đã tồn tại trong hệ thống!' });
+    if (err.code === '23505') {
+      return res.status(400).json({ success: false, message: 'Email hoặc Tên đăng nhập đã tồn tại trong hệ thống!' });
+    }
+    res.status(500).json({ success: false, message: err.message });
   }
 });
 
-// 3. Cập nhật thông tin tài khoản Quản trị viên
+// 3. Cập nhật thông tin Quản trị viên
 router.put('/:id', async (req, res) => {
   const { id } = req.params;
   const { fullName, role, email, password } = req.body;
 
   try {
-    const check = await pool.query(`SELECT id, password_hash FROM users WHERE id = $1 AND role IN ('super_admin', 'instructor', 'moderator')`, [id]);
-    if (check.rows.length === 0) {
-      return res.status(404).json({ success: false, message: 'Không tìm thấy tài khoản quản trị!' });
-    }
-
     const cleanEmail = email.trim().toLowerCase();
+    const targetRole = role === 'super_admin' ? 'super_admin' : 'teacher';
 
     const checkEmail = await pool.query(
       `SELECT id FROM users WHERE LOWER(email) = $1 AND id != $2`,
@@ -86,33 +81,34 @@ router.put('/:id', async (req, res) => {
       return res.status(400).json({ success: false, message: 'Email đã tồn tại trên một tài khoản khác!' });
     }
 
-    const permissions = role === 'super_admin' 
-      ? ['all'] 
-      : role === 'instructor' 
-      ? ['library', 'schedules', 'broadcast'] 
-      : ['community'];
+    let passwordClause = '';
+    const params = [fullName.trim(), cleanEmail, targetRole, id];
 
-    let finalPassword = check.rows[0].password_hash;
     if (password && password.trim() !== '') {
-      finalPassword = await bcrypt.hash(password.trim(), 10);
+      const hashedPassword = await bcrypt.hash(password.trim(), 10);
+      params.splice(3, 0, hashedPassword);
+      passwordClause = `, password_hash = $4`;
     }
 
     const updateRes = await pool.query(
       `UPDATE users 
-       SET name = $1, email = $2, role = $3, password_hash = $4, custom_permissions = $5
-       WHERE id = $6
+       SET name = $1, email = $2, role = $3 ${passwordClause}
+       WHERE id = $${params.length} AND role IN ('super_admin', 'teacher')
        RETURNING id, COALESCE(student_code, email) AS username, email, name AS "fullName", role, is_active AS "isActive"`,
-      [fullName.trim(), cleanEmail, role, finalPassword, permissions, id]
+      params
     );
+
+    if (updateRes.rows.length === 0) {
+      return res.status(404).json({ success: false, message: 'Không tìm thấy tài khoản!' });
+    }
 
     res.json({ success: true, message: 'Cập nhật tài khoản thành công!', data: updateRes.rows[0] });
   } catch (err) {
-    console.error('Lỗi PUT /admin/staff/:id:', err);
-    res.status(500).json({ success: false, message: err.message || 'Lỗi cập nhật tài khoản!' });
+    res.status(500).json({ success: false, message: err.message });
   }
 });
 
-// 4. Khóa / Mở khóa tài khoản Quản trị viên
+// 4. Khóa / Mở khóa tài khoản
 router.patch('/:id/toggle', async (req, res) => {
   const { id } = req.params;
   try {
@@ -134,12 +130,11 @@ router.patch('/:id/toggle', async (req, res) => {
       message: newStatus ? 'Đã kích hoạt lại tài khoản' : 'Đã tạm khóa tài khoản' 
     });
   } catch (err) {
-    console.error('Lỗi PATCH /admin/staff/:id/toggle:', err);
     res.status(500).json({ success: false, message: err.message });
   }
 });
 
-// 5. Xóa tài khoản Quản trị viên
+// 5. Xóa tài khoản
 router.delete('/:id', async (req, res) => {
   const { id } = req.params;
   try {
@@ -154,157 +149,116 @@ router.delete('/:id', async (req, res) => {
     await pool.query(`DELETE FROM users WHERE id = $1`, [id]);
     res.json({ success: true, message: 'Đã xóa tài khoản khỏi hệ thống!' });
   } catch (err) {
-    console.error('Lỗi DELETE /admin/staff/:id:', err);
     res.status(500).json({ success: false, message: err.message });
   }
 });
 
-// 6. Danh sách yêu cầu cấp quyền Google
+// 6. Danh sách yêu cầu cấp quyền Giảng viên (Truy vấn ngay từ users pending)
 router.get('/access-requests', async (req, res) => {
   try {
     const { rows } = await pool.query(
-      `SELECT id, full_name AS "fullName", email, reason, 
-              requested_role AS "requestedRole", 
-              COALESCE(status, 'pending') AS status,
+      `SELECT id, name AS "fullName", email, faculty AS reason, 
+              role AS "requestedRole", 
+              verification_status AS status,
               TO_CHAR(created_at, 'DD/MM/YYYY HH24:MI') AS "createdAt"
-       FROM admin_access_requests 
+       FROM users 
+       WHERE role = 'teacher' AND verification_status = 'pending'
        ORDER BY created_at DESC`
     );
     res.json({ success: true, data: rows });
   } catch (err) {
-    console.error('Lỗi GET /admin/staff/access-requests:', err);
-    res.status(500).json({ success: false, message: err.message });
+    res.json({ success: true, data: [] });
   }
 });
 
-// 7. Danh sách yêu cầu đặt lại mật khẩu
+// 7. Danh sách yêu cầu đặt lại mật khẩu (Lọc tài khoản staff có yêu cầu reset)
 router.get('/password-resets', async (req, res) => {
   try {
     const { rows } = await pool.query(
-      `SELECT r.id, r.email, r.note, 
-              COALESCE(r.status, 'pending') AS status,
-              TO_CHAR(r.created_at, 'DD/MM/YYYY HH24:MI') AS "createdAt",
-              u.name AS "fullName", u.role, COALESCE(u.student_code, u.email) AS username
-       FROM admin_password_resets r
-       LEFT JOIN users u ON LOWER(u.email) = LOWER(r.email)
-       ORDER BY r.created_at DESC`
+      `SELECT id, email, name AS "fullName", role, 
+              COALESCE(student_code, email) AS username,
+              'Yêu cầu cấp lại mật khẩu' AS note,
+              'pending' AS status,
+              TO_CHAR(created_at, 'DD/MM/YYYY HH24:MI') AS "createdAt"
+       FROM users 
+       WHERE role IN ('super_admin', 'teacher') 
+         AND otp_code IS NOT NULL
+       ORDER BY created_at DESC`
     );
     res.json({ success: true, data: rows });
   } catch (err) {
-    console.error('Lỗi GET /admin/staff/password-resets:', err);
-    res.status(500).json({ success: false, message: err.message });
+    res.json({ success: true, data: [] });
   }
 });
 
-// 8. Duyệt / Từ chối yêu cầu cấp quyền Google
+// 8. Duyệt / Từ chối yêu cầu cấp quyền Giảng viên
 router.post('/approve-access', async (req, res) => {
-  const { requestId, email, fullName, role, action = 'approve' } = req.body;
+  const { requestId, email, action = 'approve' } = req.body;
   try {
-    const cleanEmail = email.toLowerCase().trim();
-
     if (action === 'reject') {
-      await pool.query(`UPDATE admin_access_requests SET status = 'rejected' WHERE id = $1`, [requestId]);
-      return res.json({ success: true, message: `Đã từ chối cấp quyền cho ${cleanEmail}` });
+      await pool.query(`UPDATE users SET verification_status = 'rejected', is_active = false WHERE id = $1 OR LOWER(email) = LOWER($2)`, [requestId, email]);
+      return res.json({ success: true, message: `Đã từ chối cấp quyền` });
     }
 
-    const baseUsername = cleanEmail.split('@')[0].replace(/[^a-zA-Z0-9_]/g, '');
-    const permissions = role === 'instructor' ? ['library', 'schedules', 'broadcast'] : ['community'];
-    const defaultHashedPassword = await bcrypt.hash('Admin@123', 10);
-
     await pool.query(
-      `INSERT INTO users (student_code, email, name, role, password_hash, is_active, custom_permissions)
-       VALUES ($1, $2, $3, $4, $5, true, $6)
-       ON CONFLICT (email) DO UPDATE 
-       SET role = EXCLUDED.role, is_active = true, custom_permissions = EXCLUDED.custom_permissions`,
-      [baseUsername, cleanEmail, fullName, role || 'instructor', defaultHashedPassword, permissions]
+      `UPDATE users 
+       SET verification_status = 'approved', is_verified = true, is_active = true 
+       WHERE id = $1 OR LOWER(email) = LOWER($2)`,
+      [requestId, email]
     );
 
-    await pool.query(`UPDATE admin_access_requests SET status = 'approved' WHERE id = $1`, [requestId]);
-    await pool.query(
-      `DELETE FROM admin_access_requests WHERE LOWER(email) = $1 AND id != $2`,
-      [cleanEmail, requestId]
-    );
-
-    res.json({ success: true, message: `Đã duyệt và cấp quyền [${role}] thành công cho ${fullName}!` });
+    res.json({ success: true, message: `Đã duyệt và kích hoạt tài khoản thành công!` });
   } catch (err) {
-    console.error('Lỗi POST /admin/staff/approve-access:', err);
     res.status(500).json({ success: false, message: err.message });
   }
 });
 
 // 9. Duyệt và đặt lại mật khẩu tài khoản
 router.post('/approve-reset-password', async (req, res) => {
-  const { requestId, email, newPassword = 'Admin@123' } = req.body;
+  const { email, newPassword = 'Admin@123' } = req.body;
   try {
     const cleanEmail = email.trim().toLowerCase();
     const hashedPassword = await bcrypt.hash(newPassword.trim(), 10);
 
     await pool.query(
-      `UPDATE users SET password_hash = $1 WHERE LOWER(email) = $2`,
+      `UPDATE users 
+       SET password_hash = $1, otp_code = NULL, otp_expires_at = NULL 
+       WHERE LOWER(email) = $2`,
       [hashedPassword, cleanEmail]
-    );
-
-    await pool.query(`UPDATE admin_password_resets SET status = 'approved' WHERE id = $1`, [requestId]);
-    await pool.query(
-      `DELETE FROM admin_password_resets WHERE LOWER(email) = $1 AND id != $2`,
-      [cleanEmail, requestId]
     );
 
     res.json({ success: true, message: `Mật khẩu của tài khoản ${cleanEmail} đã được đặt lại thành: ${newPassword}` });
   } catch (err) {
-    console.error('Lỗi POST /admin/staff/approve-reset-password:', err);
     res.status(500).json({ success: false, message: err.message });
   }
 });
 
-// 10. Thông báo chờ duyệt cho Super Admin
+// 10. Thông báo chờ duyệt cho Super Admin (Lấy từ bảng users)
 router.get('/notifications', async (req, res) => {
   try {
     const accessReqs = await pool.query(
-      `SELECT id, full_name AS "fullName", email, requested_role AS "role",
+      `SELECT id, name AS "fullName", email, role,
               'access' AS "type",
               TO_CHAR(created_at, 'HH24:MI DD/MM') AS "time"
-       FROM admin_access_requests 
-       WHERE status = 'pending' 
+       FROM users 
+       WHERE role = 'teacher' AND verification_status = 'pending'
        ORDER BY created_at DESC LIMIT 5`
     );
-
-    const resetReqs = await pool.query(
-      `SELECT id, email, note,
-              'password_reset' AS "type",
-              TO_CHAR(created_at, 'HH24:MI DD/MM') AS "time"
-       FROM admin_password_resets 
-       WHERE status = 'pending' 
-       ORDER BY created_at DESC LIMIT 5`
-    );
-
-    const totalCount = accessReqs.rows.length + resetReqs.rows.length;
 
     res.json({
       success: true,
-      totalPending: totalCount,
-      notifications: [
-        ...accessReqs.rows.map((r) => ({
-          id: `acc_${r.id}`,
-          rawId: r.id,
-          type: 'access',
-          title: `Yêu cầu cấp quyền: ${r.fullName}`,
-          desc: `${r.email} xin quyền ${r.role === 'instructor' ? 'Giảng viên' : 'Moderator'}`,
-          time: r.time,
-        })),
-        ...resetReqs.rows.map((r) => ({
-          id: `pwd_${r.id}`,
-          rawId: r.id,
-          type: 'password_reset',
-          title: `Khôi phục mật khẩu`,
-          desc: `Tài khoản ${r.email} yêu cầu cấp lại mật khẩu`,
-          time: r.time,
-        })),
-      ],
+      totalPending: accessReqs.rows.length,
+      notifications: accessReqs.rows.map((r) => ({
+        id: `acc_${r.id}`,
+        rawId: r.id,
+        type: 'access',
+        title: `Yêu cầu cấp quyền: ${r.fullName}`,
+        desc: `${r.email} xin cấp quyền Giảng viên`,
+        time: r.time,
+      })),
     });
   } catch (err) {
-    console.error('Lỗi GET /admin/staff/notifications:', err);
-    res.status(500).json({ success: false, message: err.message });
+    res.json({ success: true, totalPending: 0, notifications: [] });
   }
 });
 

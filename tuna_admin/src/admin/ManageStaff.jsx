@@ -4,7 +4,7 @@ import React, { useState, useEffect, useRef } from "react";
 const API_BASE = import.meta.env.VITE_API_URL || "https://tuna-project.onrender.com/api";
 
 export const ManageStaff = () => {
-  const [subTab, setSubTab] = useState("staff_list"); // 'staff_list' | 'access_requests' | 'password_resets'
+  const [subTab, setSubTab] = useState("staff_list");
   const [loading, setLoading] = useState(false);
   const [staffList, setStaffList] = useState([]);
   const [accessRequests, setAccessRequests] = useState([]);
@@ -15,7 +15,6 @@ export const ManageStaff = () => {
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [editingStaff, setEditingStaff] = useState(null);
 
-  // State Modal Xét duyệt
   const [selectedAccessReq, setSelectedAccessReq] = useState(null);
   const [selectedResetReq, setSelectedResetReq] = useState(null);
   const [customPasswordInput, setCustomPasswordInput] = useState("Admin@123");
@@ -25,17 +24,18 @@ export const ManageStaff = () => {
   const [currentPage, setCurrentPage] = useState(1);
   const itemsPerPage = 8;
 
+  // Mặc định role là teacher
   const [newStaff, setNewStaff] = useState({
     email: "",
     fullName: "",
-    role: "instructor",
+    role: "teacher",
     password: "Admin@123",
   });
 
   const [editFormData, setEditFormData] = useState({
     fullName: "",
     email: "",
-    role: "instructor",
+    role: "teacher",
     password: "",
   });
 
@@ -54,7 +54,6 @@ export const ManageStaff = () => {
     return () => document.removeEventListener("mousedown", handleOutsideClick);
   }, []);
 
-  // Tải đồng bộ tất cả yêu cầu của Staff ngay lập tức để hiện đúng Badge đỏ
   const fetchAllStaffData = async () => {
     setLoading(true);
     try {
@@ -100,9 +99,9 @@ export const ManageStaff = () => {
       });
       const data = await res.json();
       if (data.success) {
-        alert("✅ Tạo tài khoản thành công!");
+        alert("✅ Tạo tài khoản giảng viên thành công!");
         setShowCreateModal(false);
-        setNewStaff({ email: "", fullName: "", role: "instructor", password: "Admin@123" });
+        setNewStaff({ email: "", fullName: "", role: "teacher", password: "Admin@123" });
         fetchAllStaffData();
       } else {
         alert(data.message || "Lỗi tạo tài khoản");
@@ -117,17 +116,16 @@ export const ManageStaff = () => {
     setEditFormData({
       fullName: st.fullName,
       email: st.email,
-      role: st.role,
+      role: st.role === "super_admin" ? "super_admin" : "teacher",
       password: "",
     });
     setActiveMenuId(null);
   };
 
-const handleSaveEdit = async (e) => {
+  const handleSaveEdit = async (e) => {
     e.preventDefault();
     if (!editingStaff) return;
 
-    // Chuẩn bị payload: Chỉ gửi thông tin cần thiết
     const payload = {
       fullName: editFormData.fullName.trim(),
       email: editFormData.email.trim(),
@@ -198,7 +196,7 @@ const handleSaveEdit = async (e) => {
           requestId: selectedAccessReq.id,
           email: selectedAccessReq.email,
           fullName: selectedAccessReq.fullName,
-          role: selectedAccessReq.requestedRole,
+          role: selectedAccessReq.requestedRole === "super_admin" ? "super_admin" : "teacher",
           action,
         }),
       });
@@ -253,7 +251,7 @@ const handleSaveEdit = async (e) => {
     return { background: "#fffbeb", color: "#d97706", border: "1px solid #fde68a", text: "Chờ duyệt" };
   };
 
-  const roleOrder = { super_admin: 1, instructor: 2, moderator: 3 };
+  const roleOrder = { super_admin: 1, teacher: 2, instructor: 2 };
 
   const getSortedAndFilteredDataset = () => {
     let list = [];
@@ -268,7 +266,7 @@ const handleSaveEdit = async (e) => {
       list = [...accessRequests].sort((a, b) => {
         if (a.status === "pending" && b.status !== "pending") return -1;
         if (a.status !== "pending" && b.status === "pending") return 1;
-        return (roleOrder[a.requestedRole] || 99) - (roleOrder[b.requestedRole] || 99);
+        return 0;
       });
     } else if (subTab === "password_resets") {
       list = [...passwordResets].sort((a, b) => {
@@ -297,7 +295,7 @@ const handleSaveEdit = async (e) => {
 
   return (
     <div className="d-flex flex-column gap-3 w-100">
-      {/* 1. Header Toolbar - 3 Tab chuẩn chỉnh */}
+      {/* 1. Header Toolbar */}
       <div
         className="p-2.5 rounded-4 shadow-sm d-flex align-items-center justify-content-between gap-2 bg-white flex-nowrap"
         style={{ border: "1px solid #e2e8f0" }}
@@ -347,7 +345,7 @@ const handleSaveEdit = async (e) => {
             style={{ fontSize: "12.5px", background: "linear-gradient(180deg, #185bf0 0%, #1546cd 100%)" }}
           >
             <i className="bi bi-person-plus-fill"></i>
-            <span>+ Thêm Quản Trị</span>
+            <span>+ Thêm Giảng Viên</span>
           </button>
         )}
       </div>
@@ -359,7 +357,7 @@ const handleSaveEdit = async (e) => {
             <span className="input-group-text bg-light border-end-0 text-muted"><i className="bi bi-search"></i></span>
             <input
               type="text"
-              placeholder="Tìm theo tên, email, tài khoản..."
+              placeholder="Tìm theo tên, email..."
               value={searchTerm}
               onChange={(e) => {
                 setSearchTerm(e.target.value);
@@ -372,7 +370,7 @@ const handleSaveEdit = async (e) => {
           <small className="text-muted fw-semibold">Tổng: <b>{dataset.length}</b> bản ghi</small>
         </div>
 
-        {/* BẢNG 1: TÀI KHOẢN ADMIN */}
+        {/* BẢNG 1: TÀI KHOẢN */}
         {subTab === "staff_list" && (
           <div className="table-responsive" style={{ minHeight: "260px" }}>
             <table className="table table-hover align-middle mb-0" style={{ minWidth: "750px" }}>
@@ -395,6 +393,7 @@ const handleSaveEdit = async (e) => {
                   paginatedData.map((st, index) => {
                     const virtualIndex = (currentPage - 1) * itemsPerPage + index + 1;
                     const isNearBottom = index >= Math.max(0, paginatedData.length - 2);
+                    const isSuper = st.role === "super_admin";
 
                     return (
                       <tr key={st.id} className="text-nowrap">
@@ -410,13 +409,13 @@ const handleSaveEdit = async (e) => {
                           <span
                             className="badge rounded-pill px-2.5 py-1 fw-bold"
                             style={{
-                              background: st.role === "super_admin" ? "#fef2f2" : st.role === "instructor" ? "#eff6ff" : "#fefce8",
-                              color: st.role === "super_admin" ? "#dc2626" : st.role === "instructor" ? "#185bf0" : "#ca8a04",
-                              border: `1px solid ${st.role === "super_admin" ? "#fecaca" : "#bfdbfe"}`,
+                              background: isSuper ? "#fef2f2" : "#eff6ff",
+                              color: isSuper ? "#dc2626" : "#185bf0",
+                              border: `1px solid ${isSuper ? "#fecaca" : "#bfdbfe"}`,
                               fontSize: "10.5px",
                             }}
                           >
-                            {st.role === "super_admin" ? "Super Admin" : st.role === "instructor" ? "Giảng viên" : "Ban cán sự"}
+                            {isSuper ? "Super Admin" : "Giảng viên"}
                           </span>
                         </td>
                         <td>
@@ -433,7 +432,7 @@ const handleSaveEdit = async (e) => {
                           </span>
                         </td>
                         <td className="text-end pe-3 position-relative">
-                          {st.role !== "super_admin" ? (
+                          {!isSuper ? (
                             <div className="d-inline-block position-relative" ref={activeMenuId === st.id ? menuRef : null}>
                               <button
                                 type="button"
@@ -517,7 +516,7 @@ const handleSaveEdit = async (e) => {
                         <td className="text-primary fw-medium">{r.email}</td>
                         <td>
                           <span className="badge rounded-pill px-2.5 py-1 bg-primary-subtle text-primary border border-primary-subtle fw-semibold">
-                            {r.requestedRole === "instructor" ? "Giảng viên" : "Moderator"}
+                            Giảng viên
                           </span>
                         </td>
                         <td className="text-secondary small text-truncate" style={{ maxWidth: "220px" }} title={r.reason}>
@@ -629,7 +628,7 @@ const handleSaveEdit = async (e) => {
           </div>
         )}
 
-        {/* 3. Phân trang */}
+        {/* Phân trang */}
         {!loading && dataset.length > itemsPerPage && (
           <div className="d-flex flex-wrap justify-content-between align-items-center pt-3 mt-2 border-top gap-2">
             <small className="text-muted" style={{ fontSize: "12px" }}>
@@ -657,7 +656,7 @@ const handleSaveEdit = async (e) => {
         )}
       </div>
 
-      {/* MODAL 1: THÊM TÀI KHOẢN MỚI */}
+      {/* MODAL: THÊM TÀI KHOẢN MỚI */}
       {showCreateModal && (
         <div className="modal show d-block p-2 p-sm-3" style={{ backgroundColor: "rgba(15, 23, 42, 0.55)", zIndex: 1055 }}>
           <div className="modal-dialog modal-dialog-centered" style={{ maxWidth: "420px" }}>
@@ -687,7 +686,7 @@ const handleSaveEdit = async (e) => {
                     <input
                       type="email"
                       required
-                      placeholder="VD: a@ctuet.edu.vn"
+                      placeholder="VD: giangvien@ctuet.edu.vn"
                       value={newStaff.email}
                       onChange={(e) => setNewStaff({ ...newStaff, email: e.target.value })}
                       className="form-control form-control-sm rounded-3 shadow-none"
@@ -700,8 +699,7 @@ const handleSaveEdit = async (e) => {
                       onChange={(e) => setNewStaff({ ...newStaff, role: e.target.value })}
                       className="form-select form-select-sm rounded-3 shadow-none"
                     >
-                      <option value="instructor">Giảng viên / Trợ giảng</option>
-                      <option value="moderator">Ban cán sự / Moderator</option>
+                      <option value="teacher">Giảng viên / Trợ giảng</option>
                       <option value="super_admin">Super Admin</option>
                     </select>
                   </div>
@@ -730,7 +728,7 @@ const handleSaveEdit = async (e) => {
         </div>
       )}
 
-      {/* MODAL 2: CHỈNH SỬA TÀI KHOẢN */}
+      {/* MODAL: CHỈNH SỬA TÀI KHOẢN */}
       {editingStaff && (
         <div className="modal show d-block p-2 p-sm-3" style={{ backgroundColor: "rgba(15, 23, 42, 0.55)", zIndex: 1055 }}>
           <div className="modal-dialog modal-dialog-centered" style={{ maxWidth: "420px" }}>
@@ -771,8 +769,7 @@ const handleSaveEdit = async (e) => {
                       onChange={(e) => setEditFormData({ ...editFormData, role: e.target.value })}
                       className="form-select form-select-sm rounded-3 shadow-none"
                     >
-                      <option value="instructor">Giảng viên / Trợ giảng</option>
-                      <option value="moderator">Ban cán sự / Moderator</option>
+                      <option value="teacher">Giảng viên / Trợ giảng</option>
                       <option value="super_admin">Super Admin</option>
                     </select>
                   </div>
@@ -802,7 +799,7 @@ const handleSaveEdit = async (e) => {
         </div>
       )}
 
-      {/* MODAL 3: XÉT DUYỆT CẤP QUYỀN STAFF */}
+      {/* MODAL: XÉT DUYỆT CẤP QUYỀN */}
       {selectedAccessReq && (
         <div className="modal show d-block p-2 p-sm-3" style={{ backgroundColor: "rgba(15, 23, 42, 0.55)", zIndex: 1065 }}>
           <div className="modal-dialog modal-dialog-centered" style={{ maxWidth: "440px" }}>
@@ -819,7 +816,7 @@ const handleSaveEdit = async (e) => {
                   <div className="d-flex justify-content-between align-items-center mb-1">
                     <span className="fw-bold text-dark">{selectedAccessReq.fullName}</span>
                     <span className="badge rounded-pill bg-primary-subtle text-primary">
-                      {selectedAccessReq.requestedRole === "instructor" ? "Giảng viên" : "Moderator"}
+                      Giảng viên
                     </span>
                   </div>
                   <div className="text-secondary small mb-2">{selectedAccessReq.email}</div>
@@ -866,7 +863,7 @@ const handleSaveEdit = async (e) => {
         </div>
       )}
 
-      {/* MODAL 4: CẤP LẠI MẬT KHẨU STAFF */}
+      {/* MODAL: CẤP LẠI MẬT KHẨU */}
       {selectedResetReq && (
         <div className="modal show d-block p-2 p-sm-3" style={{ backgroundColor: "rgba(15, 23, 42, 0.55)", zIndex: 1065 }}>
           <div className="modal-dialog modal-dialog-centered" style={{ maxWidth: "420px" }}>
