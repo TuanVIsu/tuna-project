@@ -30,38 +30,52 @@ const resolveUserId = async (req) => {
   return userRes.rows[0]?.id || null;
 };
 
+// routes/schedules.routes.js
+
 // =============================================================================
-// 1. LẤY DANH MỤC NGÀNH VÀ KHÓA TỰ ĐỘNG TỪ CSDL
+// 1. LẤY DANH MỤC NGÀNH VÀ KHÓA THẬT TỪ CSDL (LOẠI BỎ HARDCODE GẢ)
 // =============================================================================
+// routes/schedules.routes.js - endpoint /admin/meta-options
 router.get('/admin/meta-options', authenticateToken, async (req, res) => {
   try {
-    const majorsRes = await pool.query(
-      `SELECT major_code AS "majorCode", major_name AS "majorName" 
-       FROM faculty_majors 
-       ORDER BY id ASC`
-    );
+    const [majorsRes, cohortsRes, classesRes] = await Promise.all([
+      // 1. Lấy Ngành từ faculty_majors
+      pool.query(`
+        SELECT major_code AS "majorCode", major_name AS "majorName" 
+        FROM faculty_majors 
+        ORDER BY id ASC
+      `),
 
-    const cohortsRes = await pool.query(
-      `SELECT cohort_code AS "cohortCode", admission_year AS "admissionYear" 
-       FROM academic_cohorts 
-       WHERE is_active = TRUE 
-       ORDER BY admission_year DESC`
-    );
+      // 2. Lấy Khóa từ faculty_majors và academic_cohorts
+      pool.query(`
+        SELECT DISTINCT applied_cohort AS "cohortCode" 
+        FROM faculty_majors 
+        WHERE applied_cohort IS NOT NULL AND applied_cohort <> '' AND UPPER(applied_cohort) <> 'ALL'
+        UNION
+        SELECT DISTINCT cohort_code AS "cohortCode" 
+        FROM academic_cohorts 
+        WHERE is_active = TRUE
+      `),
 
-    const majors = majorsRes.rows.length > 0 
-      ? majorsRes.rows 
-      : [{ majorCode: "HTTT", majorName: "Hệ Thống Thông Tin" }];
-
-    const cohorts = cohortsRes.rows.length > 0 
-      ? cohortsRes.rows.map(r => r.cohortCode) 
-      : ["K25", "K23", "K22", "K21", "K20"];
+      // 3. LẤY TOÀN BỘ LỚP THỰC TẾ TỪ CSDL (curriculum_plans & schedules)
+      pool.query(`
+        SELECT DISTINCT class_name AS "className", cohort, major_name AS "majorName"
+        FROM curriculum_plans 
+        WHERE class_name IS NOT NULL AND class_name <> ''
+        UNION
+        SELECT DISTINCT class_name AS "className", cohort, faculty_major AS "majorName"
+        FROM schedules
+        WHERE class_name IS NOT NULL AND class_name <> ''
+        ORDER BY "className" ASC
+      `)
+    ]);
 
     res.json({
       success: true,
       data: {
-        majors,
-        cohorts,
-        classes: {}
+        majors: majorsRes.rows.length > 0 ? majorsRes.rows : [{ majorCode: "HTTT", majorName: "Hệ Thống Thông Tin" }],
+        cohorts: cohortsRes.rows.map(r => r.cohortCode).filter(Boolean),
+        classes: classesRes.rows.map(r => r.className).filter(Boolean) // Danh sách lớp thật từ CSDL
       }
     });
   } catch (err) {

@@ -4,7 +4,6 @@ import React, { useState, useEffect, useRef, useCallback } from "react";
 const API_BASE = import.meta.env.VITE_API_URL || "https://tuna-project.onrender.com/api";
 
 export const ManageCurriculum = () => {
-  // 1. Dữ liệu Danh mục động từ CSDL (Không gán cứng)
   const [majors, setMajors] = useState([]);
   const [cohorts, setCohorts] = useState([]);
   const [availableClasses, setAvailableClasses] = useState(["all"]);
@@ -13,7 +12,6 @@ export const ManageCurriculum = () => {
   const [selectedCohort, setSelectedCohort] = useState("");
   const [selectedClass, setSelectedClass] = useState("all");
 
-  // Phân tầng Năm và Học kỳ (Mô hình 3 HK/năm)
   const [selectedYearTab, setSelectedYearTab] = useState(1);
   const [selectedSemester, setSelectedSemester] = useState(1);
   const [curriculumList, setCurriculumList] = useState([]);
@@ -21,7 +19,6 @@ export const ManageCurriculum = () => {
   const [searchTerm, setSearchTerm] = useState("");
   const [uploading, setUploading] = useState(false);
 
-  // Modal Thêm / Sửa
   const [showModal, setShowModal] = useState(false);
   const [editingItem, setEditingItem] = useState(null);
   const fileInputRef = useRef(null);
@@ -40,27 +37,23 @@ export const ManageCurriculum = () => {
     Authorization: `Bearer ${localStorage.getItem("admin_token") || localStorage.getItem("token") || ""}`,
   }), []);
 
-  // 2. Nạp danh mục Ngành, Khóa, Lớp 100% từ CSDL qua /curriculum/meta-options
+  // 1. Nạp danh mục Ngành, Khóa, Lớp (Chỉ chạy 1 lần khi mount)
   useEffect(() => {
+    let isMounted = true;
     const fetchMetaOptions = async () => {
       try {
         const res = await fetch(`${API_BASE}/curriculum/meta-options`, { headers: getHeaders() });
         const d = await res.json();
-        if (d.success && d.data) {
+        if (isMounted && d.success && d.data) {
           const mList = d.data.majors || [];
-          const cList = d.data.cohorts || [];
+          const cList = d.data.cohorts && d.data.cohorts.length > 0 ? d.data.cohorts : ["K23", "K24", "K25"];
           const clsList = d.data.classes || [];
 
           setMajors(mList);
           setCohorts(cList);
 
-          if (mList.length > 0 && !selectedMajor) {
-            setSelectedMajor(mList[0]);
-          }
-          if (cList.length > 0 && !selectedCohort) {
-            setSelectedCohort(cList[0]);
-          }
-
+          setSelectedMajor((prev) => prev || mList[0] || "");
+          setSelectedCohort((prev) => prev || (cList.find((c) => c.includes("23")) || cList[0] || ""));
           setAvailableClasses(["all", ...clsList]);
         }
       } catch (err) {
@@ -68,9 +61,10 @@ export const ManageCurriculum = () => {
       }
     };
     fetchMetaOptions();
-  }, [getHeaders, selectedMajor, selectedCohort]);
+    return () => { isMounted = false; };
+  }, [getHeaders]);
 
-  // 3. Tải danh sách môn học từ CSDL theo bộ lọc
+  // 2. Tải danh sách môn học từ CSDL theo bộ lọc
   const fetchCurriculum = useCallback(async () => {
     if (!selectedMajor || !selectedCohort) return;
     setLoading(true);
@@ -98,7 +92,6 @@ export const ManageCurriculum = () => {
     fetchCurriculum();
   }, [fetchCurriculum]);
 
-  // Điều hướng kỳ và tab năm tương ứng
   const handleSelectSemester = (sem) => {
     setSelectedSemester(sem);
     if (sem <= 3) setSelectedYearTab(1);
@@ -107,7 +100,6 @@ export const ManageCurriculum = () => {
     else setSelectedYearTab(4);
   };
 
-  // Nạp file Excel kế hoạch đào tạo
   const handleFileUpload = async (e) => {
     const file = e.target.files[0];
     if (!file) return;
@@ -137,7 +129,6 @@ export const ManageCurriculum = () => {
     }
   };
 
-  // Lưu môn học (Thêm mới hoặc Cập nhật)
   const handleSave = async (e) => {
     e.preventDefault();
     try {
@@ -198,13 +189,11 @@ export const ManageCurriculum = () => {
 
   return (
     <div className="w-100 d-flex flex-column pb-5" style={{ color: "#1e293b" }}>
-      
-      {/* 1. KHỐI ĐIỀU KHIỂN & BỘ LỌC TRUNG TÂM (Đã bổ sung mb-4 tạo khoảng cách rõ ràng) */}
+      {/* 1. KHỐI ĐIỀU KHIỂN & BỘ LỌC */}
       <div 
         className="bg-white rounded-4 p-4 border shadow-sm mb-4"
         style={{ borderColor: "#f1f5f9", boxShadow: "0 4px 16px rgba(0,0,0,0.03)" }}
       >
-        {/* Hàng 1: Tiêu đề & Nút thao tác */}
         <div className="d-flex flex-column flex-md-row align-items-md-center justify-content-between gap-3 mb-3">
           <div className="d-flex align-items-center gap-3">
             <div
@@ -219,9 +208,7 @@ export const ManageCurriculum = () => {
             </div>
             <div>
               <div className="d-flex align-items-center gap-2">
-                <h5 className="fw-black text-dark mb-0 fs-6">
-                  Kế Hoạch Khung Đào Tạo
-                </h5>
+                <h5 className="fw-black text-dark mb-0 fs-6">Kế Hoạch Khung Đào Tạo</h5>
                 <span className="badge rounded-pill bg-primary-subtle text-primary border border-primary-subtle px-2.5 py-1" style={{ fontSize: "10.5px" }}>
                   Mô hình 3 HK/Năm
                 </span>
@@ -275,7 +262,7 @@ export const ManageCurriculum = () => {
           </div>
         </div>
 
-        {/* Hàng 2: Bộ lọc 3 cấp lấy 100% từ CSDL */}
+        {/* Bộ lọc 3 cấp */}
         <div className="row g-2.5 pt-3 border-top" style={{ borderColor: "#f1f5f9" }}>
           <div className="col-12 col-md-5">
             <label className="form-label text-uppercase text-secondary fw-bold mb-1" style={{ fontSize: "10px" }}>
@@ -303,9 +290,15 @@ export const ManageCurriculum = () => {
               className="form-select form-select-sm rounded-3 fw-semibold bg-light border shadow-none"
               style={{ fontSize: "12.5px" }}
             >
-              {cohorts.map((c) => (
-                <option key={c} value={c}>Khóa {c}</option>
-              ))}
+              {cohorts.length === 0 ? (
+                <option value="">Đang nạp khóa...</option>
+              ) : (
+                cohorts.map((c) => (
+                  <option key={c} value={c}>
+                    {c.startsWith("Khóa") ? c : (c.startsWith("K") ? `Khóa ${c}` : `Khóa K${c}`)}
+                  </option>
+                ))
+              )}
             </select>
           </div>
 
@@ -328,13 +321,10 @@ export const ManageCurriculum = () => {
           </div>
         </div>
 
-        {/* Hàng 3: Điều hướng Năm và Kỳ */}
+        {/* Hàng chọn Năm & Kỳ */}
         <div className="pt-3 border-top d-flex flex-column flex-lg-row align-items-lg-center justify-content-between gap-3" style={{ borderColor: "#f1f5f9" }}>
-          {/* Chọn Năm */}
           <div className="d-flex align-items-center gap-2">
-            <span className="text-secondary small fw-bold text-uppercase" style={{ fontSize: "11px" }}>
-              NĂM:
-            </span>
+            <span className="text-secondary small fw-bold text-uppercase" style={{ fontSize: "11px" }}>NĂM:</span>
             <div className="p-1 bg-light rounded-pill border d-inline-flex gap-1" style={{ borderColor: "#f1f5f9" }}>
               {[
                 { id: 1, label: "Năm 1" },
@@ -349,9 +339,7 @@ export const ManageCurriculum = () => {
                     handleSelectSemester(semestersInYear[y.id][0]);
                   }}
                   className={`btn btn-sm rounded-pill px-3 py-1 fw-bold border-0 transition ${
-                    selectedYearTab === y.id
-                      ? "btn-primary text-white shadow-xs"
-                      : "text-secondary bg-transparent hover:text-dark"
+                    selectedYearTab === y.id ? "btn-primary text-white shadow-xs" : "text-secondary bg-transparent hover:text-dark"
                   }`}
                   style={{
                     fontSize: "11.5px",
@@ -364,11 +352,8 @@ export const ManageCurriculum = () => {
             </div>
           </div>
 
-          {/* Chọn Kỳ */}
           <div className="d-flex align-items-center gap-2 overflow-x-auto">
-            <span className="text-secondary small fw-bold text-uppercase" style={{ fontSize: "11px" }}>
-              KỲ:
-            </span>
+            <span className="text-secondary small fw-bold text-uppercase" style={{ fontSize: "11px" }}>KỲ:</span>
             <div className="d-flex align-items-center gap-1.5 flex-nowrap">
               {semestersInYear[selectedYearTab].map((sem) => {
                 const isActive = selectedSemester === sem;
@@ -377,9 +362,7 @@ export const ManageCurriculum = () => {
                     key={sem}
                     onClick={() => handleSelectSemester(sem)}
                     className={`btn btn-sm rounded-pill px-3 py-1.5 fw-bold transition text-nowrap border-0 ${
-                      isActive
-                        ? "btn-dark text-white shadow-xs"
-                        : "btn-light text-secondary border bg-white"
+                      isActive ? "btn-dark text-white shadow-xs" : "btn-light text-secondary border bg-white"
                     }`}
                     style={{ fontSize: "11.5px" }}
                   >
@@ -392,12 +375,11 @@ export const ManageCurriculum = () => {
         </div>
       </div>
 
-      {/* 2. KHỐI BẢNG DỮ LIỆU HỌC PHẦN (Cách biệt độc lập, không dính sát viền) */}
+      {/* 2. BẢNG DỮ LIỆU */}
       <div 
         className="bg-white rounded-4 p-4 border shadow-sm d-flex flex-column gap-3"
         style={{ borderColor: "#f1f5f9", boxShadow: "0 4px 16px rgba(0,0,0,0.03)" }}
       >
-        {/* Header bảng: Huy hiệu thông tin & Thanh tìm kiếm */}
         <div className="d-flex flex-column flex-md-row justify-content-between align-items-md-center gap-3 pb-2">
           <div className="d-flex align-items-center gap-2 flex-wrap">
             <span
@@ -438,7 +420,6 @@ export const ManageCurriculum = () => {
           </div>
         </div>
 
-        {/* Bảng dữ liệu */}
         <div className="table-responsive" style={{ minHeight: "260px" }}>
           <table className="table table-hover align-middle mb-0 text-nowrap">
             <thead className="table-light">
@@ -471,7 +452,7 @@ export const ManageCurriculum = () => {
                 </tr>
               ) : (
                 filteredList.map((item, index) => (
-                  <tr key={item.id} style={{ transition: "background-color 0.15s" }}>
+                  <tr key={item.id}>
                     <td className="ps-3 fw-bold text-muted text-center" style={{ fontSize: "11px" }}>
                       #{index + 1}
                     </td>
@@ -555,20 +536,6 @@ export const ManageCurriculum = () => {
             </tbody>
           </table>
         </div>
-
-        {/* Footer chú thích */}
-        <div className="pt-3 border-top d-flex flex-wrap align-items-center justify-content-between gap-2 text-muted" style={{ fontSize: "11.5px", borderColor: "#f1f5f9" }}>
-          <div className="d-flex align-items-center gap-2 flex-wrap">
-            <i className="bi bi-info-circle text-primary"></i>
-            <b>Ký hiệu điều kiện:</b>
-            <span><code>(a)</code>: Học trước</span>
-            <span><code>(b)</code>: Tiên quyết</span>
-            <span><code>(c)</code>: Song hành</span>
-          </div>
-          <div>
-            Cấu trúc: <code>Số TC (Lý thuyết, Thực hành, BTL)</code>
-          </div>
-        </div>
       </div>
 
       {/* 3. MODAL THÊM / SỬA HỌC PHẦN */}
@@ -589,9 +556,7 @@ export const ManageCurriculum = () => {
                 <div className="modal-body px-4 py-3 d-flex flex-column gap-2.5">
                   <div className="row g-2">
                     <div className="col-5">
-                      <label className="form-label text-uppercase text-secondary fw-bold mb-1" style={{ fontSize: "10px" }}>
-                        Mã Học Phần *
-                      </label>
+                      <label className="form-label text-uppercase text-secondary fw-bold mb-1" style={{ fontSize: "10px" }}>Mã Học Phần *</label>
                       <input
                         type="text"
                         required
@@ -602,9 +567,7 @@ export const ManageCurriculum = () => {
                       />
                     </div>
                     <div className="col-7">
-                      <label className="form-label text-uppercase text-secondary fw-bold mb-1" style={{ fontSize: "10px" }}>
-                        Tên Học Phần *
-                      </label>
+                      <label className="form-label text-uppercase text-secondary fw-bold mb-1" style={{ fontSize: "10px" }}>Tên Học Phần *</label>
                       <input
                         type="text"
                         required
@@ -618,9 +581,7 @@ export const ManageCurriculum = () => {
 
                   <div className="row g-2">
                     <div className="col-6">
-                      <label className="form-label text-uppercase text-secondary fw-bold mb-1" style={{ fontSize: "10px" }}>
-                        Cấu trúc TC (LT, TH, BTL)
-                      </label>
+                      <label className="form-label text-uppercase text-secondary fw-bold mb-1" style={{ fontSize: "10px" }}>Cấu trúc TC (LT, TH, BTL)</label>
                       <input
                         type="text"
                         value={formData.credits_structure}
@@ -630,9 +591,7 @@ export const ManageCurriculum = () => {
                       />
                     </div>
                     <div className="col-6">
-                      <label className="form-label text-uppercase text-secondary fw-bold mb-1" style={{ fontSize: "10px" }}>
-                        Số Tín Chỉ *
-                      </label>
+                      <label className="form-label text-uppercase text-secondary fw-bold mb-1" style={{ fontSize: "10px" }}>Số Tín Chỉ *</label>
                       <input
                         type="number"
                         min="1"
@@ -646,9 +605,7 @@ export const ManageCurriculum = () => {
 
                   <div className="row g-2">
                     <div className="col-6">
-                      <label className="form-label text-uppercase text-secondary fw-bold mb-1" style={{ fontSize: "10px" }}>
-                        Tính Chất Môn
-                      </label>
+                      <label className="form-label text-uppercase text-secondary fw-bold mb-1" style={{ fontSize: "10px" }}>Tính Chất Môn</label>
                       <select
                         value={formData.subject_type}
                         onChange={(e) => setFormData({ ...formData, subject_type: e.target.value })}
@@ -659,9 +616,7 @@ export const ManageCurriculum = () => {
                       </select>
                     </div>
                     <div className="col-6">
-                      <label className="form-label text-uppercase text-secondary fw-bold mb-1" style={{ fontSize: "10px" }}>
-                        Học Phần Điều Kiện
-                      </label>
+                      <label className="form-label text-uppercase text-secondary fw-bold mb-1" style={{ fontSize: "10px" }}>Học Phần Điều Kiện</label>
                       <input
                         type="text"
                         placeholder="VD: TT052(a)"

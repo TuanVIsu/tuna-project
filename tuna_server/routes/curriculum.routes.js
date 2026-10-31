@@ -7,12 +7,15 @@ const xlsx = require('xlsx');
 
 const upload = multer({ storage: multer.memoryStorage() });
 
+// routes/curriculum.routes.js
+
 // =============================================================================
-// 1. ROUTE LẤY DANH MỤC NGÀNH, KHÓA, LỚP ĐỘNG 100% TỪ CƠ SỞ DỮ LIỆU
+// 1. ROUTE LẤY DANH MỤC NGÀNH, KHÓA, LỚP ĐỘNG TỪ BẢNG FACULTY_MAJORS & CSDL
 // =============================================================================
 router.get('/meta-options', async (req, res) => {
   try {
-    const [majorsRes, cohortsRes, classesRes] = await Promise.all([
+    const [majorsRes, majorCohortsRes, cohortsRes, classesRes] = await Promise.all([
+      // Lấy danh sách ngành
       pool.query(`
         SELECT DISTINCT major_name 
         FROM faculty_majors 
@@ -20,6 +23,14 @@ router.get('/meta-options', async (req, res) => {
         ORDER BY major_name ASC
       `).catch(() => ({ rows: [] })),
 
+      // 👉 ĐỌC TRỰC TIẾP KHÓA TỪ NGÀNH BẠN VỪA CẤU HÌNH
+      pool.query(`
+        SELECT DISTINCT applied_cohort 
+        FROM faculty_majors 
+        WHERE applied_cohort IS NOT NULL AND applied_cohort <> '' AND UPPER(applied_cohort) <> 'ALL'
+      `).catch(() => ({ rows: [] })),
+
+      // Đọc thêm từ academic_cohorts
       pool.query(`
         SELECT DISTINCT cohort_code 
         FROM academic_cohorts 
@@ -27,6 +38,7 @@ router.get('/meta-options', async (req, res) => {
         ORDER BY cohort_code DESC
       `).catch(() => ({ rows: [] })),
 
+      // Lấy danh sách lớp
       pool.query(`
         SELECT DISTINCT class_name 
         FROM curriculum_plans 
@@ -36,15 +48,22 @@ router.get('/meta-options', async (req, res) => {
     ]);
 
     const majors = majorsRes.rows.map(r => r.major_name);
-    const cohorts = cohortsRes.rows.map(r => r.cohort_code);
-    const classes = classesRes.rows.map(r => r.class_name);
+
+    // Gộp tất cả khóa thực tế từ faculty_majors và academic_cohorts
+    const rawCohorts = [
+      ...majorCohortsRes.rows.map(r => r.applied_cohort),
+      ...cohortsRes.rows.map(r => r.cohort_code)
+    ];
+
+    // Lọc trùng lặp và loại bỏ giá trị rỗng
+    const uniqueCohorts = Array.from(new Set(rawCohorts.filter(Boolean)));
 
     res.json({
       success: true,
       data: {
-        majors,
-        cohorts,
-        classes
+        majors: majors.length > 0 ? majors : ['Hệ Thống Thông Tin'],
+        cohorts: uniqueCohorts.length > 0 ? uniqueCohorts : ['K23'],
+        classes: classesRes.rows.map(r => r.class_name)
       }
     });
   } catch (error) {
@@ -52,11 +71,7 @@ router.get('/meta-options', async (req, res) => {
     res.status(500).json({
       success: false,
       message: error.message,
-      data: {
-        majors: [],
-        cohorts: [],
-        classes: []
-      }
+      data: { majors: [], cohorts: [], classes: [] }
     });
   }
 });
