@@ -10,7 +10,6 @@ export const ManageMajors = () => {
   const [filterDuration, setFilterDuration] = useState("all");
   const [filterModel, setFilterModel] = useState("all");
 
-  // State Modal Thêm / Sửa
   const [showModal, setShowModal] = useState(false);
   const [editingMajor, setEditingMajor] = useState(null);
   const [saving, setSaving] = useState(false);
@@ -18,7 +17,7 @@ export const ManageMajors = () => {
   const [formData, setFormData] = useState({
     major_code: "",
     major_name: "",
-    applied_cohort: "K23",
+    applied_cohort: "KHÓA 2023",
     total_years: 4,
     semesters_per_year: 3,
     total_credits_required: 130,
@@ -64,7 +63,7 @@ export const ManageMajors = () => {
       setFormData({
         major_code: "",
         major_name: "",
-        applied_cohort: "K23",
+        applied_cohort: "KHÓA 2023",
         total_years: 4,
         semesters_per_year: 3,
         total_credits_required: 130,
@@ -80,6 +79,7 @@ export const ManageMajors = () => {
     const newYears = parseFloat(formData.total_years) || 4;
     const newSemPerYear = parseInt(formData.semesters_per_year, 10) || 3;
     const newTotalSemesters = Math.ceil(newYears * newSemPerYear);
+    const finalCohort = formData.applied_cohort.trim() || "ALL";
 
     if (editingMajor && Number(editingMajor.subject_count) > 0) {
       const oldYears = parseFloat(editingMajor.total_years) || 4;
@@ -107,6 +107,7 @@ export const ManageMajors = () => {
         headers: getHeaders(),
         body: JSON.stringify({
           ...formData,
+          applied_cohort: finalCohort,
           total_years: newYears,
           semesters_per_year: newSemPerYear,
           total_credits_required: parseInt(formData.total_credits_required, 10) || 130,
@@ -163,12 +164,11 @@ export const ManageMajors = () => {
 
   return (
     <div className="w-100 d-flex flex-column pb-5" style={{ color: "#0f172a" }}>
-      {/* 1. KHỐI THẺ CARD ĐIỀU KHIỂN & BỘ LỌC */}
+      {/* 1. KHỐI BỘ LỌC TRUNG TÂM */}
       <div
         className="bg-white rounded-4 p-4 border shadow-sm mb-4"
         style={{ borderColor: "#f1f5f9", boxShadow: "0 4px 16px rgba(0,0,0,0.03)" }}
       >
-        {/* Hàng 1: Tiêu đề & Nút thao tác chính */}
         <div className="d-flex flex-column flex-md-row align-items-md-center justify-content-between gap-3 mb-3">
           <div className="d-flex align-items-center gap-3">
             <div
@@ -183,13 +183,8 @@ export const ManageMajors = () => {
             </div>
             <div>
               <div className="d-flex align-items-center gap-2">
-                <h5 className="fw-black text-dark mb-0 fs-6">
-                  Quản Lý Ngành Đào Tạo
-                </h5>
-                <span
-                  className="badge rounded-pill bg-primary-subtle text-primary border border-primary-subtle px-2.5 py-1"
-                  style={{ fontSize: "10.5px" }}
-                >
+                <h5 className="fw-black text-dark mb-0 fs-6">Quản Lý Ngành Đào Tạo</h5>
+                <span className="badge rounded-pill bg-primary-subtle text-primary border border-primary-subtle px-2.5 py-1" style={{ fontSize: "10.5px" }}>
                   {majors.length} Chuyên Ngành
                 </span>
               </div>
@@ -209,7 +204,6 @@ export const ManageMajors = () => {
           </button>
         </div>
 
-        {/* Hàng 2: Bộ lọc 3 cấp tiêu chuẩn */}
         <div className="row g-2.5 pt-3 border-top" style={{ borderColor: "#f1f5f9" }}>
           <div className="col-12 col-md-5">
             <label className="form-label text-uppercase text-secondary fw-bold mb-1" style={{ fontSize: "10px" }}>
@@ -221,7 +215,7 @@ export const ManageMajors = () => {
               </span>
               <input
                 type="text"
-                placeholder="Nhập mã ngành, tên ngành hoặc khóa (K23)..."
+                placeholder="Nhập mã ngành, tên ngành hoặc khóa..."
                 value={searchTerm}
                 onChange={(e) => setSearchTerm(e.target.value)}
                 className="form-control form-control-sm rounded-end-3 fw-semibold bg-light border shadow-none"
@@ -268,7 +262,7 @@ export const ManageMajors = () => {
         </div>
       </div>
 
-      {/* 2. KHỐI BẢNG DỮ LIỆU DANH SÁCH NGÀNH */}
+      {/* 2. BẢNG DANH SÁCH NGÀNH (HIỂN THỊ CHÍNH XÁC CHUỖI ĐÃ NHẬP) */}
       <div
         className="bg-white rounded-4 p-4 border shadow-sm d-flex flex-column gap-3"
         style={{ borderColor: "#f1f5f9", boxShadow: "0 4px 16px rgba(0,0,0,0.03)" }}
@@ -293,7 +287,7 @@ export const ManageMajors = () => {
                 <th className="ps-3 text-center" style={{ width: "50px" }}>STT</th>
                 <th style={{ width: "110px" }}>Mã Ngành</th>
                 <th>Tên Ngành Đào Tạo</th>
-                <th className="text-center" style={{ width: "120px" }}>Khóa Tuyển Sinh</th>
+                <th className="text-center" style={{ width: "150px" }}>Khóa Tuyển Sinh</th>
                 <th className="text-center" style={{ width: "120px" }}>Thời Gian</th>
                 <th className="text-center" style={{ width: "150px" }}>Cấu Trúc Học Kỳ</th>
                 <th className="text-center" style={{ width: "120px" }}>Tổng Tín Chỉ</th>
@@ -337,9 +331,10 @@ export const ManageMajors = () => {
                       <td>
                         <span className="fw-bold text-dark">{item.major_name}</span>
                       </td>
+                      {/* Hiển thị nguyên văn giá trị bạn nhập (VD: KHÓA 2023) */}
                       <td className="text-center">
-                        <span className="badge rounded-pill bg-primary-subtle text-primary border border-primary-subtle px-2.5 py-1 font-monospace fw-bold" style={{ fontSize: "11px" }}>
-                          {item.applied_cohort === "ALL" || !item.applied_cohort ? "Tất cả khóa" : `Khóa ${item.applied_cohort}`}
+                        <span className="badge rounded-pill bg-primary-subtle text-primary border border-primary-subtle px-2.5 py-1 font-monospace fw-bold" style={{ fontSize: "11.5px" }}>
+                          {item.applied_cohort || "ALL"}
                         </span>
                       </td>
                       <td className="text-center">
@@ -392,7 +387,7 @@ export const ManageMajors = () => {
         </div>
       </div>
 
-      {/* 3. MODAL THÊM / SỬA: KHÓA TUYỂN SINH CHO PHÉP TỰ NHẬP */}
+      {/* 3. MODAL THÊM / SỬA NGÀNH */}
       {showModal && (
         <div
           className="position-fixed top-0 start-0 w-100 h-100 d-flex align-items-center justify-content-center"
@@ -407,7 +402,6 @@ export const ManageMajors = () => {
             className="bg-white rounded-4 shadow-2xl overflow-hidden w-100 border-0 d-flex flex-column"
             style={{ maxWidth: "520px", animation: "fadeIn 0.2s ease-out" }}
           >
-            {/* Modal Header */}
             <div
               className="d-flex align-items-center justify-content-between px-4 py-3 border-bottom bg-white"
               style={{ borderColor: "#f1f5f9" }}
@@ -443,7 +437,6 @@ export const ManageMajors = () => {
               </button>
             </div>
 
-            {/* Modal Body Form */}
             <form onSubmit={handleSave} className="d-flex flex-column m-0">
               <div className="px-4 py-3.5 d-flex flex-column gap-3">
                 
@@ -480,7 +473,7 @@ export const ManageMajors = () => {
                   </div>
                 </div>
 
-                {/* Hàng 2: Khóa Tuyển Sinh Áp Dụng (TỰ NHẬP) & Cấu trúc kỳ học */}
+                {/* Hàng 2: Khóa Tuyển Sinh Áp Dụng (Nhập nguyên văn) & Cấu trúc kỳ học */}
                 <div className="row g-3">
                   <div className="col-6">
                     <label className="form-label text-uppercase text-secondary fw-bold mb-1.5 text-truncate" style={{ fontSize: "10.5px" }}>
@@ -489,9 +482,9 @@ export const ManageMajors = () => {
                     <input
                       type="text"
                       required
-                      placeholder="VD: K23 (hoặc Tất cả)"
+                      placeholder="VD: KHÓA 2023, K23..."
                       value={formData.applied_cohort}
-                      onChange={(e) => setFormData({ ...formData, applied_cohort: e.target.value.toUpperCase() })}
+                      onChange={(e) => setFormData({ ...formData, applied_cohort: e.target.value })}
                       className="form-control rounded-3 fw-bold font-monospace text-primary border"
                       style={{ height: "40px", fontSize: "13px", borderColor: "#cbd5e1" }}
                     />
@@ -514,7 +507,7 @@ export const ManageMajors = () => {
                   </div>
                 </div>
 
-                {/* Hàng 3: Thời gian đào tạo & Tổng tín chỉ yêu cầu */}
+                {/* Hàng 3: Thời gian đào tạo & Tổng tín chỉ */}
                 <div className="row g-3">
                   <div className="col-6">
                     <label className="form-label text-uppercase text-secondary fw-bold mb-1.5 text-truncate" style={{ fontSize: "10.5px" }}>
@@ -560,7 +553,7 @@ export const ManageMajors = () => {
                   </div>
                 </div>
 
-                {/* Hàng 4: Dãy nút chọn nhanh thời gian đào tạo */}
+                {/* Hàng 4: Chọn nhanh năm */}
                 <div className="d-flex align-items-center gap-1.5 pt-0.5">
                   <span className="text-secondary fw-semibold" style={{ fontSize: "11px" }}>
                     Chọn nhanh:
@@ -587,7 +580,7 @@ export const ManageMajors = () => {
                   ))}
                 </div>
 
-                {/* Hộp Preview Live trực quan */}
+                {/* Hộp Preview Live hiển thị đúng nguyên văn chuỗi nhập */}
                 <div
                   className="p-3 rounded-3 d-flex align-items-center gap-3 border"
                   style={{ backgroundColor: "#eff6ff", borderColor: "#bfdbfe" }}
@@ -599,7 +592,7 @@ export const ManageMajors = () => {
                     <i className="bi bi-info-circle-fill fs-6"></i>
                   </div>
                   <div className="text-slate-700 fw-medium" style={{ fontSize: "12px", lineHeight: "1.4" }}>
-                    Khóa áp dụng: <b>{formData.applied_cohort || "Tất cả"}</b> • Lộ trình <b>{formData.total_years} năm</b>, mỗi năm <b>{formData.semesters_per_year} kỳ</b> (tổng <b>{previewTotalSemesters} học kỳ</b>).
+                    Khóa áp dụng: <b className="text-primary font-monospace">{formData.applied_cohort || "ALL"}</b> • Lộ trình <b>{formData.total_years} năm</b>, mỗi năm <b>{formData.semesters_per_year} kỳ</b> (tổng <b>{previewTotalSemesters} học kỳ</b>).
                   </div>
                 </div>
               </div>

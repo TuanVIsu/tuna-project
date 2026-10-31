@@ -3,7 +3,7 @@ const express = require('express');
 const router = express.Router();
 const pool = require('../config/db');
 
-// Tự động kiểm tra và thêm cột nếu CSDL chưa có (ngăn lỗi 500 do thiếu cột)
+// Tự động kiểm tra và thêm cột nếu CSDL chưa có
 (async () => {
   try {
     await pool.query(`
@@ -16,18 +16,6 @@ const pool = require('../config/db');
     `);
   } catch (e) {}
 })();
-
-// Helper chuẩn hóa khóa: người dùng nhập HTTT2311, 23, hay K23 đều ra đúng 'K23'
-const extractCleanCohort = (input) => {
-  if (!input) return 'ALL';
-  const trimmed = String(input).trim();
-  if (['ALL', 'TẤT CẢ', 'TAT CA', '*'].includes(trimmed.toUpperCase())) return 'ALL';
-  
-  // Trích xuất 2 chữ số niên khóa (VD: HTTT2311 -> 23 -> K23)
-  const match = trimmed.match(/(?:K|k)?(\d{2})/);
-  if (match) return `K${match[1]}`;
-  return trimmed.toUpperCase();
-};
 
 // =============================================================================
 // 1. LẤY DANH SÁCH NGÀNH KÈM KHÓA ÁP DỤNG
@@ -55,7 +43,7 @@ router.get('/', async (req, res) => {
 });
 
 // =============================================================================
-// 2. THÊM MỚI NGÀNH (TỰ ĐỘNG BÓC TÁCH VÀ GHI VÀO ACADEMIC_COHORTS)
+// 2. THÊM MỚI NGÀNH (GIỮ NGUYÊN VĂN KHÓA NGƯỜI DÙNG NHẬP)
 // =============================================================================
 router.post('/', async (req, res) => {
   try {
@@ -65,7 +53,8 @@ router.post('/', async (req, res) => {
       return res.status(400).json({ success: false, message: 'Mã và tên ngành là bắt buộc!' });
     }
 
-    const cleanCohort = extractCleanCohort(applied_cohort);
+    // Giữ nguyên chuỗi người dùng nhập (không tự ý đổi sang K20/K23)
+    const rawCohort = applied_cohort ? String(applied_cohort).trim() : 'ALL';
     const cleanYears = parseFloat(total_years) || 4.0;
     const cleanSemPerYear = parseInt(semesters_per_year, 10) || 3;
     const cleanCredits = parseInt(total_credits_required, 10) || 130;
@@ -74,17 +63,17 @@ router.post('/', async (req, res) => {
       INSERT INTO faculty_majors (major_code, major_name, applied_cohort, total_years, semesters_per_year, total_credits_required)
       VALUES ($1, $2, $3, $4, $5, $6)
       RETURNING *, total_years::float AS total_years
-    `, [major_code.trim(), major_name.trim(), cleanCohort, cleanYears, cleanSemPerYear, cleanCredits]);
+    `, [major_code.trim(), major_name.trim(), rawCohort, cleanYears, cleanSemPerYear, cleanCredits]);
 
-    // ĐỒNG BỘ: Tự động ghi nhận Khóa này vào bảng academic_cohorts để các trang khác lập tức thấy
-    if (cleanCohort && cleanCohort !== 'ALL') {
-      const cohortDigits = cleanCohort.replace(/\D/g, '');
-      const admYear = cohortDigits ? 2000 + parseInt(cohortDigits, 10) : new Date().getFullYear();
+    // Đồng bộ vào academic_cohorts nếu cần
+    if (rawCohort && rawCohort.toUpperCase() !== 'ALL') {
+      const yearMatch = rawCohort.match(/\b(19\d{2}|20\d{2})\b/);
+      const admYear = yearMatch ? parseInt(yearMatch[1], 10) : new Date().getFullYear();
       await pool.query(`
         INSERT INTO academic_cohorts (cohort_code, admission_year, is_active)
         VALUES ($1, $2, true)
         ON CONFLICT (cohort_code) DO NOTHING
-      `, [cleanCohort, admYear]).catch(() => {});
+      `, [rawCohort, admYear]).catch(() => {});
     }
 
     res.json({ success: true, message: 'Thêm ngành đào tạo thành công!', data: result.rows[0] });
@@ -97,34 +86,33 @@ router.post('/', async (req, res) => {
 });
 
 // =============================================================================
-// 3. CẬP NHẬT NGÀNH (ĐỒNG BỘ KHÓA & TÊN NGÀNH SANG CURRICULUM_PLANS)
+// 3. CẬP NHẬT NGÀNH (LƯU NGUYÊN VĂN KHÓA NHẬP)
 // =============================================================================
 router.put('/:id', async (req, res) => {
   try {
     const { id } = req.params;
     const { major_code, major_name, applied_cohort, total_years, semesters_per_year, total_credits_required, is_active } = req.body;
 
-    // Lấy thông tin ngành trước khi sửa
     const prevRes = await pool.query('SELECT major_code, major_name FROM faculty_majors WHERE id = $1', [id]);
     if (prevRes.rows.length === 0) {
       return res.status(404).json({ success: false, message: 'Không tìm thấy ngành cần cập nhật!' });
     }
     const prevMajor = prevRes.rows[0];
 
-    const cleanCohort = extractCleanCohort(applied_cohort);
+    // Giữ nguyên chuỗi nhập (KHÓA 2023 -> KHÓA 2023, 2023 -> 2023, K23 -> K23)
+    const rawCohort = applied_cohort ? String(applied_cohort).trim() : 'ALL';
     const cleanYears = parseFloat(total_years) || 4.0;
     const cleanSemPerYear = parseInt(semesters_per_year, 10) || 3;
     const cleanCredits = parseInt(total_credits_required, 10) || 130;
     const targetCode = major_code?.trim() || prevMajor.major_code;
     const targetName = major_name?.trim() || prevMajor.major_name;
 
-    // Chặn đổi mã ngành nếu đã phát sinh môn học trong CTĐT
     if (targetCode !== prevMajor.major_code) {
       const planCount = await pool.query('SELECT COUNT(*)::int AS count FROM curriculum_plans WHERE major_code = $1', [prevMajor.major_code]);
       if (planCount.rows[0].count > 0) {
         return res.status(400).json({
           success: false,
-          message: `Không thể đổi mã ngành "${prevMajor.major_code}" vì đang có ${planCount.rows[0].count} môn học gắn liền với mã này trong CTĐT!`
+          message: `Không thể đổi mã ngành "${prevMajor.major_code}" vì đang có ${planCount.rows[0].count} môn học trong CTĐT!`
         });
       }
     }
@@ -143,7 +131,7 @@ router.put('/:id', async (req, res) => {
     `, [
       targetCode,
       targetName,
-      cleanCohort,
+      rawCohort,
       cleanYears,
       cleanSemPerYear,
       cleanCredits,
@@ -151,18 +139,17 @@ router.put('/:id', async (req, res) => {
       id
     ]);
 
-    // ĐỒNG BỘ 1: Ghi nhận khóa vào academic_cohorts
-    if (cleanCohort && cleanCohort !== 'ALL') {
-      const cohortDigits = cleanCohort.replace(/\D/g, '');
-      const admYear = cohortDigits ? 2000 + parseInt(cohortDigits, 10) : new Date().getFullYear();
+    // Đồng bộ vào academic_cohorts
+    if (rawCohort && rawCohort.toUpperCase() !== 'ALL') {
+      const yearMatch = rawCohort.match(/\b(19\d{2}|20\d{2})\b/);
+      const admYear = yearMatch ? parseInt(yearMatch[1], 10) : new Date().getFullYear();
       await pool.query(`
         INSERT INTO academic_cohorts (cohort_code, admission_year, is_active)
         VALUES ($1, $2, true)
         ON CONFLICT (cohort_code) DO NOTHING
-      `, [cleanCohort, admYear]).catch(() => {});
+      `, [rawCohort, admYear]).catch(() => {});
     }
 
-    // ĐỒNG BỘ 2: Cập nhật tên ngành mới sang curriculum_plans
     if (targetName !== prevMajor.major_name) {
       await pool.query('UPDATE curriculum_plans SET major_name = $1 WHERE major_code = $2', [targetName, targetCode]).catch(() => {});
     }
@@ -174,7 +161,7 @@ router.put('/:id', async (req, res) => {
 });
 
 // =============================================================================
-// 4. XÓA NGÀNH (BẢO VỆ DỮ LIỆU CTĐT)
+// 4. XÓA NGÀNH
 // =============================================================================
 router.delete('/:id', async (req, res) => {
   try {
