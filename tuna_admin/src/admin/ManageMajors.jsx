@@ -10,7 +10,7 @@ export const ManageMajors = () => {
   const [filterDuration, setFilterDuration] = useState("all");
   const [filterModel, setFilterModel] = useState("all");
 
-  // State Modal
+  // State Modal Thêm / Sửa
   const [showModal, setShowModal] = useState(false);
   const [editingMajor, setEditingMajor] = useState(null);
   const [saving, setSaving] = useState(false);
@@ -18,6 +18,7 @@ export const ManageMajors = () => {
   const [formData, setFormData] = useState({
     major_code: "",
     major_name: "",
+    applied_cohort: "K23",
     total_years: 4,
     semesters_per_year: 3,
     total_credits_required: 130,
@@ -52,6 +53,7 @@ export const ManageMajors = () => {
       setFormData({
         major_code: item.major_code,
         major_name: item.major_name,
+        applied_cohort: item.applied_cohort || "ALL",
         total_years: parseFloat(item.total_years) || 4,
         semesters_per_year: parseInt(item.semesters_per_year, 10) || 3,
         total_credits_required: parseInt(item.total_credits_required, 10) || 130,
@@ -62,6 +64,7 @@ export const ManageMajors = () => {
       setFormData({
         major_code: "",
         major_name: "",
+        applied_cohort: "K23",
         total_years: 4,
         semesters_per_year: 3,
         total_credits_required: 130,
@@ -86,8 +89,8 @@ export const ManageMajors = () => {
       if (newTotalSemesters < oldTotalSemesters) {
         const confirmReduce = window.confirm(
           `Cảnh báo: Ngành này đang có ${editingMajor.subject_count} môn học trong CTĐT.\n` +
-          `Việc giảm từ ${oldTotalSemesters} học kỳ xuống ${newTotalSemesters} học kỳ có thể khiến các môn thuộc kỳ lớn hơn bị ẩn khỏi bộ lọc.\n` +
-          `Bạn có chắc chắn muốn lưu thay đổi này?`
+          `Việc giảm từ ${oldTotalSemesters} học kỳ xuống ${newTotalSemesters} học kỳ có thể làm ẩn các môn thuộc những kỳ vượt mức.\n` +
+          `Bạn vẫn muốn lưu thay đổi này?`
         );
         if (!confirmReduce) return;
       }
@@ -133,11 +136,8 @@ export const ManageMajors = () => {
     try {
       const res = await fetch(`${API_BASE}/majors/${item.id}`, { method: "DELETE", headers: getHeaders() });
       const d = await res.json();
-      if (d.success) {
-        fetchMajors();
-      } else {
-        alert("Lỗi: " + d.message);
-      }
+      if (d.success) fetchMajors();
+      else alert("Lỗi: " + d.message);
     } catch (e) {
       alert("Lỗi kết nối máy chủ khi xóa");
     }
@@ -147,7 +147,8 @@ export const ManageMajors = () => {
     return majors.filter((m) => {
       const matchSearch =
         m.major_name?.toLowerCase().includes(searchTerm.toLowerCase()) ||
-        m.major_code?.toLowerCase().includes(searchTerm.toLowerCase());
+        m.major_code?.toLowerCase().includes(searchTerm.toLowerCase()) ||
+        m.applied_cohort?.toLowerCase().includes(searchTerm.toLowerCase());
       const matchDuration =
         filterDuration === "all" || parseFloat(m.total_years) === parseFloat(filterDuration);
       const matchModel =
@@ -161,8 +162,8 @@ export const ManageMajors = () => {
   );
 
   return (
-    <div className="w-100 d-flex flex-column pb-5" style={{ color: "#1e293b" }}>
-      {/* 1. KHỐI THẺ CARD ĐIỀU KHIỂN & BỘ LỌC (Đồng bộ chuẩn giao diện Tuna Admin) */}
+    <div className="w-100 d-flex flex-column pb-5" style={{ color: "#0f172a" }}>
+      {/* 1. KHỐI THẺ CARD ĐIỀU KHIỂN & BỘ LỌC */}
       <div
         className="bg-white rounded-4 p-4 border shadow-sm mb-4"
         style={{ borderColor: "#f1f5f9", boxShadow: "0 4px 16px rgba(0,0,0,0.03)" }}
@@ -173,8 +174,8 @@ export const ManageMajors = () => {
             <div
               className="rounded-3 d-flex align-items-center justify-content-center text-white flex-shrink-0 shadow-sm"
               style={{
-                width: "40px",
-                height: "40px",
+                width: "42px",
+                height: "42px",
                 background: "linear-gradient(135deg, #185bf0 0%, #0d9488 100%)",
               }}
             >
@@ -193,7 +194,7 @@ export const ManageMajors = () => {
                 </span>
               </div>
               <small className="text-secondary fw-medium d-block mt-0.5" style={{ fontSize: "12px" }}>
-                Thiết lập cấu trúc thời gian đào tạo, số học kỳ/năm và lộ trình tích lũy tín chỉ
+                Thiết lập cấu trúc khóa tuyển sinh, số năm đào tạo và số học kỳ/năm
               </small>
             </div>
           </div>
@@ -208,11 +209,11 @@ export const ManageMajors = () => {
           </button>
         </div>
 
-        {/* Hàng 2: Bộ lọc 3 cấp có viền phân cách */}
+        {/* Hàng 2: Bộ lọc 3 cấp tiêu chuẩn */}
         <div className="row g-2.5 pt-3 border-top" style={{ borderColor: "#f1f5f9" }}>
           <div className="col-12 col-md-5">
             <label className="form-label text-uppercase text-secondary fw-bold mb-1" style={{ fontSize: "10px" }}>
-              Tìm kiếm ngành đào tạo
+              Tìm kiếm ngành hoặc khóa
             </label>
             <div className="input-group input-group-sm">
               <span className="input-group-text bg-light border-end-0 text-muted ps-2.5">
@@ -220,7 +221,7 @@ export const ManageMajors = () => {
               </span>
               <input
                 type="text"
-                placeholder="Nhập mã ngành (748...) hoặc tên ngành..."
+                placeholder="Nhập mã ngành, tên ngành hoặc khóa (K23)..."
                 value={searchTerm}
                 onChange={(e) => setSearchTerm(e.target.value)}
                 className="form-control form-control-sm rounded-end-3 fw-semibold bg-light border shadow-none"
@@ -290,12 +291,12 @@ export const ManageMajors = () => {
             <thead className="table-light">
               <tr style={{ fontSize: "11px", color: "#64748b", letterSpacing: "0.5px" }} className="text-uppercase">
                 <th className="ps-3 text-center" style={{ width: "50px" }}>STT</th>
-                <th style={{ width: "120px" }}>Mã Ngành</th>
+                <th style={{ width: "110px" }}>Mã Ngành</th>
                 <th>Tên Ngành Đào Tạo</th>
-                <th className="text-center" style={{ width: "130px" }}>Thời Gian</th>
-                <th className="text-center" style={{ width: "160px" }}>Cấu Trúc Học Kỳ</th>
-                <th className="text-center" style={{ width: "130px" }}>Tổng Tín Chỉ</th>
-                <th className="text-center" style={{ width: "120px" }}>Môn Trong CTĐT</th>
+                <th className="text-center" style={{ width: "120px" }}>Khóa Tuyển Sinh</th>
+                <th className="text-center" style={{ width: "120px" }}>Thời Gian</th>
+                <th className="text-center" style={{ width: "150px" }}>Cấu Trúc Học Kỳ</th>
+                <th className="text-center" style={{ width: "120px" }}>Tổng Tín Chỉ</th>
                 <th className="text-end pe-3" style={{ width: "90px" }}>Thao Tác</th>
               </tr>
             </thead>
@@ -327,7 +328,7 @@ export const ManageMajors = () => {
                       </td>
                       <td>
                         <span
-                          className="font-monospace fw-bold px-2.5 py-1 rounded-1 border"
+                          className="font-monospace fw-bold px-2 py-0.5 rounded-1 border"
                           style={{ fontSize: "11px", backgroundColor: "#eff6ff", color: "#1d4ed8", borderColor: "#bfdbfe" }}
                         >
                           {item.major_code}
@@ -335,6 +336,11 @@ export const ManageMajors = () => {
                       </td>
                       <td>
                         <span className="fw-bold text-dark">{item.major_name}</span>
+                      </td>
+                      <td className="text-center">
+                        <span className="badge rounded-pill bg-primary-subtle text-primary border border-primary-subtle px-2.5 py-1 font-monospace fw-bold" style={{ fontSize: "11px" }}>
+                          {item.applied_cohort === "ALL" || !item.applied_cohort ? "Tất cả khóa" : `Khóa ${item.applied_cohort}`}
+                        </span>
                       </td>
                       <td className="text-center">
                         <span className="badge rounded-pill bg-light text-secondary border px-2.5 py-1 fw-bold">
@@ -356,11 +362,6 @@ export const ManageMajors = () => {
                       </td>
                       <td className="text-center fw-bold text-dark font-monospace">
                         {item.total_credits_required || 130} TC
-                      </td>
-                      <td className="text-center">
-                        <span className="badge bg-light text-secondary border px-2 py-0.5 font-monospace">
-                          {item.subject_count || 0} môn
-                        </span>
                       </td>
                       <td className="text-end pe-3">
                         <div className="d-flex align-items-center justify-content-end gap-1.5">
@@ -391,53 +392,66 @@ export const ManageMajors = () => {
         </div>
       </div>
 
-      {/* 3. MODAL CĂN GIỮA TUYỆT ĐỐI (Fixed Overlay Flexbox) */}
+      {/* 3. MODAL THÊM / SỬA: KHÓA TUYỂN SINH CHO PHÉP TỰ NHẬP */}
       {showModal && (
         <div
           className="position-fixed top-0 start-0 w-100 h-100 d-flex align-items-center justify-content-center"
           style={{
             backgroundColor: "rgba(15, 23, 42, 0.65)",
-            backdropFilter: "blur(4px)",
+            backdropFilter: "blur(6px)",
             zIndex: 1065,
-            padding: "16px",
+            padding: "20px",
           }}
         >
-          <div className="bg-white rounded-4 shadow-lg overflow-hidden w-100 border-0" style={{ maxWidth: "480px" }}>
+          <div
+            className="bg-white rounded-4 shadow-2xl overflow-hidden w-100 border-0 d-flex flex-column"
+            style={{ maxWidth: "520px", animation: "fadeIn 0.2s ease-out" }}
+          >
             {/* Modal Header */}
-            <div className="d-flex align-items-center justify-content-between px-4 pt-4 pb-2 border-bottom" style={{ borderColor: "#f1f5f9" }}>
-              <div className="d-flex align-items-center gap-2.5">
+            <div
+              className="d-flex align-items-center justify-content-between px-4 py-3 border-bottom bg-white"
+              style={{ borderColor: "#f1f5f9" }}
+            >
+              <div className="d-flex align-items-center gap-3">
                 <div
-                  className="rounded-3 d-flex align-items-center justify-content-center text-white flex-shrink-0"
-                  style={{ width: "36px", height: "36px", background: "linear-gradient(135deg, #185bf0 0%, #0d9488 100%)" }}
+                  className="rounded-3 d-flex align-items-center justify-content-center text-white flex-shrink-0 shadow-xs"
+                  style={{
+                    width: "40px",
+                    height: "40px",
+                    background: "linear-gradient(135deg, #185bf0 0%, #0d9488 100%)",
+                  }}
                 >
-                  <i className={`bi ${editingMajor ? "bi-pencil-square" : "bi-plus-lg"} fs-6`}></i>
+                  <i className={`bi ${editingMajor ? "bi-pencil-square" : "bi-plus-lg"} fs-5`}></i>
                 </div>
                 <div>
-                  <h6 className="fw-bold mb-0 text-dark">
+                  <h6 className="fw-black mb-0 text-slate-900" style={{ fontSize: "15.5px", letterSpacing: "-0.2px" }}>
                     {editingMajor ? "Chỉnh Sửa Ngành Đào Tạo" : "Thêm Ngành Đào Tạo Mới"}
                   </h6>
-                  <small className="text-secondary" style={{ fontSize: "11.5px" }}>
-                    Cấu hình quy chuẩn học kỳ và thời lượng chính quy
+                  <small className="text-secondary fw-medium" style={{ fontSize: "12px" }}>
+                    Cấu hình chuyên ngành, khóa tuyển sinh và thời lượng chính quy
                   </small>
                 </div>
               </div>
+
               <button
                 type="button"
                 onClick={() => setShowModal(false)}
-                className="btn btn-sm btn-light rounded-circle p-0 d-flex align-items-center justify-content-center"
-                style={{ width: "28px", height: "28px" }}
+                className="btn btn-sm btn-light rounded-circle p-0 d-flex align-items-center justify-content-center border-0 text-secondary"
+                style={{ width: "32px", height: "32px", backgroundColor: "#f8fafc" }}
               >
-                <i className="bi bi-x-lg text-secondary" style={{ fontSize: "11px" }}></i>
+                <i className="bi bi-x-lg" style={{ fontSize: "12px" }}></i>
               </button>
             </div>
 
             {/* Modal Body Form */}
-            <form onSubmit={handleSave}>
-              <div className="px-4 py-3 d-flex flex-column gap-3">
-                <div className="row g-2">
+            <form onSubmit={handleSave} className="d-flex flex-column m-0">
+              <div className="px-4 py-3.5 d-flex flex-column gap-3">
+                
+                {/* Hàng 1: Mã ngành & Tên ngành */}
+                <div className="row g-3">
                   <div className="col-4">
-                    <label className="form-label text-uppercase text-secondary fw-bold mb-1" style={{ fontSize: "10px" }}>
-                      Mã Ngành *
+                    <label className="form-label text-uppercase text-secondary fw-bold mb-1.5" style={{ fontSize: "10.5px" }}>
+                      MÃ NGÀNH *
                     </label>
                     <input
                       type="text"
@@ -446,13 +460,13 @@ export const ManageMajors = () => {
                       placeholder="7480104"
                       value={formData.major_code}
                       onChange={(e) => setFormData({ ...formData, major_code: e.target.value })}
-                      className="form-control form-control-sm rounded-3 fw-bold font-monospace text-primary shadow-none"
-                      style={{ fontSize: "12.5px" }}
+                      className="form-control rounded-3 fw-bold font-monospace text-primary border"
+                      style={{ height: "40px", fontSize: "13px", borderColor: "#cbd5e1" }}
                     />
                   </div>
                   <div className="col-8">
-                    <label className="form-label text-uppercase text-secondary fw-bold mb-1" style={{ fontSize: "10px" }}>
-                      Tên Ngành Đào Tạo *
+                    <label className="form-label text-uppercase text-secondary fw-bold mb-1.5" style={{ fontSize: "10.5px" }}>
+                      TÊN NGÀNH ĐÀO TẠO *
                     </label>
                     <input
                       type="text"
@@ -460,64 +474,38 @@ export const ManageMajors = () => {
                       placeholder="Hệ Thống Thông Tin"
                       value={formData.major_name}
                       onChange={(e) => setFormData({ ...formData, major_name: e.target.value })}
-                      className="form-control form-control-sm rounded-3 fw-bold shadow-none"
-                      style={{ fontSize: "12.5px" }}
+                      className="form-control rounded-3 fw-bold text-dark border"
+                      style={{ height: "40px", fontSize: "13px", borderColor: "#cbd5e1" }}
                     />
                   </div>
                 </div>
 
-                <div className="row g-2">
-                  {/* Ô nhập số năm hỗ trợ 3.5, 4.0, 4.5, 5.0 */}
+                {/* Hàng 2: Khóa Tuyển Sinh Áp Dụng (TỰ NHẬP) & Cấu trúc kỳ học */}
+                <div className="row g-3">
                   <div className="col-6">
-                    <div className="d-flex justify-content-between align-items-center mb-1">
-                      <label className="form-label text-uppercase text-secondary fw-bold mb-0" style={{ fontSize: "10px" }}>
-                        Thời Gian Đào Tạo
-                      </label>
-                      <div className="d-flex gap-1">
-                        {[3.5, 4, 4.5, 5].map((y) => (
-                          <button
-                            key={y}
-                            type="button"
-                            onClick={() => setFormData({ ...formData, total_years: y })}
-                            className={`badge border-0 rounded-pill px-1.5 py-0.5 fw-bold cursor-pointer ${
-                              parseFloat(formData.total_years) === y
-                                ? "bg-primary text-white"
-                                : "bg-light text-secondary border"
-                            }`}
-                            style={{ fontSize: "9px" }}
-                          >
-                            {y}N
-                          </button>
-                        ))}
-                      </div>
-                    </div>
-                    <div className="input-group input-group-sm">
-                      <input
-                        type="number"
-                        step="0.5"
-                        min="1"
-                        max="7"
-                        required
-                        value={formData.total_years}
-                        onChange={(e) => setFormData({ ...formData, total_years: parseFloat(e.target.value) || 0 })}
-                        className="form-control form-control-sm rounded-start-3 fw-bold shadow-none text-center"
-                        style={{ fontSize: "13px" }}
-                      />
-                      <span className="input-group-text bg-light text-secondary fw-semibold" style={{ fontSize: "12px" }}>
-                        Năm
-                      </span>
-                    </div>
+                    <label className="form-label text-uppercase text-secondary fw-bold mb-1.5 text-truncate" style={{ fontSize: "10.5px" }}>
+                      KHÓA TUYỂN SINH ÁP DỤNG *
+                    </label>
+                    <input
+                      type="text"
+                      required
+                      placeholder="VD: K23 (hoặc Tất cả)"
+                      value={formData.applied_cohort}
+                      onChange={(e) => setFormData({ ...formData, applied_cohort: e.target.value.toUpperCase() })}
+                      className="form-control rounded-3 fw-bold font-monospace text-primary border"
+                      style={{ height: "40px", fontSize: "13px", borderColor: "#cbd5e1" }}
+                    />
                   </div>
 
                   <div className="col-6">
-                    <label className="form-label text-uppercase text-secondary fw-bold mb-1" style={{ fontSize: "10px" }}>
-                      Cấu Trúc Kỳ Học
+                    <label className="form-label text-uppercase text-secondary fw-bold mb-1.5 text-truncate" style={{ fontSize: "10.5px" }}>
+                      CẤU TRÚC KỲ HỌC
                     </label>
                     <select
                       value={formData.semesters_per_year}
                       onChange={(e) => setFormData({ ...formData, semesters_per_year: Number(e.target.value) })}
-                      className="form-select form-select-sm rounded-3 fw-semibold shadow-none"
-                      style={{ height: "31px" }}
+                      className="form-select rounded-3 fw-semibold border text-dark"
+                      style={{ height: "40px", fontSize: "13px", borderColor: "#cbd5e1" }}
                     >
                       <option value={2}>2 Học kỳ / Năm</option>
                       <option value={3}>3 Học kỳ / Năm (Chuẩn)</option>
@@ -526,47 +514,126 @@ export const ManageMajors = () => {
                   </div>
                 </div>
 
-                <div>
-                  <label className="form-label text-uppercase text-secondary fw-bold mb-1" style={{ fontSize: "10px" }}>
-                    Tổng Số Tín Chỉ Tốt Nghiệp *
-                  </label>
-                  <input
-                    type="number"
-                    min="50"
-                    max="250"
-                    required
-                    value={formData.total_credits_required}
-                    onChange={(e) => setFormData({ ...formData, total_credits_required: Number(e.target.value) })}
-                    className="form-control form-control-sm rounded-3 fw-bold font-monospace shadow-none"
-                  />
+                {/* Hàng 3: Thời gian đào tạo & Tổng tín chỉ yêu cầu */}
+                <div className="row g-3">
+                  <div className="col-6">
+                    <label className="form-label text-uppercase text-secondary fw-bold mb-1.5 text-truncate" style={{ fontSize: "10.5px" }}>
+                      THỜI GIAN ĐÀO TẠO
+                    </label>
+                    <div className="input-group">
+                      <input
+                        type="number"
+                        step="0.5"
+                        min="1"
+                        max="7"
+                        required
+                        value={formData.total_years}
+                        onChange={(e) => setFormData({ ...formData, total_years: parseFloat(e.target.value) || 0 })}
+                        className="form-control rounded-start-3 fw-bold text-center border"
+                        style={{ height: "40px", fontSize: "13.5px", borderColor: "#cbd5e1" }}
+                      />
+                      <span className="input-group-text bg-light text-secondary fw-semibold border border-start-0" style={{ borderColor: "#cbd5e1", fontSize: "12px" }}>
+                        Năm
+                      </span>
+                    </div>
+                  </div>
+
+                  <div className="col-6">
+                    <label className="form-label text-uppercase text-secondary fw-bold mb-1.5 text-truncate" style={{ fontSize: "10.5px" }}>
+                      TỔNG SỐ TÍN CHỈ TỐT NGHIỆP *
+                    </label>
+                    <div className="input-group">
+                      <input
+                        type="number"
+                        min="50"
+                        max="250"
+                        required
+                        value={formData.total_credits_required}
+                        onChange={(e) => setFormData({ ...formData, total_credits_required: Number(e.target.value) })}
+                        className="form-control rounded-start-3 fw-bold font-monospace border"
+                        style={{ height: "40px", fontSize: "13.5px", borderColor: "#cbd5e1" }}
+                      />
+                      <span className="input-group-text bg-light text-primary fw-bold border border-start-0" style={{ borderColor: "#cbd5e1", fontSize: "12px" }}>
+                        Tín chỉ
+                      </span>
+                    </div>
+                  </div>
                 </div>
 
-                {/* Hộp Preview trực quan */}
-                <div className="p-3 rounded-3 bg-light border d-flex align-items-center gap-2.5">
-                  <i className="bi bi-info-circle-fill text-primary fs-5 flex-shrink-0"></i>
-                  <small className="text-secondary" style={{ fontSize: "11.5px", lineHeight: "1.4" }}>
-                    Chương trình gồm <b>{formData.total_years} năm</b>, mỗi năm <b>{formData.semesters_per_year} kỳ</b>. Tổng lộ trình toàn khóa tương ứng <b>{previewTotalSemesters} học kỳ</b>.
-                  </small>
+                {/* Hàng 4: Dãy nút chọn nhanh thời gian đào tạo */}
+                <div className="d-flex align-items-center gap-1.5 pt-0.5">
+                  <span className="text-secondary fw-semibold" style={{ fontSize: "11px" }}>
+                    Chọn nhanh:
+                  </span>
+                  {[
+                    { val: 3.5, label: "3.5 Năm" },
+                    { val: 4, label: "4.0 Năm" },
+                    { val: 4.5, label: "4.5 Năm" },
+                    { val: 5, label: "5.0 Năm" },
+                  ].map((item) => (
+                    <button
+                      key={item.val}
+                      type="button"
+                      onClick={() => setFormData({ ...formData, total_years: item.val })}
+                      className={`btn btn-sm rounded-pill px-2.5 py-0.5 fw-bold border transition ${
+                        parseFloat(formData.total_years) === item.val
+                          ? "btn-primary text-white border-primary shadow-xs"
+                          : "btn-light text-secondary border bg-white"
+                      }`}
+                      style={{ fontSize: "11px" }}
+                    >
+                      {item.label}
+                    </button>
+                  ))}
+                </div>
+
+                {/* Hộp Preview Live trực quan */}
+                <div
+                  className="p-3 rounded-3 d-flex align-items-center gap-3 border"
+                  style={{ backgroundColor: "#eff6ff", borderColor: "#bfdbfe" }}
+                >
+                  <div
+                    className="rounded-circle d-flex align-items-center justify-content-center flex-shrink-0"
+                    style={{ width: "32px", height: "32px", backgroundColor: "#dbeafe", color: "#1d4ed8" }}
+                  >
+                    <i className="bi bi-info-circle-fill fs-6"></i>
+                  </div>
+                  <div className="text-slate-700 fw-medium" style={{ fontSize: "12px", lineHeight: "1.4" }}>
+                    Khóa áp dụng: <b>{formData.applied_cohort || "Tất cả"}</b> • Lộ trình <b>{formData.total_years} năm</b>, mỗi năm <b>{formData.semesters_per_year} kỳ</b> (tổng <b>{previewTotalSemesters} học kỳ</b>).
+                  </div>
                 </div>
               </div>
 
               {/* Modal Footer */}
-              <div className="modal-footer border-0 px-4 pt-1 pb-4 d-flex justify-content-end gap-2">
+              <div
+                className="modal-footer border-top px-4 py-3 d-flex justify-content-end gap-2 bg-slate-50/70"
+                style={{ borderColor: "#f1f5f9" }}
+              >
                 <button
                   type="button"
                   onClick={() => setShowModal(false)}
-                  className="btn btn-light rounded-pill px-3.5 py-1.5 small border"
+                  className="btn btn-light rounded-pill px-4 py-2 fw-semibold text-secondary border bg-white"
+                  style={{ fontSize: "12.5px", height: "38px" }}
                 >
                   Hủy bỏ
                 </button>
                 <button
                   type="submit"
                   disabled={saving}
-                  className="btn btn-primary rounded-pill px-4 py-1.5 small border-0 text-white shadow-xs d-flex align-items-center gap-1.5"
-                  style={{ background: "#185bf0" }}
+                  className="btn btn-primary rounded-pill px-4 py-2 fw-bold text-white border-0 shadow-xs d-flex align-items-center gap-1.5"
+                  style={{ fontSize: "12.5px", height: "38px", background: "#185bf0" }}
                 >
-                  {saving && <span className="spinner-border spinner-border-sm"></span>}
-                  <span>{editingMajor ? "Lưu thay đổi" : "Lưu vào cơ sở dữ liệu"}</span>
+                  {saving ? (
+                    <>
+                      <span className="spinner-border spinner-border-sm"></span>
+                      <span>Đang lưu...</span>
+                    </>
+                  ) : (
+                    <>
+                      <i className="bi bi-check2-circle fs-6"></i>
+                      <span>{editingMajor ? "Lưu thay đổi" : "Lưu vào cơ sở dữ liệu"}</span>
+                    </>
+                  )}
                 </button>
               </div>
             </form>

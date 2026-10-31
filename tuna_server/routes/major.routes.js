@@ -3,7 +3,7 @@ const express = require('express');
 const router = express.Router();
 const pool = require('../config/db');
 
-// 1. Lấy danh sách toàn bộ ngành đào tạo
+// 1. Lấy danh sách ngành
 router.get('/', async (req, res) => {
   try {
     const result = await pool.query(`
@@ -11,6 +11,7 @@ router.get('/', async (req, res) => {
         m.id, 
         m.major_code, 
         m.major_name, 
+        COALESCE(m.applied_cohort, 'all') AS applied_cohort,
         m.total_years::float AS total_years, 
         m.semesters_per_year, 
         m.total_credits_required,
@@ -21,15 +22,14 @@ router.get('/', async (req, res) => {
     `);
     res.json({ success: true, data: result.rows });
   } catch (error) {
-    console.error("Lỗi lấy danh sách ngành:", error);
     res.status(500).json({ success: false, message: error.message });
   }
 });
 
-// 2. Thêm mới ngành đào tạo
+// 2. Thêm mới ngành (Nhận applied_cohort tự nhập)
 router.post('/', async (req, res) => {
   try {
-    const { major_code, major_name, total_years, semesters_per_year, total_credits_required } = req.body;
+    const { major_code, major_name, applied_cohort, total_years, semesters_per_year, total_credits_required } = req.body;
 
     if (!major_code?.trim() || !major_name?.trim()) {
       return res.status(400).json({ success: false, message: 'Mã và tên ngành là bắt buộc!' });
@@ -38,61 +38,49 @@ router.post('/', async (req, res) => {
     const cleanYears = parseFloat(total_years) || 4.0;
     const cleanSemPerYear = parseInt(semesters_per_year, 10) || 3;
     const cleanCredits = parseInt(total_credits_required, 10) || 130;
+    const cleanCohort = applied_cohort?.trim().toUpperCase() || 'ALL';
 
     const result = await pool.query(`
-      INSERT INTO faculty_majors (major_code, major_name, total_years, semesters_per_year, total_credits_required)
-      VALUES ($1, $2, $3, $4, $5)
+      INSERT INTO faculty_majors (major_code, major_name, applied_cohort, total_years, semesters_per_year, total_credits_required)
+      VALUES ($1, $2, $3, $4, $5, $6)
       RETURNING *, total_years::float AS total_years
-    `, [
-      major_code.trim(),
-      major_name.trim(),
-      cleanYears,
-      cleanSemPerYear,
-      cleanCredits
-    ]);
+    `, [major_code.trim(), major_name.trim(), cleanCohort, cleanYears, cleanSemPerYear, cleanCredits]);
 
     res.json({ success: true, message: 'Thêm ngành đào tạo thành công!', data: result.rows[0] });
   } catch (error) {
     if (error.code === '23505') {
-      return res.status(400).json({ success: false, message: 'Mã ngành hoặc tên ngành đã tồn tại trên hệ thống!' });
+      return res.status(400).json({ success: false, message: 'Mã ngành đã tồn tại!' });
     }
     res.status(500).json({ success: false, message: error.message });
   }
 });
 
-// 3. Cập nhật cấu hình ngành (Hỗ trợ số năm thập phân 4.5, 3.5 và đồng bộ CTĐT)
+// 3. Cập nhật ngành
 router.put('/:id', async (req, res) => {
   try {
     const { id } = req.params;
-    const { major_code, major_name, total_years, semesters_per_year, total_credits_required, is_active } = req.body;
-
-    // Lấy thông tin ngành hiện tại
-    const currentRes = await pool.query('SELECT * FROM faculty_majors WHERE id = $1', [id]);
-    if (currentRes.rows.length === 0) {
-      return res.status(404).json({ success: false, message: 'Không tìm thấy ngành cần cập nhật!' });
-    }
-    const currentMajor = currentRes.rows[0];
+    const { major_code, major_name, applied_cohort, total_years, semesters_per_year, total_credits_required, is_active } = req.body;
 
     const cleanYears = parseFloat(total_years) || 4.0;
     const cleanSemPerYear = parseInt(semesters_per_year, 10) || 3;
     const cleanCredits = parseInt(total_credits_required, 10) || 130;
-    const targetMajorCode = major_code?.trim() || currentMajor.major_code;
-    const targetMajorName = major_name?.trim() || currentMajor.major_name;
+    const cleanCohort = applied_cohort?.trim().toUpperCase() || 'ALL';
 
-    // Cập nhật bảng faculty_majors
     const result = await pool.query(`
       UPDATE faculty_majors
-      SET major_code = $1,
-          major_name = $2,
-          total_years = $3,
-          semesters_per_year = $4,
-          total_credits_required = $5,
-          is_active = $6
-      WHERE id = $7
+      SET major_code = $1, 
+          major_name = $2, 
+          applied_cohort = $3, 
+          total_years = $4, 
+          semesters_per_year = $5, 
+          total_credits_required = $6, 
+          is_active = $7
+      WHERE id = $8
       RETURNING *, total_years::float AS total_years
     `, [
-      targetMajorCode,
-      targetMajorName,
+      major_code?.trim(),
+      major_name?.trim(),
+      cleanCohort,
       cleanYears,
       cleanSemPerYear,
       cleanCredits,
@@ -100,42 +88,31 @@ router.put('/:id', async (req, res) => {
       id
     ]);
 
-    // Tự động đồng bộ major_name sang curriculum_plans nếu có thay đổi
-    if (currentMajor.major_name !== targetMajorName) {
-      await pool.query(
-        `UPDATE curriculum_plans SET major_name = $1 WHERE major_code = $2`,
-        [targetMajorName, targetMajorCode]
-      ).catch(() => {});
+    if (result.rows.length === 0) {
+      return res.status(404).json({ success: false, message: 'Không tìm thấy ngành cần cập nhật!' });
     }
 
-    res.json({ success: true, message: 'Cập nhật thông tin ngành thành công!', data: result.rows[0] });
+    res.json({ success: true, message: 'Cập nhật ngành đào tạo thành công!', data: result.rows[0] });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }
 });
 
-// 4. Xóa ngành (Chặn xóa nếu đã có môn trong kế hoạch CTĐT)
+// 4. Xóa ngành
 router.delete('/:id', async (req, res) => {
   try {
     const { id } = req.params;
-
     const majorCheck = await pool.query('SELECT major_code, major_name FROM faculty_majors WHERE id = $1', [id]);
-    if (majorCheck.rows.length === 0) {
-      return res.status(404).json({ success: false, message: 'Không tìm thấy ngành cần xóa!' });
-    }
+    if (majorCheck.rows.length === 0) return res.status(404).json({ success: false, message: 'Không tìm thấy ngành!' });
 
     const { major_code, major_name } = majorCheck.rows[0];
     const planCheck = await pool.query('SELECT COUNT(*)::int AS count FROM curriculum_plans WHERE major_code = $1', [major_code]);
-
     if (planCheck.rows[0].count > 0) {
-      return res.status(400).json({ 
-        success: false, 
-        message: `Không thể xóa vì ngành "${major_name}" đang có ${planCheck.rows[0].count} học phần trong khung CTĐT!` 
-      });
+      return res.status(400).json({ success: false, message: `Ngành "${major_name}" đang có ${planCheck.rows[0].count} môn trong CTĐT, không thể xóa!` });
     }
 
     await pool.query('DELETE FROM faculty_majors WHERE id = $1', [id]);
-    res.json({ success: true, message: 'Đã xóa ngành đào tạo thành công!' });
+    res.json({ success: true, message: 'Đã xóa ngành thành công!' });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }
