@@ -14,6 +14,7 @@ const server = http.createServer(app);
 const pool = require('./config/db');
 
 // TỰ ĐỘNG ĐỒNG BỘ CẤU TRÚC KHI KHỞI ĐỘNG (AN TOÀN CHO SCHEMA SUPABASE)
+// Trong khối IIFE tự động kiểm tra CSDL ở server.js:
 (async () => {
   try {
     await pool.query(`
@@ -25,6 +26,13 @@ const pool = require('./config/db');
       ADD COLUMN IF NOT EXISTS warning_count INT DEFAULT 0,
       ADD COLUMN IF NOT EXISTS warning_reason TEXT DEFAULT NULL,
       ADD COLUMN IF NOT EXISTS last_warning_reason TEXT DEFAULT NULL;
+
+      -- 👉 BỔ SUNG CỘT CHO FACULTY_MAJORS:
+      ALTER TABLE faculty_majors 
+      ADD COLUMN IF NOT EXISTS total_years INTEGER DEFAULT 4,
+      ADD COLUMN IF NOT EXISTS semesters_per_year INTEGER DEFAULT 3,
+      ADD COLUMN IF NOT EXISTS total_credits_required INTEGER DEFAULT 130,
+      ADD COLUMN IF NOT EXISTS is_active BOOLEAN DEFAULT true;
     `);
 
     console.log("✅ [PostgreSQL Schema Check] Đồng bộ kết nối cơ sở dữ liệu thành công!");
@@ -150,7 +158,7 @@ app.use('/api/users', usersRoutes);
 
 app.use('/api/admin/staff', require('./routes/staff.routes'));
 app.use('/api/curriculum', require('./routes/curriculum.routes'));
-
+app.use('/api/majors', require('./routes/major.routes'));
 // Streak & Leaderboard
 app.use('/api/streak', streakRouter);
 app.use('/api', streakRouter);

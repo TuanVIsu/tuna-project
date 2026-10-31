@@ -210,7 +210,7 @@ router.post('/upload-excel', upload.single('file'), async (req, res) => {
         (major_code, major_name, cohort, class_name, academic_year, semester_index, semester_name, 
          subject_code, subject_name, credits_structure, credits, subject_type, prerequisite)
         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
-        ON CONFLICT (class_name, semester_index, subject_code) DO NOTHING
+        ON CONFLICT ON CONSTRAINT unique_curriculum_record DO NOTHING
       `, [
         s.majorCode, s.majorName, s.cohort, s.className, s.academicYear,
         s.semesterIndex, s.semesterName, s.subjectCode, s.subjectName,
@@ -228,16 +228,14 @@ router.post('/upload-excel', upload.single('file'), async (req, res) => {
 });
 
 // =============================================================================
-// 4. ROUTE THÊM MỚI HỌC PHẦN THỦ CÔNG
+// 4. ROUTE THÊM MỚI HỌC PHẦN THỦ CÔNG (100% DỮ LIỆU ĐỘNG TỪ CLIENT & CSDL)
 // =============================================================================
 router.post('/subject', async (req, res) => {
   try {
     const {
-      major_code,
       major_name,
       cohort,
       class_name,
-      academic_year,
       semester_index,
       semester_name,
       subject_code,
@@ -248,42 +246,92 @@ router.post('/subject', async (req, res) => {
       prerequisite,
     } = req.body;
 
-    if (!subject_code || !subject_name) {
+    // 1. Kiểm tra các trường bắt buộc
+    if (!subject_code?.trim() || !subject_name?.trim()) {
       return res.status(400).json({ success: false, message: 'Mã và tên học phần là bắt buộc!' });
     }
+    if (!major_name?.trim() || !cohort?.trim()) {
+      return res.status(400).json({ success: false, message: 'Vui lòng chọn đầy đủ Ngành đào tạo và Khóa học!' });
+    }
 
+    const semIdx = parseInt(semester_index, 10);
+    if (isNaN(semIdx) || semIdx < 1 || semIdx > 15) {
+      return res.status(400).json({ success: false, message: 'Học kỳ không hợp lệ (1 - 15)!' });
+    }
+
+    // 2. Tự động lấy major_code từ bảng faculty_majors theo major_name
+    const majorRes = await pool.query(
+      `SELECT major_code FROM faculty_majors WHERE major_name = $1 LIMIT 1`,
+      [major_name.trim()]
+    );
+    const resolvedMajorCode = majorRes.rows[0]?.major_code || major_name.trim();
+
+    // 3. Tự động tính academic_year động từ năm tuyển sinh của khóa trong academic_cohorts
+    const cohortRes = await pool.query(
+      `SELECT admission_year FROM academic_cohorts WHERE cohort_code = $1 LIMIT 1`,
+      [cohort.trim()]
+    );
+
+    let calculatedAcademicYear = req.body.academic_year?.trim();
+    if (!calculatedAcademicYear) {
+      const admissionYear = cohortRes.rows[0]?.admission_year || parseInt(cohort.replace(/\D/g, ''), 10) + 2000;
+      // Mô hình 3 HK/năm: tính năm học tương ứng
+      const yearOffset = Math.floor((semIdx - 1) / 3);
+      const startYear = admissionYear ? admissionYear + yearOffset : new Date().getFullYear();
+      calculatedAcademicYear = `${startYear}-${startYear + 1}`;
+    }
+
+    // 4. Chuẩn hóa dữ liệu đầu vào
+    const cleanCredits = Number(credits);
+    if (isNaN(cleanCredits) || cleanCredits <= 0) {
+      return res.status(400).json({ success: false, message: 'Số tín chỉ phải lớn hơn 0!' });
+    }
+
+    const finalClassName = class_name && class_name !== 'all' ? class_name.trim() : null;
+    const finalSemName = semester_name?.trim() || `Học kỳ ${semIdx}`;
+    const finalStructure = credits_structure?.trim() || `${cleanCredits}(${cleanCredits},0,0)`;
+    const finalType = subject_type === 'elective' ? 'elective' : 'mandatory';
+    const finalPrereq = prerequisite?.trim() || null;
+
+    // 5. Thao tác chèn vào CSDL
     const result = await pool.query(
       `INSERT INTO curriculum_plans 
        (major_code, major_name, cohort, class_name, academic_year, semester_index, semester_name, 
         subject_code, subject_name, credits_structure, credits, subject_type, prerequisite)
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
-       ON CONFLICT (class_name, semester_index, subject_code) 
+       ON CONFLICT ON CONSTRAINT unique_curriculum_record
        DO UPDATE SET 
           subject_name = EXCLUDED.subject_name,
           credits_structure = EXCLUDED.credits_structure,
           credits = EXCLUDED.credits,
           subject_type = EXCLUDED.subject_type,
-          prerequisite = EXCLUDED.prerequisite
+          prerequisite = EXCLUDED.prerequisite,
+          academic_year = EXCLUDED.academic_year
        RETURNING *`,
       [
-        major_code || '7480104',
-        major_name || 'Hệ Thống Thông Tin',
-        cohort || 'K25',
-        class_name || 'HTTT2511',
-        academic_year || '2025-2026',
-        parseInt(semester_index) || 1,
-        semester_name || `Học kỳ ${semester_index || 1}`,
+        resolvedMajorCode,
+        major_name.trim(),
+        cohort.trim(),
+        finalClassName,
+        calculatedAcademicYear,
+        semIdx,
+        finalSemName,
         subject_code.trim(),
         subject_name.trim(),
-        credits_structure?.trim() || '3(3,0,0)',
-        Number(credits) || 3,
-        subject_type || 'mandatory',
-        prerequisite?.trim() || null,
+        finalStructure,
+        cleanCredits,
+        finalType,
+        finalPrereq,
       ]
     );
 
-    res.json({ success: true, message: 'Đã thêm học phần thành công!', data: result.rows[0] });
+    res.json({ 
+      success: true, 
+      message: 'Đã lưu học phần thành công!', 
+      data: result.rows[0] 
+    });
   } catch (error) {
+    console.error('Lỗi thêm học phần:', error);
     res.status(500).json({ success: false, message: error.message });
   }
 });

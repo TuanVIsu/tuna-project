@@ -9,6 +9,7 @@ import { ManageCommunity } from "./ManageCommunity";
 import { ManageAI } from "./ManageAI";
 import { AdminDashboard } from "./AdminDashboard";
 import { ManageStaff } from "./ManageStaff";
+import { ManageMajors } from "./ManageMajors";
 import logoImg from "../assets/logo.png";
 import "bootstrap-icons/font/bootstrap-icons.css";
 
@@ -182,6 +183,7 @@ export const AdminLayout = ({ onExitAdmin }) => {
   // Danh mục menu phân quyền: Chỉ còn super_admin và teacher
   const allMenuItems = [
     { id: "dashboard", label: "Tổng quan hệ thống", icon: "bi-grid-1x2-fill", roles: ["super_admin", "teacher"] },
+    { id: "majors", label: "Quản lý Ngành & Kỳ", icon: "bi-diagram-3-fill", roles: ["super_admin", "teacher"] },
     { id: "curriculum", label: "Khung CTĐT & Kế hoạch", icon: "bi-journal-bookmark-fill", roles: ["super_admin", "teacher"] },
     { id: "schedules", label: "Thời khóa biểu & Thi", icon: "bi-calendar3", roles: ["super_admin", "teacher"] },
     { id: "users", label: "Sinh viên & Phê duyệt", icon: "bi-people-fill", roles: ["super_admin", "teacher"], badge: studentPendingCount },
@@ -585,6 +587,7 @@ export const AdminLayout = ({ onExitAdmin }) => {
         {/* Nội dung View */}
         <main className="p-3 p-md-4 flex-grow-1 overflow-y-auto w-100" style={{ backgroundColor: "#F8FAFC" }}>
           {activeTab === "dashboard" && <AdminDashboard onNavigate={handleTabChange} currentAdmin={currentAdmin} />}
+          {activeTab === "majors" && <ManageMajors />}
           {activeTab === "curriculum" && <ManageCurriculum />}
           {activeTab === "schedules" && <ManageSchedules />}
           {activeTab === "users" && <ManageUsers />}
