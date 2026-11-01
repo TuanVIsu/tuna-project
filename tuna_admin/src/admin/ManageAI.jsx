@@ -26,8 +26,7 @@ export const ManageAI = () => {
     };
   }, []);
 
-  // Gọi API an toàn, chống triệt để lỗi HTML <!DOCTYPE
-// Gọi API dứt điểm, không lặp candidate URLs
+  // Gọi API an toàn, chống triệt để lỗi HTML <!DOCTYPE>
   const safeAiFetch = useCallback(async (endpoint, reqOptions = {}) => {
     const token = localStorage.getItem("admin_token") || localStorage.getItem("token") || "";
     const headers = {
@@ -61,7 +60,7 @@ export const ManageAI = () => {
     } catch (err) {
       return { success: false, message: err.message || "Lỗi mạng hoặc CORS" };
     }
-  }, [getHeaders]);
+  }, []);
 
   const fetchAIStats = useCallback(async () => {
     try {
@@ -281,7 +280,7 @@ export const ManageAI = () => {
         </div>
       </div>
 
-      {/* 2. 4 THẺ METRICS KPI: KHOẢNG CÁCH RỘNG VÀ CÂN BẰNG ĐÁY */}
+      {/* 2. 4 THẺ METRICS KPI */}
       <div className="row g-3.5">
         {/* Card 1: Tokens */}
         <div className="col-12 col-sm-6 col-xl-3">
@@ -395,7 +394,7 @@ export const ManageAI = () => {
         </div>
       </div>
 
-      {/* 3. BỐ CỤC 2 CỘT CÓ KHOẢNG CÁCH RỘNG RÃI */}
+      {/* 3. BỐ CỤC 2 CỘT */}
       <div className="row g-4 pt-1">
         {/* CỘT TRÁI: FORM THIẾT LẬP */}
         <div className="col-12 col-lg-5">
@@ -657,7 +656,6 @@ export const ManageAI = () => {
         </div>
       </div>
 
-      {/* Hiệu ứng Hover Style */}
       <style>{`
         .metric-card-hover {
           transition: transform 0.2s ease, box-shadow 0.2s ease, border-color 0.2s ease;
