@@ -6,8 +6,10 @@ const API_BASE = import.meta.env.VITE_API_URL || "https://tuna-project.onrender.
 export const ManageSchedules = () => {
   const [schedules, setSchedules] = useState([]);
   const [loading, setLoading] = useState(false);
+  const [uploading, setUploading] = useState(false);
+  const fileInputRef = useRef(null);
 
-  // Danh mục động 100% từ CSDL (Không gán cứng)
+  // Danh mục động 100% từ CSDL
   const [options, setOptions] = useState({
     majors: [],
     cohorts: [],
@@ -113,7 +115,7 @@ export const ManageSchedules = () => {
             setFilterMajor((prev) => prev || loadedMajors[0].majorName);
           }
           if (loadedCohorts.length > 0) {
-            setFilterCohort((prev) => prev || (loadedCohorts.find((c) => c.includes("23")) || loadedCohorts[0]));
+            setFilterCohort((prev) => prev || loadedCohorts[0]);
           }
         }
       } catch (e) {
@@ -186,7 +188,7 @@ export const ManageSchedules = () => {
     }
   };
 
-  // 4. Mở Modal Xếp Lịch: Lấy lớp thực tế từ bộ lọc hoặc CSDL
+  // 4. Mở Modal Xếp Lịch
   const handleOpenScheduleModal = () => {
     setActiveMenuData(null);
     setEditingItem(null);
@@ -194,9 +196,7 @@ export const ManageSchedules = () => {
 
     const defaultMajor = filterMajor || options.majors[0]?.majorName || "";
     const defaultCohort = filterCohort || options.cohorts[0] || "";
-    const targetClass = filterClass !== "all" 
-      ? filterClass 
-      : (options.classes[0] || "");
+    const targetClass = filterClass !== "all" ? filterClass : (options.classes[0] || "");
     const semIndex = getCalculatedSemesterIndex(filterYear, filterSemester);
 
     setFormData({
@@ -223,6 +223,45 @@ export const ManageSchedules = () => {
     setShowScheduleModal(true);
     if (targetClass) {
       loadCurriculumSubjects(targetClass, semIndex);
+    }
+  };
+
+  // 5. Nạp Excel Thời Khóa Biểu
+  const handleFileUpload = async (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+
+    if (!filterMajor || !filterCohort) {
+      alert("Vui lòng chọn Ngành đào tạo và Khóa tuyển sinh trước khi nạp file!");
+      if (fileInputRef.current) fileInputRef.current.value = "";
+      return;
+    }
+
+    const data = new FormData();
+    data.append("file", file);
+    data.append("targetMajor", filterMajor);
+    data.append("targetCohort", filterCohort);
+    data.append("targetClass", filterClass);
+
+    setUploading(true);
+    try {
+      const res = await fetch(`${API_BASE}/schedules/admin/upload-excel`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${localStorage.getItem("admin_token") || localStorage.getItem("token") || ""}` },
+        body: data,
+      });
+      const resData = await res.json();
+      if (resData.success) {
+        alert("✅ " + (resData.message || "Đã nạp thành công thời khóa biểu từ Excel!"));
+        fetchSchedules();
+      } else {
+        alert("Lỗi: " + resData.message);
+      }
+    } catch (err) {
+      alert("Lỗi kết nối máy chủ");
+    } finally {
+      setUploading(false);
+      if (fileInputRef.current) fileInputRef.current.value = "";
     }
   };
 
@@ -400,19 +439,41 @@ export const ManageSchedules = () => {
             </div>
           </div>
 
-          <button
-            onClick={handleOpenScheduleModal}
-            className="btn btn-primary rounded-pill px-3.5 py-2 fw-bold shadow-xs d-flex align-items-center gap-1.5 border-0 text-white cursor-pointer"
-            style={{ fontSize: "12.5px", background: "linear-gradient(135deg, #185bf0 0%, #1546cd 100%)" }}
-          >
-            <i className="bi bi-plus-circle-fill fs-6"></i>
-            <span>Xếp Lịch Học / Thi</span>
-          </button>
+          <div className="d-flex align-items-center gap-2">
+            <input type="file" ref={fileInputRef} onChange={handleFileUpload} accept=".xlsx, .xls" className="d-none" />
+            <button
+              onClick={() => fileInputRef.current?.click()}
+              disabled={uploading}
+              className="btn btn-sm btn-outline-success rounded-pill px-3 py-2 fw-bold d-flex align-items-center gap-1.5 shadow-2xs"
+              style={{ fontSize: "12px" }}
+            >
+              {uploading ? (
+                <>
+                  <span className="spinner-border spinner-border-sm"></span>
+                  <span>Đang nạp file...</span>
+                </>
+              ) : (
+                <>
+                  <i className="bi bi-file-earmark-arrow-up"></i>
+                  <span>Nhập Excel TKB (.xlsx)</span>
+                </>
+              )}
+            </button>
+
+            <button
+              onClick={handleOpenScheduleModal}
+              className="btn btn-primary rounded-pill px-3.5 py-2 fw-bold shadow-xs d-flex align-items-center gap-1.5 border-0 text-white cursor-pointer"
+              style={{ fontSize: "12.5px", background: "linear-gradient(135deg, #185bf0 0%, #1546cd 100%)" }}
+            >
+              <i className="bi bi-plus-circle-fill fs-6"></i>
+              <span>Xếp Lịch Học / Thi</span>
+            </button>
+          </div>
         </div>
 
         {/* Bộ lọc chuẩn từ CSDL */}
-        <div className="row g-5 pt-1">
-          <div className="col-12 col-md-3">
+        <div className="row g-3 pt-1">
+          <div className="col-12 col-md-4">
             <label className="form-label text-uppercase text-secondary fw-bold mb-1" style={{ fontSize: "10px" }}>Ngành Đào Tạo</label>
             <select
               value={filterMajor}
@@ -438,15 +499,13 @@ export const ManageSchedules = () => {
             >
               {options.cohorts.map((c, idx) => (
                 <option key={idx} value={c}>
-                  {c.startsWith("Khóa") ? c : (c.startsWith("K") ? `Khóa ${c}` : `Khóa K${c}`)}
+                  {c}
                 </option>
               ))}
             </select>
           </div>
 
-
-
-          <div className="col-4 col-md-2">
+          <div className="col-6 col-md-2">
             <label className="form-label text-uppercase text-secondary fw-bold mb-1" style={{ fontSize: "10px" }}>Năm Học</label>
             <select
               value={filterYear}
@@ -461,7 +520,7 @@ export const ManageSchedules = () => {
             </select>
           </div>
 
-          <div className="col-4 col-md-2">
+          <div className="col-6 col-md-2">
             <label className="form-label text-uppercase text-secondary fw-bold mb-1" style={{ fontSize: "10px" }}>Học Kỳ</label>
             <select
               value={filterSemester}
@@ -475,7 +534,7 @@ export const ManageSchedules = () => {
             </select>
           </div>
 
-          <div className="col-4 col-md-2">
+          <div className="col-6 col-md-2">
             <label className="form-label text-uppercase text-secondary fw-bold mb-1" style={{ fontSize: "10px" }}>Phân Loại</label>
             <select
               value={filterType}
@@ -496,7 +555,7 @@ export const ManageSchedules = () => {
       <div className="rounded-4 p-4 shadow-sm bg-white border" style={{ borderColor: "#f1f5f9" }}>
         <div className="d-flex justify-content-between align-items-center mb-3">
           <span className="badge bg-primary-subtle text-primary border border-primary-subtle px-3 py-1.5 rounded-pill fw-bold" style={{ fontSize: "11px" }}>
-            {filterMajor || "Hệ Thống Thông Tin"} • Khóa {filterCohort || "K23"} • Năm {filterYear} (Kỳ {filterSemester} - HK {getCalculatedSemesterIndex(filterYear, filterSemester)})
+            {filterMajor || "Hệ Thống Thông Tin"} • {filterCohort || "Khóa 2023"} • Năm {filterYear} (Kỳ {filterSemester} - HK {getCalculatedSemesterIndex(filterYear, filterSemester)})
           </span>
           <small className="text-muted fw-semibold">Tổng: <b>{schedules.length}</b> tiết học/lịch thi</small>
         </div>
@@ -507,7 +566,6 @@ export const ManageSchedules = () => {
               <tr style={{ fontSize: "11px", color: "#64748b", letterSpacing: "0.5px" }} className="text-uppercase">
                 <th style={{ width: "50px", textAlign: "center" }}>STT</th>
                 <th>Môn Học & Mã Học Phần</th>
-              
                 <th>Phân Loại</th>
                 <th>Ngày Diễn Ra</th>
                 <th>Tiết Học</th>
@@ -518,11 +576,11 @@ export const ManageSchedules = () => {
             </thead>
             <tbody style={{ fontSize: "13px" }}>
               {loading ? (
-                <tr><td colSpan={9} className="text-center py-5 text-muted">Đang nạp dữ liệu...</td></tr>
+                <tr><td colSpan={8} className="text-center py-5 text-muted">Đang nạp dữ liệu...</td></tr>
               ) : paginatedData.length === 0 ? (
                 <tr>
-                  <td colSpan={9} className="text-center py-5 text-muted">
-                    Không có lịch học/thi cho tiêu chí đã chọn. Bấm <b>"Xếp Lịch Học / Thi"</b> để tạo lịch mới.
+                  <td colSpan={8} className="text-center py-5 text-muted">
+                    Không có lịch học/thi cho tiêu chí đã chọn. Bấm <b>"Nhập Excel TKB"</b> hoặc <b>"Xếp Lịch Học / Thi"</b> để tạo mới.
                   </td>
                 </tr>
               ) : (
@@ -544,7 +602,6 @@ export const ManageSchedules = () => {
                           )}
                         </div>
                       </td>
-                
                       <td>
                         <span
                           className="badge rounded-pill px-2.5 py-1 fw-bold"
@@ -656,7 +713,7 @@ export const ManageSchedules = () => {
                       {editingItem ? "Cập Nhật Tiết Học / Thi" : "Xếp Lịch Thời Khóa Biểu"}
                     </h6>
                     <small className="text-secondary fw-semibold">
-                      Lớp: <b className="text-primary font-monospace">{formData.className || "Chưa chọn"}</b> • Học kỳ: <b>{formData.semesterIndex}</b>
+                      Khóa: <b className="text-primary font-monospace">{formData.cohort || filterCohort}</b> • Học kỳ: <b>{formData.semesterIndex}</b>
                     </small>
                   </div>
                 </div>
@@ -703,9 +760,6 @@ export const ManageSchedules = () => {
                     </div>
                   )}
 
-                  {/* Lớp sinh hoạt: Cho phép chọn từ danh sách lớp hoặc nhập trực tiếp */}
-
-
                   {entryMode === "from_curriculum" ? (
                     <div className="d-flex flex-column gap-2">
                       <label className="form-label text-uppercase text-secondary fw-bold mb-0" style={{ fontSize: "10px" }}>
@@ -718,7 +772,7 @@ export const ManageSchedules = () => {
                         </div>
                       ) : curriculumSubjects.length === 0 ? (
                         <div className="alert alert-warning p-2 small mb-0 rounded-3">
-                          Chưa có học phần nào trong khung CTĐT kỳ này của lớp {formData.className || "đang chọn"}. Bạn có thể chọn <b>"Tự Nhập Môn Ngoài Khung"</b>.
+                          Chưa có học phần nào trong khung CTĐT kỳ này. Bạn có thể chọn <b>"Tự Nhập Môn Ngoài Khung"</b>.
                         </div>
                       ) : (
                         <select
@@ -757,7 +811,7 @@ export const ManageSchedules = () => {
                         <input
                           type="text"
                           required
-                          placeholder="VD: Sinh hoạt lớp / Kỹ năng mềm..."
+                          placeholder="VD: Kỹ năng mềm / Sinh hoạt chuyên đề..."
                           value={formData.subjectName}
                           onChange={(e) => setFormData({ ...formData, subjectName: e.target.value })}
                           className="form-control form-control-sm rounded-3 fw-bold shadow-none"
@@ -829,7 +883,7 @@ export const ManageSchedules = () => {
                       <div className="col-6">
                         <label className="form-label text-uppercase text-secondary fw-bold mb-1" style={{ fontSize: "10px" }}>Tiết Bắt Đầu *</label>
                         <input
-                          type="number" min="1" max="10" required
+                          type="number" min="1" max="12" required
                           value={formData.startPeriod}
                           onChange={(e) => setFormData({ ...formData, startPeriod: Number(e.target.value) })}
                           className="form-control form-control-sm rounded-3 text-center fw-bold shadow-none"
@@ -838,7 +892,7 @@ export const ManageSchedules = () => {
                       <div className="col-6">
                         <label className="form-label text-uppercase text-secondary fw-bold mb-1" style={{ fontSize: "10px" }}>Tiết Kết Thúc *</label>
                         <input
-                          type="number" min="1" max="10" required
+                          type="number" min="1" max="12" required
                           value={formData.endPeriod}
                           onChange={(e) => setFormData({ ...formData, endPeriod: Number(e.target.value) })}
                           className="form-control form-control-sm rounded-3 text-center fw-bold shadow-none"
