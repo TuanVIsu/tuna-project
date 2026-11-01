@@ -226,9 +226,9 @@ export const ManageSchedules = () => {
     }
   };
 
-  // 5. Nạp Excel Thời Khóa Biểu
-  const handleFileUpload = async (e) => {
-    const file = e.target.files[0];
+// 5. Nạp Excel Thời Khóa Biểu (Hỗ trợ Xóa Ghi Đè)
+  const handleFileUpload = async (e, isOverwrite = false) => {
+    const file = e.target.files ? e.target.files[0] : (fileInputRef.current ? fileInputRef.current.files[0] : null);
     if (!file) return;
 
     if (!filterMajor || !filterCohort) {
@@ -242,6 +242,7 @@ export const ManageSchedules = () => {
     data.append("targetMajor", filterMajor);
     data.append("targetCohort", filterCohort);
     data.append("targetClass", filterClass);
+    if (isOverwrite) data.append("isOverwrite", "true");
 
     setUploading(true);
     try {
@@ -250,10 +251,27 @@ export const ManageSchedules = () => {
         headers: { Authorization: `Bearer ${localStorage.getItem("admin_token") || localStorage.getItem("token") || ""}` },
         body: data,
       });
+      
       const resData = await res.json();
+      
+      // BẮT MÃ LỖI 409 TỪ BACKEND: Đã có dữ liệu, yêu cầu xác nhận ghi đè
+      if (res.status === 409 && resData.requireConfirmation) {
+        setUploading(false); // Dừng loading để hiện popup
+        const userConfirmed = window.confirm(resData.message);
+        
+        if (userConfirmed) {
+          // Nếu đồng ý, gọi lại hàm với cờ isOverwrite = true
+          return handleFileUpload({ target: { files: [file] } }, true);
+        } else {
+          // Nếu hủy, xóa file đã chọn
+          if (fileInputRef.current) fileInputRef.current.value = "";
+          return;
+        }
+      }
+
       if (resData.success) {
-        alert("✅ " + (resData.message || "Đã nạp thành công thời khóa biểu từ Excel!"));
-        fetchSchedules();
+        alert("✅ " + (resData.message || "Đã cập nhật thành công thời khóa biểu từ Excel!"));
+        fetchSchedules(); // Refresh bảng
       } else {
         alert("Lỗi: " + resData.message);
       }
@@ -261,7 +279,8 @@ export const ManageSchedules = () => {
       alert("Lỗi kết nối máy chủ");
     } finally {
       setUploading(false);
-      if (fileInputRef.current) fileInputRef.current.value = "";
+      // Chỉ clear input nếu không ở vòng lặp đệ quy hỏi ghi đè
+      if (!isOverwrite && fileInputRef.current) fileInputRef.current.value = "";
     }
   };
 
@@ -943,4 +962,4 @@ export const ManageSchedules = () => {
   );
 };
 
-export default ManageSchedules;
+export default ManageSchedules; 
