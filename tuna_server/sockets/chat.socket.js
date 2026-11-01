@@ -1,16 +1,17 @@
 // sockets/chat.socket.js
 const pool = require('../config/db');
 
-// Helper: Phân giải user_id (INTEGER) từ định danh
-const resolveUserId = async (rawId, name = '') => {
+// Helper: Phân giải user_id (INTEGER) chính xác từ định danh
+const resolveUserId = async (rawId) => {
   if (!rawId || rawId === 'guest_user') return null;
-  if (/^\d+$/.test(String(rawId))) return parseInt(rawId, 10);
+  const cleanId = String(rawId).trim();
+  if (/^\d+$/.test(cleanId)) return parseInt(cleanId, 10);
 
   const uRes = await pool.query(
     `SELECT id FROM users 
-     WHERE zalo_id = $1 OR student_code = $1 OR LOWER(email) = LOWER($1) OR LOWER(TRIM(name)) = LOWER(TRIM($2))
+     WHERE zalo_id = $1 OR student_code = $1 OR LOWER(email) = LOWER($1)
      ORDER BY id DESC LIMIT 1`,
-    [String(rawId), name]
+    [cleanId]
   ).catch(() => ({ rows: [] }));
 
   return uRes.rows[0]?.id || null;
@@ -25,24 +26,23 @@ module.exports = (io) => {
       socket.join('all');
 
       const userId = typeof payload === 'object' ? payload.userId : null;
-      const userName = typeof payload === 'object' ? payload.userName : null;
 
-      if (userId || userName) {
+      if (userId) {
         try {
-          const numericUserId = await resolveUserId(userId, userName);
+          const numericUserId = await resolveUserId(userId);
           if (numericUserId) {
             const checkRes = await pool.query(
-              `SELECT id, is_locked, lock_until, lock_reason, warning_reason 
-               FROM users 
-               WHERE id = $1`,
+              `SELECT id, is_locked, lock_until, lock_reason, warning_reason, warning_count 
+               FROM users WHERE id = $1`,
               [numericUserId]
             );
 
             if (checkRes.rows.length > 0) {
               const u = checkRes.rows[0];
-              if (u.warning_reason) {
+              if (u.warning_reason && u.warning_count > 0) {
                 socket.emit('admin_warning_received', {
                   userId: String(userId),
+                  warningCount: u.warning_count,
                   reason: u.warning_reason,
                   warnedBy: 'Ban Quản Trị'
                 });
@@ -75,7 +75,7 @@ module.exports = (io) => {
       }
     });
 
-    // 2. Sự kiện Admin gửi cảnh báo
+    // 2. Sự kiện Admin gửi cảnh báo qua Socket
     socket.on('admin_warn_user', async ({ targetUserId, reason, adminName }) => {
       try {
         const numericUserId = await resolveUserId(targetUserId);
@@ -110,7 +110,7 @@ module.exports = (io) => {
       if ((!content || !content.trim()) && !imageUrl) return;
 
       try {
-        let numericUserId = await resolveUserId(userId, userName);
+        let numericUserId = await resolveUserId(userId);
 
         if (!numericUserId) {
           const insUser = await pool.query(
@@ -125,38 +125,38 @@ module.exports = (io) => {
 
         // Kiểm tra trạng thái khóa tài khoản
         const checkRes = await pool.query(
-          `SELECT id, is_locked, lock_until, lock_reason FROM users WHERE id = $1`,
+          `SELECT id, is_locked, lock_until, lock_reason, student_code, class_name, warning_count FROM users WHERE id = $1`,
           [numericUserId]
         );
 
-        if (checkRes.rows.length > 0 && checkRes.rows[0].is_locked) {
-          const u = checkRes.rows[0];
-          if (u.lock_until && new Date() > new Date(u.lock_until)) {
-            await pool.query(`UPDATE users SET is_locked = FALSE, lock_until = NULL, lock_reason = NULL WHERE id = $1`, [u.id]);
+        const uInfo = checkRes.rows[0] || {};
+        if (uInfo.is_locked) {
+          if (uInfo.lock_until && new Date() > new Date(uInfo.lock_until)) {
+            await pool.query(`UPDATE users SET is_locked = FALSE, lock_until = NULL, lock_reason = NULL WHERE id = $1`, [uInfo.id]);
             socket.emit('user_unlocked', { userId: String(userId), isLocked: false });
           } else {
             return socket.emit('user_locked', {
               userId: String(userId),
               isLocked: true,
-              lockUntil: u.lock_until,
-              reason: u.lock_reason || 'Tài khoản của bạn đang bị khóa quyền nhắn tin!',
-              durationText: u.lock_until ? new Date(u.lock_until).toLocaleString('vi-VN') : 'Vĩnh viễn',
+              lockUntil: uInfo.lock_until,
+              reason: uInfo.lock_reason || 'Tài khoản của bạn đang bị khóa quyền nhắn tin!',
+              durationText: uInfo.lock_until ? new Date(uInfo.lock_until).toLocaleString('vi-VN') : 'Vĩnh viễn',
             });
           }
         }
 
         const displayName = isAnonymous ? 'Sinh viên ẩn danh' : (userName || 'Sinh viên');
         const targetCategory = category || 'all';
-        const replyJson = replyTo ? JSON.stringify(replyTo) : null;
+        const replyJson = replyTo ? (typeof replyTo === 'string' ? replyTo : JSON.stringify(replyTo)) : null;
 
-        // Lưu vào community_messages với user_id dạng INTEGER
         const insertQuery = `
           INSERT INTO community_messages (category, user_id, content, image_url, reply_to, is_ai, is_recalled)
           VALUES ($1, $2, $3, $4, $5, FALSE, FALSE)
           RETURNING id, category, user_id, content, image_url, is_ai,
                     reply_to AS "replyTo", is_recalled, created_at,
                     TO_CHAR(created_at, 'HH24:MI') as time,
-                    TO_CHAR(created_at, 'YYYY-MM-DD') as date;
+                    TO_CHAR(created_at, 'YYYY-MM-DD') as date,
+                    TO_CHAR(created_at, 'DD/MM/YYYY HH24:MI:SS') as "createdAt";
         `;
         const res = await pool.query(insertQuery, [
           targetCategory, numericUserId, (content || '').trim(), imageUrl || null, replyJson
@@ -164,8 +164,13 @@ module.exports = (io) => {
 
         const savedMsg = {
           ...res.rows[0],
-          user_id: userId, // Giữ nguyên userId đầu vào để giao diện client nhận dạng đúng
+          user_id: numericUserId,
+          client_user_id: userId,
           user_name: displayName,
+          student_code: uInfo.student_code || null,
+          class_name: uInfo.class_name || null,
+          warning_count: uInfo.warning_count || 0,
+          is_currently_locked: false,
           avatar: isAnonymous ? '' : (avatar || '')
         };
 

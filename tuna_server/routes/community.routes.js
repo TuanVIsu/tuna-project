@@ -4,16 +4,17 @@ const router = express.Router();
 const pool = require('../config/db');
 const { authenticateToken } = require('../middlewares/auth');
 
-// Helper: Phân giải user_id (INTEGER) từ định danh
-const resolveUserId = async (rawId, name = '') => {
+// Helper: Phân giải user_id (INTEGER) chính xác từ định danh (Không khớp theo tên để tránh trùng sinh viên)
+const resolveUserId = async (rawId) => {
   if (!rawId || rawId === 'guest_user') return null;
-  if (/^\d+$/.test(String(rawId))) return parseInt(rawId, 10);
+  const cleanId = String(rawId).trim();
+  if (/^\d+$/.test(cleanId)) return parseInt(cleanId, 10);
 
   const uRes = await pool.query(
     `SELECT id FROM users 
-     WHERE zalo_id = $1 OR student_code = $1 OR LOWER(email) = LOWER($1) OR LOWER(TRIM(name)) = LOWER(TRIM($2))
+     WHERE zalo_id = $1 OR student_code = $1 OR LOWER(email) = LOWER($1)
      ORDER BY id DESC LIMIT 1`,
-    [String(rawId), name]
+    [cleanId]
   ).catch(() => ({ rows: [] }));
 
   return uRes.rows[0]?.id || null;
@@ -23,7 +24,7 @@ const resolveUserId = async (rawId, name = '') => {
 // 1. DÀNH CHO APP SINH VIÊN (ChatSection.jsx)
 // =============================================================================
 
-// GET /api/community/messages/:category - Lấy lịch sử tin nhắn
+// GET /messages/:category - Lấy lịch sử tin nhắn
 router.get('/messages/:category', async (req, res) => {
   try {
     const { category } = req.params;
@@ -34,6 +35,8 @@ router.get('/messages/:category', async (req, res) => {
         m.category, 
         m.user_id, 
         COALESCE(u.name, 'Thành viên') AS user_name, 
+        u.student_code,
+        u.class_name,
         COALESCE(u.avatar, '') AS avatar, 
         m.content, 
         m.image_url, 
@@ -47,7 +50,7 @@ router.get('/messages/:category', async (req, res) => {
       LEFT JOIN users u ON m.user_id = u.id
       WHERE m.category = $1 OR $1 = 'all'
       ORDER BY m.created_at ASC
-      LIMIT 120
+      LIMIT 150
     `;
     const { rows } = await pool.query(query, [category || 'all']);
     res.json({ success: true, messages: rows });
@@ -57,7 +60,7 @@ router.get('/messages/:category', async (req, res) => {
   }
 });
 
-// POST /api/community/messages - Gửi tin nhắn qua HTTP POST
+// POST /messages - Gửi tin nhắn qua HTTP POST
 router.post('/messages', async (req, res) => {
   try {
     const { category = 'all', userId, userName, avatar, content, imageUrl, replyTo, isAnonymous } = req.body;
@@ -65,20 +68,21 @@ router.post('/messages', async (req, res) => {
       return res.status(400).json({ success: false, message: 'Nội dung không được để trống' });
     }
 
-    let numericUserId = await resolveUserId(userId, userName);
+    let numericUserId = await resolveUserId(userId);
 
     if (!numericUserId) {
+      const fallbackZaloId = String(userId || `zalo_${Date.now()}`);
       const insUser = await pool.query(
         `INSERT INTO users (zalo_id, name, avatar, role)
          VALUES ($1, $2, $3, 'student')
          ON CONFLICT (zalo_id) DO UPDATE SET name = EXCLUDED.name
          RETURNING id`,
-        [String(userId || 'zalo_' + Date.now()), userName || 'Sinh viên', avatar || '']
+        [fallbackZaloId, userName || 'Sinh viên', avatar || '']
       );
       numericUserId = insUser.rows[0].id;
     }
 
-    // Kiểm tra trạng thái khóa tài khoản
+    // Kiểm tra và tự động mở khóa nếu đã hết hạn phạt
     const checkRes = await pool.query(
       `SELECT id, is_locked, lock_until, lock_reason FROM users WHERE id = $1`,
       [numericUserId]
@@ -86,13 +90,23 @@ router.post('/messages', async (req, res) => {
 
     if (checkRes.rows.length > 0 && checkRes.rows[0].is_locked) {
       const u = checkRes.rows[0];
-      if (!u.lock_until || new Date(u.lock_until) > new Date()) {
-        return res.status(403).json({ success: false, isLocked: true, message: u.lock_reason || 'Tài khoản đang bị khóa!' });
+      if (u.lock_until && new Date() > new Date(u.lock_until)) {
+        await pool.query(
+          `UPDATE users SET is_locked = FALSE, lock_until = NULL, lock_reason = NULL WHERE id = $1`,
+          [numericUserId]
+        );
+      } else {
+        return res.status(403).json({
+          success: false,
+          isLocked: true,
+          lockUntil: u.lock_until,
+          message: u.lock_reason || 'Tài khoản của bạn đang bị khóa quyền thảo luận!'
+        });
       }
     }
 
     const displayName = isAnonymous ? 'Sinh viên ẩn danh' : (userName || 'Sinh viên');
-    const replyJson = replyTo ? JSON.stringify(replyTo) : null;
+    const replyJson = replyTo ? (typeof replyTo === 'string' ? replyTo : JSON.stringify(replyTo)) : null;
 
     const insertRes = await pool.query(`
       INSERT INTO community_messages (category, user_id, content, image_url, reply_to, is_ai, is_recalled)
@@ -100,7 +114,8 @@ router.post('/messages', async (req, res) => {
       RETURNING id, category, user_id, content, image_url, is_ai,
                 reply_to AS "replyTo", is_recalled, created_at,
                 TO_CHAR(created_at, 'HH24:MI') as time,
-                TO_CHAR(created_at, 'YYYY-MM-DD') as date
+                TO_CHAR(created_at, 'YYYY-MM-DD') as date,
+                TO_CHAR(created_at, 'DD/MM/YYYY HH24:MI:SS') as "createdAt"
     `, [category, numericUserId, (content || '').trim(), imageUrl || null, replyJson]);
 
     const savedMsg = {
@@ -122,7 +137,7 @@ router.post('/messages', async (req, res) => {
   }
 });
 
-// POST /api/community/messages/recall - Thu hồi tin nhắn trong vòng 60 phút
+// POST /messages/recall - Thu hồi tin nhắn trong vòng 60 phút
 router.post('/messages/recall', async (req, res) => {
   try {
     const { messageId, userId } = req.body;
@@ -131,7 +146,6 @@ router.post('/messages/recall', async (req, res) => {
     }
 
     const numericUserId = await resolveUserId(userId);
-
     const checkRes = await pool.query(
       `SELECT id, user_id, created_at FROM community_messages WHERE id = $1`,
       [Number(messageId)]
@@ -142,14 +156,11 @@ router.post('/messages/recall', async (req, res) => {
     }
 
     const msg = checkRes.rows[0];
-
     if (msg.user_id !== numericUserId) {
       return res.status(403).json({ success: false, message: 'Bạn chỉ có thể thu hồi tin nhắn của chính mình!' });
     }
 
-    const msgTime = new Date(msg.created_at).getTime();
-    const diffMinutes = (Date.now() - msgTime) / (1000 * 60);
-
+    const diffMinutes = (Date.now() - new Date(msg.created_at).getTime()) / (1000 * 60);
     if (diffMinutes > 60) {
       return res.status(400).json({
         success: false,
@@ -165,27 +176,26 @@ router.post('/messages/recall', async (req, res) => {
     );
 
     const io = req.app.get('io');
-    if (io) {
-      io.emit('message_recalled', { messageId: Number(messageId) });
-    }
+    if (io) io.emit('message_recalled', { messageId: Number(messageId) });
 
     res.json({ success: true, message: 'Thu hồi tin nhắn thành công!' });
   } catch (err) {
-    console.error("Lỗi thu hồi tin nhắn:", err.message);
     res.status(500).json({ success: false, message: err.message });
   }
 });
 
-// GET /api/community/user-status/:userId
+// GET /user-status/:userId
 router.get('/user-status/:userId', async (req, res) => {
   try {
     const { userId } = req.params;
     const numericUserId = await resolveUserId(userId);
+    if (!numericUserId) {
+      return res.json({ success: true, isLocked: false, warningCount: 0 });
+    }
 
     const { rows } = await pool.query(
-      `SELECT is_locked, lock_until, lock_reason, warning_count, warning_reason, last_warning_reason
-       FROM users 
-       WHERE id = $1`,
+      `SELECT id, is_locked, lock_until, lock_reason, warning_count, warning_reason, last_warning_reason
+       FROM users WHERE id = $1`,
       [numericUserId]
     );
 
@@ -194,7 +204,12 @@ router.get('/user-status/:userId', async (req, res) => {
     }
 
     const u = rows[0];
-    const isLocked = u.is_locked && (!u.lock_until || new Date(u.lock_until) > new Date());
+    if (u.is_locked && u.lock_until && new Date() > new Date(u.lock_until)) {
+      await pool.query(`UPDATE users SET is_locked = FALSE, lock_until = NULL, lock_reason = NULL WHERE id = $1`, [u.id]);
+      u.is_locked = false;
+    }
+
+    const isLocked = Boolean(u.is_locked);
     const warnReason = u.warning_reason || u.last_warning_reason || null;
 
     res.json({
@@ -212,21 +227,23 @@ router.get('/user-status/:userId', async (req, res) => {
   }
 });
 
-// GET /api/community/categories
+// GET /categories
 router.get('/categories', async (req, res) => {
   try {
     const majorsRes = await pool.query(`SELECT major_code, major_name FROM faculty_majors ORDER BY id ASC`).catch(() => ({ rows: [] }));
     const usedCatRes = await pool.query(`SELECT DISTINCT category FROM community_messages WHERE category IS NOT NULL AND category <> '' AND category <> 'all'`).catch(() => ({ rows: [] }));
 
     const colorPalette = [
-      "bg-primary-subtle text-primary", "bg-info-subtle text-info-emphasis",
-      "bg-success-subtle text-success", "bg-warning-subtle text-warning-emphasis",
-      "bg-danger-subtle text-danger", "bg-purple-subtle text-purple"
+      "bg-primary-subtle text-primary border-primary-subtle",
+      "bg-info-subtle text-info-emphasis border-info-subtle",
+      "bg-success-subtle text-success border-success-subtle",
+      "bg-warning-subtle text-warning-emphasis border-warning-subtle",
+      "bg-danger-subtle text-danger border-danger-subtle"
     ];
 
     const categories = [
-      { id: "all", label: "Tất cả chuyên mục", color: "bg-light text-dark border fw-bold" },
-      { id: "cntt_general", label: "Khoa CNTT (Chung)", color: "bg-primary-subtle text-primary" }
+      { id: "all", label: "Tất cả chuyên mục", color: "bg-light text-dark border" },
+      { id: "cntt_general", label: "Khoa CNTT (Chung)", color: "bg-primary-subtle text-primary border-primary-subtle" }
     ];
 
     majorsRes.rows.forEach((m, idx) => {
@@ -238,7 +255,11 @@ router.get('/categories', async (req, res) => {
 
     usedCatRes.rows.forEach((r, idx) => {
       if (!categories.some(c => c.id === r.category)) {
-        categories.push({ id: r.category, label: r.category.toUpperCase(), color: colorPalette[(idx + majorsRes.rows.length) % colorPalette.length] });
+        categories.push({
+          id: r.category,
+          label: r.category.toUpperCase(),
+          color: colorPalette[(idx + majorsRes.rows.length) % colorPalette.length]
+        });
       }
     });
 
@@ -254,13 +275,22 @@ router.get('/categories', async (req, res) => {
 router.get('/messages', authenticateToken, async (req, res) => {
   try {
     const { category, search, hasImage, isAi, penaltyStatus } = req.query;
-    
+
+    // Tự động giải phóng các tài khoản đã hết thời hạn khóa trước khi truy vấn
+    await pool.query(`
+      UPDATE users 
+      SET is_locked = FALSE, lock_until = NULL, lock_reason = NULL 
+      WHERE is_locked = TRUE AND lock_until IS NOT NULL AND lock_until <= CURRENT_TIMESTAMP
+    `).catch(() => {});
+
     let query = `
       SELECT 
         m.id, 
         m.category, 
         m.user_id, 
         COALESCE(u.name, 'Sinh viên') AS user_name, 
+        u.student_code,
+        u.class_name,
         COALESCE(u.avatar, '') AS avatar, 
         m.content, 
         m.image_url, 
@@ -270,6 +300,7 @@ router.get('/messages', authenticateToken, async (req, res) => {
         TO_CHAR(m.created_at, 'DD/MM/YYYY HH24:MI:SS') AS "createdAt",
         TO_CHAR(m.created_at, 'HH24:MI') AS time,
         COALESCE(u.warning_count, 0) AS warning_count,
+        COALESCE(u.warning_reason, u.last_warning_reason) AS warning_reason,
         CASE 
           WHEN u.is_locked = TRUE AND (u.lock_until IS NULL OR u.lock_until > CURRENT_TIMESTAMP) THEN TRUE
           ELSE FALSE
@@ -296,7 +327,12 @@ router.get('/messages', authenticateToken, async (req, res) => {
     }
     if (search && search.trim()) {
       params.push(`%${search.trim().toLowerCase()}%`);
-      query += ` AND (LOWER(m.content) ILIKE $${params.length} OR LOWER(u.name) ILIKE $${params.length})`;
+      query += ` AND (
+        LOWER(m.content) ILIKE $${params.length} 
+        OR LOWER(COALESCE(u.name, '')) ILIKE $${params.length}
+        OR LOWER(COALESCE(u.student_code, '')) ILIKE $${params.length}
+        OR LOWER(COALESCE(u.class_name, '')) ILIKE $${params.length}
+      )`;
     }
     if (penaltyStatus === 'locked') {
       query += ` AND u.is_locked = TRUE AND (u.lock_until IS NULL OR u.lock_until > CURRENT_TIMESTAMP)`;
@@ -304,21 +340,33 @@ router.get('/messages', authenticateToken, async (req, res) => {
       query += ` AND COALESCE(u.warning_count, 0) > 0 AND (u.is_locked = FALSE OR u.is_locked IS NULL)`;
     }
 
-    query += ` ORDER BY m.created_at DESC LIMIT 200`;
+    query += ` ORDER BY m.created_at DESC LIMIT 250`;
     const { rows } = await pool.query(query, params);
 
-    const statsRes = await pool.query(`
-      SELECT 
-        COUNT(*)::INT AS total,
-        COUNT(CASE WHEN image_url IS NOT NULL AND image_url <> '' THEN 1 END)::INT AS with_image,
-        COUNT(CASE WHEN is_ai = TRUE THEN 1 END)::INT AS ai_replies
-      FROM community_messages
-    `);
+    // Thống kê đầy đủ cả 5 chỉ số (Sửa lỗi total_locked và total_warned bị 0)
+    const [msgStatsRes, userStatsRes] = await Promise.all([
+      pool.query(`
+        SELECT 
+          COUNT(*)::INT AS total,
+          COUNT(CASE WHEN image_url IS NOT NULL AND image_url <> '' THEN 1 END)::INT AS with_image,
+          COUNT(CASE WHEN is_ai = TRUE THEN 1 END)::INT AS ai_replies
+        FROM community_messages
+      `),
+      pool.query(`
+        SELECT 
+          COUNT(CASE WHEN is_locked = TRUE AND (lock_until IS NULL OR lock_until > CURRENT_TIMESTAMP) THEN 1 END)::INT AS total_locked,
+          COUNT(CASE WHEN COALESCE(warning_count, 0) > 0 AND (is_locked = FALSE OR is_locked IS NULL) THEN 1 END)::INT AS total_warned
+        FROM users
+      `)
+    ]);
 
     res.json({
       success: true,
       messages: rows,
-      stats: statsRes.rows[0],
+      stats: {
+        ...msgStatsRes.rows[0],
+        ...userStatsRes.rows[0]
+      },
     });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });
@@ -354,30 +402,53 @@ router.post('/messages/bulk-delete', authenticateToken, async (req, res) => {
 
 router.post('/user/warn', authenticateToken, async (req, res) => {
   try {
-    const { userId, userName = 'Sinh viên', reason } = req.body;
+    const { userId, userName = 'Sinh viên', reason, deleteMessageId } = req.body;
     if (!userId || !reason) {
       return res.status(400).json({ success: false, message: 'Thiếu thông tin người dùng hoặc lý do' });
     }
 
-    const targetId = await resolveUserId(userId, userName);
+    const targetId = await resolveUserId(userId);
     if (!targetId) {
-      return res.status(404).json({ success: false, message: 'Không tìm thấy người dùng' });
+      return res.status(404).json({ success: false, message: 'Không tìm thấy người dùng trong CSDL' });
     }
 
-    await pool.query(
+    const updateRes = await pool.query(
       `UPDATE users 
        SET warning_count = COALESCE(warning_count, 0) + 1, 
            warning_reason = $1, 
            last_warning_reason = $1 
-       WHERE id = $2`, 
+       WHERE id = $2
+       RETURNING warning_count`, 
       [reason, targetId]
     );
 
+    const newWarnCount = updateRes.rows[0]?.warning_count || 1;
     const io = req.app.get('io');
+
+    // Nếu Admin tích chọn xóa luôn tin nhắn vi phạm
+    if (deleteMessageId) {
+      await pool.query(`DELETE FROM community_messages WHERE id = $1`, [Number(deleteMessageId)]).catch(() => {});
+      if (io) io.emit('message_deleted', Number(deleteMessageId));
+    }
+
+    // Ghi log kiểm toán
+    await pool.query(`
+      INSERT INTO admin_audit_logs (actor_id, actor_name, actor_role, action, target, details)
+      VALUES ($1, $2, $3, $4, $5, $6)
+    `, [
+      req.user?.id || null,
+      req.user?.name || req.user?.full_name || 'Ban Quản Trị',
+      req.user?.role || 'super_admin',
+      'CẢNH BÁO VI PHẠM',
+      `${userName} (#${targetId})`,
+      `Lần ${newWarnCount} | Lý do: ${reason}`
+    ]).catch(() => {});
+
     if (io) {
       const warningPayload = {
         userId: String(targetId),
         userName: userName,
+        warningCount: newWarnCount,
         reason: reason,
         warnedBy: 'Ban Quản Trị',
         timestamp: new Date().toISOString()
@@ -388,7 +459,7 @@ router.post('/user/warn', authenticateToken, async (req, res) => {
       io.emit(`user_warning_${targetId}`, warningPayload);
     }
 
-    res.json({ success: true, message: `Đã gửi cảnh báo thành công!` });
+    res.json({ success: true, message: `Đã gửi cảnh báo (Lần ${newWarnCount}) tới ${userName}!`, warningCount: newWarnCount });
   } catch (err) {
     console.error("Lỗi cảnh báo:", err);
     res.status(500).json({ success: false, message: err.message });
@@ -397,7 +468,7 @@ router.post('/user/warn', authenticateToken, async (req, res) => {
 
 router.post('/user/lock', authenticateToken, async (req, res) => {
   try {
-    const { userId, userName = 'Sinh viên', duration, reason } = req.body;
+    const { userId, userName = 'Sinh viên', duration, reason, deleteMessageId } = req.body;
     if (!userId || !duration || !reason) {
       return res.status(400).json({ success: false, message: 'Vui lòng cung cấp đầy đủ thông tin thời hạn và lý do' });
     }
@@ -413,12 +484,21 @@ router.post('/user/lock', authenticateToken, async (req, res) => {
       durationText = '24 Giờ';
     }
 
-    const targetId = await resolveUserId(userId, userName);
+    const targetId = await resolveUserId(userId);
     if (!targetId) {
       return res.status(404).json({ success: false, message: 'Không tìm thấy người dùng' });
     }
 
-    await pool.query(`UPDATE users SET is_locked = TRUE, lock_until = $1, lock_reason = $2 WHERE id = $3`, [lockUntil, reason, targetId]);
+    await pool.query(
+      `UPDATE users SET is_locked = TRUE, lock_until = $1, lock_reason = $2 WHERE id = $3`,
+      [lockUntil, reason, targetId]
+    );
+
+    const io = req.app.get('io');
+    if (deleteMessageId) {
+      await pool.query(`DELETE FROM community_messages WHERE id = $1`, [Number(deleteMessageId)]).catch(() => {});
+      if (io) io.emit('message_deleted', Number(deleteMessageId));
+    }
 
     await pool.query(`
       INSERT INTO admin_audit_logs (actor_id, actor_name, actor_role, action, target, details)
@@ -432,7 +512,6 @@ router.post('/user/lock', authenticateToken, async (req, res) => {
       `Thời hạn: ${durationText} | Lý do: ${reason}`
     ]).catch(() => {});
 
-    const io = req.app.get('io');
     if (io) {
       const lockPayload = { userId: targetId, userName, isLocked: true, lockUntil, reason, durationText };
       io.emit('user_locked', lockPayload);
@@ -447,7 +526,7 @@ router.post('/user/lock', authenticateToken, async (req, res) => {
 router.post('/user/unlock', authenticateToken, async (req, res) => {
   try {
     const { userId, userName = 'Sinh viên', reason } = req.body;
-    const targetId = await resolveUserId(userId, userName);
+    const targetId = await resolveUserId(userId);
 
     if (!targetId) {
       return res.status(404).json({ success: false, message: 'Không tìm thấy người dùng' });
@@ -455,7 +534,7 @@ router.post('/user/unlock', authenticateToken, async (req, res) => {
 
     await pool.query(
       `UPDATE users 
-       SET is_locked = FALSE, lock_until = NULL, lock_reason = NULL, warning_count = 0
+       SET is_locked = FALSE, lock_until = NULL, lock_reason = NULL, warning_count = 0, warning_reason = NULL
        WHERE id = $1`,
       [targetId]
     );
@@ -478,7 +557,7 @@ router.post('/user/unlock', authenticateToken, async (req, res) => {
       io.emit('user_unlocked', unlockPayload);
       io.emit(`user_unlocked_${targetId}`, unlockPayload);
     }
-    res.json({ success: true, message: `Đã mở khóa tài khoản thành công!` });
+    res.json({ success: true, message: `Đã mở khóa và xóa cảnh báo cho ${userName}!` });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });
   }

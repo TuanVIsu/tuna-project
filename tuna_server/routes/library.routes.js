@@ -5,6 +5,7 @@ const pool = require('../config/db');
 const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
+const xlsx = require('xlsx');
 const { authenticateToken } = require('../middlewares/auth');
 
 const uploadDir = path.join(__dirname, '../uploads/library');
@@ -12,6 +13,7 @@ if (!fs.existsSync(uploadDir)) {
   fs.mkdirSync(uploadDir, { recursive: true });
 }
 
+// Cấu hình lưu trữ cho tài liệu (PDF, Word, Slide...)
 const storage = multer.diskStorage({
   destination: (req, file, cb) => cb(null, uploadDir),
   filename: (req, file, cb) => {
@@ -21,6 +23,7 @@ const storage = multer.diskStorage({
   },
 });
 const upload = multer({ storage });
+const memoryUpload = multer({ storage: multer.memoryStorage() });
 
 // =============================================================================
 // 1. LẤY DANH SÁCH HỌC LIỆU & ĐỀ THI (KÈM BỘ LỌC ĐỒNG BỘ)
@@ -124,7 +127,7 @@ router.get('/', async (req, res) => {
 });
 
 // =============================================================================
-// 2. LẤY DANH MỤC MÔN HỌC ĐỒNG BỘ TỪ KHUNG CTĐT (KÈM SỐ KỲ/NĂM CỦA NGÀNH)
+// 2. LẤY DANH MỤC MÔN HỌC ĐỒNG BỘ TỪ KHUNG CTĐT
 // =============================================================================
 router.get('/curriculum-sync-subjects', async (req, res) => {
   try {
@@ -175,7 +178,7 @@ router.patch('/:id/toggle-status', authenticateToken, async (req, res) => {
 });
 
 // =============================================================================
-// 4. ĐĂNG TẢI HỌC LIỆU HÀNG LOẠT (HỖ TRỢ PHÂN LOẠI RIÊNG TỪNG FILE)
+// 4. ĐĂNG TẢI HỌC LIỆU HÀNG LOẠT (PDF, DOC, VIDEO, PPTX)
 // =============================================================================
 router.post('/batch', authenticateToken, upload.array('files'), async (req, res) => {
   try {
@@ -223,7 +226,6 @@ router.post('/batch', authenticateToken, upload.array('files'), async (req, res)
         fileIndex++;
       }
 
-      // Ưu tiên subCategory riêng của từng file, nếu không có mới lấy mặc định của form
       const itemSubCategory = item.subCategory || subCategory || 'lecture_slide';
       const itemIsReference = itemSubCategory === 'reference' ? true : (isReference === 'true' || isReference === true);
 
@@ -263,7 +265,197 @@ router.post('/batch', authenticateToken, upload.array('files'), async (req, res)
 });
 
 // =============================================================================
-// 5. CẬP NHẬT THÔNG TIN HỌC LIỆU / ĐỀ THI
+// 5. NẠP ĐỀ THI / BỘ THẺ TỪ EXCEL VÀO HỆ THỐNG
+// =============================================================================
+router.post('/exams/upload-excel', authenticateToken, memoryUpload.single('file'), async (req, res) => {
+  const client = await pool.connect();
+  try {
+    if (!req.file) {
+      return res.status(400).json({ success: false, message: 'Vui lòng đính kèm file Excel đề thi!' });
+    }
+
+    const {
+      title,
+      subjectName,
+      subjectCode,
+      facultyMajor,
+      academicYear,
+      semester,
+      durationMinutes,
+      passScore,
+      examType 
+    } = req.body;
+
+    if (!title?.trim() || !subjectName?.trim()) {
+      return res.status(400).json({ success: false, message: 'Thiếu tiêu đề đề thi hoặc tên môn học!' });
+    }
+
+    const workbook = xlsx.read(req.file.buffer, { type: 'buffer' });
+    const sheet = workbook.Sheets[workbook.SheetNames[0]];
+    const rawData = xlsx.utils.sheet_to_json(sheet, { header: 1 });
+
+    if (!rawData || rawData.length < 2) {
+      return res.status(400).json({ success: false, message: 'File Excel rỗng hoặc không có dữ liệu!' });
+    }
+
+    // Fuzzy matching để định vị cột linh hoạt
+    let headerIdx = -1;
+    let colMap = { q: -1, a: -1, b: -1, c: -1, d: -1, ans: -1, exp: -1, front: -1, back: -1 };
+
+    const aliases = {
+      q: ["câu hỏi", "cau hoi", "question", "q", "nội dung", "de bai", "đề bài"],
+      a: ["đáp án a", "dap an a", "a", "phương án a", "opt a", "option a"],
+      b: ["đáp án b", "dap an b", "b", "phương án b", "opt b", "option b"],
+      c: ["đáp án c", "dap an c", "c", "phương án c", "opt c", "option c"],
+      d: ["đáp án d", "dap an d", "d", "phương án d", "opt d", "option d"],
+      ans: ["đáp án đúng", "dap an dung", "đáp án", "dap an", "answer", "key", "đúng", "correct"],
+      exp: ["giải thích", "giai thich", "explain", "ghi chú", "note", "lời giải"],
+      front: ["mặt trước", "mat truoc", "thuật ngữ", "thuat ngu", "front", "term"],
+      back: ["mặt sau", "mat sau", "định nghĩa", "dinh nghia", "back", "definition", "nghĩa"]
+    };
+
+    for (let r = 0; r < Math.min(10, rawData.length); r++) {
+      const row = (rawData[r] || []).map(cell => String(cell || '').trim().toLowerCase());
+      
+      // Nếu dòng này có chứa bất kỳ từ khóa chính nào
+      if (row.some(c => c.includes('câu hỏi') || c.includes('mặt trước') || c.includes('thuật ngữ'))) {
+        headerIdx = r;
+        row.forEach((cellText, idx) => {
+          for (const [key, patterns] of Object.entries(aliases)) {
+            if (patterns.some(p => cellText === p || cellText.includes(p))) {
+              if (colMap[key] === -1) colMap[key] = idx;
+            }
+          }
+        });
+        break;
+      }
+    }
+
+    if (headerIdx === -1) {
+      return res.status(400).json({ success: false, message: 'Không nhận diện được dòng tiêu đề cột trong file Excel (Cần cột "Câu hỏi" hoặc "Mặt trước").' });
+    }
+
+    const parsedItems = [];
+    for (let r = headerIdx + 1; r < rawData.length; r++) {
+      const row = rawData[r];
+      if (!row || row.length === 0) continue;
+
+      if (examType === 'multiple_choice') {
+        const questionText = colMap.q !== -1 ? String(row[colMap.q] || '').trim() : '';
+        const optA = colMap.a !== -1 ? String(row[colMap.a] || '').trim() : '';
+        const optB = colMap.b !== -1 ? String(row[colMap.b] || '').trim() : '';
+        const optC = colMap.c !== -1 ? String(row[colMap.c] || '').trim() : '...';
+        const optD = colMap.d !== -1 ? String(row[colMap.d] || '').trim() : '...';
+        
+        let correctOpt = colMap.ans !== -1 ? String(row[colMap.ans] || 'A').trim().toUpperCase() : 'A';
+        if (!['A', 'B', 'C', 'D'].includes(correctOpt)) correctOpt = 'A';
+        
+        const explanation = colMap.exp !== -1 ? String(row[colMap.exp] || '').trim() : '';
+
+        if (questionText && optA && optB) {
+          parsedItems.push({
+            questionText,
+            options: { A: optA, B: optB, C: optC, D: optD },
+            answer: correctOpt,
+            explain: explanation
+          });
+        }
+      } else {
+        // Flashcard
+        const frontText = colMap.front !== -1 ? String(row[colMap.front] || '').trim() : (colMap.q !== -1 ? String(row[colMap.q] || '').trim() : '');
+        const backText = colMap.back !== -1 ? String(row[colMap.back] || '').trim() : (colMap.exp !== -1 ? String(row[colMap.exp] || '').trim() : '');
+
+        if (frontText && backText) {
+          parsedItems.push({
+            frontText,
+            backText,
+            explanation: backText
+          });
+        }
+      }
+    }
+
+    if (parsedItems.length === 0) {
+      return res.status(400).json({ success: false, message: 'Không bóc tách được dòng câu hỏi hoặc thẻ hợp lệ nào từ file!' });
+    }
+
+    // Transaction
+    await client.query('BEGIN');
+
+    // Tạo Header Đề thi
+    const examRes = await client.query(
+      `INSERT INTO exam_tests 
+        (title, subject_name, subject_code, faculty_major, academic_year, semester, 
+         duration_minutes, pass_score, total_questions, is_published, exam_type)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, true, $10)
+       RETURNING id`,
+      [
+        title.trim(),
+        subjectName.trim(),
+        subjectCode ? subjectCode.trim() : null,
+        facultyMajor || 'Hệ Thống Thông Tin',
+        Number(academicYear) || 1,
+        Number(semester) || 1,
+        examType === 'multiple_choice' ? (Number(durationMinutes) || 45) : 0,
+        examType === 'multiple_choice' ? (Number(passScore) || 5) : 0,
+        parsedItems.length,
+        examType
+      ]
+    );
+    const examId = examRes.rows[0].id;
+
+    // Lưu từng câu hỏi & nối bảng
+    for (let i = 0; i < parsedItems.length; i++) {
+      const item = parsedItems[i];
+      let qInsertRes;
+
+      if (examType === 'multiple_choice') {
+        qInsertRes = await client.query(
+          `INSERT INTO questions 
+            (subject, subject_code, difficulty, question, options, answer, explain, is_verified)
+           VALUES ($1, $2, 'Căn bản', $3, $4, $5, $6, true)
+           RETURNING id`,
+          [subjectName.trim(), subjectCode || null, item.questionText, JSON.stringify(item.options), item.answer, item.explain]
+        );
+      } else {
+        qInsertRes = await client.query(
+          `INSERT INTO questions 
+            (subject, subject_code, difficulty, question, options, answer, explain, flashcard_data, is_verified)
+           VALUES ($1, $2, 'Căn bản', $3, '{}'::jsonb, '', $4, $5, true)
+           RETURNING id`,
+          [
+            subjectName.trim(),
+            subjectCode || null,
+            item.frontText,
+            item.backText,
+            JSON.stringify({ front: item.frontText, back: item.backText })
+          ]
+        );
+      }
+
+      const qId = qInsertRes.rows[0].id;
+      await client.query(
+        `INSERT INTO exam_test_items (exam_id, question_id, order_index) VALUES ($1, $2, $3)`,
+        [examId, qId, i + 1]
+      );
+    }
+
+    await client.query('COMMIT');
+    res.json({
+      success: true,
+      message: `Đã nạp tự động thành công bộ đề "${title}" gồm ${parsedItems.length} mục!`
+    });
+  } catch (error) {
+    await client.query('ROLLBACK');
+    console.error('Lỗi upload Excel câu hỏi:', error);
+    res.status(500).json({ success: false, message: error.message });
+  } finally {
+    client.release();
+  }
+});
+
+// =============================================================================
+// 6. CẬP NHẬT THÔNG TIN HỌC LIỆU / ĐỀ THI
 // =============================================================================
 router.put('/:id', authenticateToken, upload.single('file'), async (req, res) => {
   try {
@@ -338,7 +530,6 @@ router.put('/:id', authenticateToken, upload.single('file'), async (req, res) =>
     }
 
     if (req.file) {
-      // Xóa file vật lý cũ nếu thay file mới
       const oldFileRes = await pool.query(`SELECT download_url FROM admin_library_resources WHERE id = $1`, [realId]);
       const oldUrl = oldFileRes.rows[0]?.download_url;
       if (oldUrl && oldUrl.startsWith('/uploads/library/')) {
@@ -370,7 +561,7 @@ router.put('/:id', authenticateToken, upload.single('file'), async (req, res) =>
 });
 
 // =============================================================================
-// 6. XÓA HỌC LIỆU HOẶC XÓA TOÀN BỘ HỌC LIỆU CỦA 1 MÔN
+// 7. XÓA HỌC LIỆU
 // =============================================================================
 router.delete('/:id', authenticateToken, async (req, res) => {
   try {
@@ -399,7 +590,7 @@ router.delete('/:id', authenticateToken, async (req, res) => {
 });
 
 // =============================================================================
-// 7. LẤY DANH SÁCH NGÀNH CHUẨN TỪ BẢNG QUẢN LÝ NGÀNH (KHÔNG HARDCODE)
+// 8. LẤY DANH SÁCH NGÀNH CHUẨN
 // =============================================================================
 router.get('/majors', async (req, res) => {
   try {
