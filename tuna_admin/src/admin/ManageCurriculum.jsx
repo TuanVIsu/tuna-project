@@ -1,19 +1,21 @@
 // src/admin/ManageCurriculum.jsx
-import React, { useState, useEffect, useRef, useCallback } from "react";
+import React, { useState, useEffect, useRef, useCallback, useMemo } from "react";
 
 const API_BASE = import.meta.env.VITE_API_URL || "https://tuna-project.onrender.com/api";
 
 export const ManageCurriculum = () => {
+  const [majorMap, setMajorMap] = useState({});
   const [majors, setMajors] = useState([]);
-  const [cohorts, setCohorts] = useState([]);
   const [availableClasses, setAvailableClasses] = useState(["all"]);
 
   const [selectedMajor, setSelectedMajor] = useState("");
   const [selectedCohort, setSelectedCohort] = useState("");
   const [selectedClass, setSelectedClass] = useState("all");
 
+  const [semestersPerYear, setSemestersPerYear] = useState(3);
   const [selectedYearTab, setSelectedYearTab] = useState(1);
   const [selectedSemester, setSelectedSemester] = useState(1);
+
   const [curriculumList, setCurriculumList] = useState([]);
   const [loading, setLoading] = useState(false);
   const [searchTerm, setSearchTerm] = useState("");
@@ -37,7 +39,7 @@ export const ManageCurriculum = () => {
     Authorization: `Bearer ${localStorage.getItem("admin_token") || localStorage.getItem("token") || ""}`,
   }), []);
 
-  // 1. Nạp danh mục Ngành, Khóa, Lớp (Chỉ chạy 1 lần khi mount)
+  // 1. Nạp danh mục Ngành, Khóa và Lớp từ CSDL
   useEffect(() => {
     let isMounted = true;
     const fetchMetaOptions = async () => {
@@ -45,16 +47,21 @@ export const ManageCurriculum = () => {
         const res = await fetch(`${API_BASE}/curriculum/meta-options`, { headers: getHeaders() });
         const d = await res.json();
         if (isMounted && d.success && d.data) {
-          const mList = d.data.majors || [];
-          const cList = d.data.cohorts && d.data.cohorts.length > 0 ? d.data.cohorts : ["K23", "K24", "K25"];
+          const mMap = d.data.majorMap || {};
+          const mList = Object.keys(mMap);
           const clsList = d.data.classes || [];
 
+          setMajorMap(mMap);
           setMajors(mList);
-          setCohorts(cList);
-
-          setSelectedMajor((prev) => prev || mList[0] || "");
-          setSelectedCohort((prev) => prev || (cList.find((c) => c.includes("23")) || cList[0] || ""));
           setAvailableClasses(["all", ...clsList]);
+
+          if (mList.length > 0) {
+            const initMajor = mList[0];
+            setSelectedMajor(initMajor);
+            const spy = Number(mMap[initMajor]?.semestersPerYear) || 3;
+            setSemestersPerYear(spy);
+            setSelectedCohort(mMap[initMajor]?.cohorts?.[0] || "");
+          }
         }
       } catch (err) {
         console.error("Lỗi nạp meta-options:", err);
@@ -64,7 +71,20 @@ export const ManageCurriculum = () => {
     return () => { isMounted = false; };
   }, [getHeaders]);
 
-  // 2. Tải danh sách môn học từ CSDL theo bộ lọc
+  // 2. Tự động tính toán các kỳ học trong từng năm dựa theo mô hình của ngành
+  const semestersInYear = useMemo(() => {
+    const config = {};
+    const spy = Number(semestersPerYear) || 3;
+    for (let y = 1; y <= 4; y++) {
+      config[y] = [];
+      for (let s = 1; s <= spy; s++) {
+        config[y].push((y - 1) * spy + s);
+      }
+    }
+    return config;
+  }, [semestersPerYear]);
+
+  // 3. Tải danh sách môn học theo bộ lọc
   const fetchCurriculum = useCallback(async () => {
     if (!selectedMajor || !selectedCohort) return;
     setLoading(true);
@@ -78,9 +98,7 @@ export const ManageCurriculum = () => {
 
       const res = await fetch(`${API_BASE}/curriculum?${qSem}`, { headers: getHeaders() });
       const d = await res.json();
-      if (d.success) {
-        setCurriculumList(d.data || []);
-      }
+      if (d.success) setCurriculumList(d.data || []);
     } catch (e) {
       console.error("Lỗi nạp CTĐT:", e);
     } finally {
@@ -94,18 +112,27 @@ export const ManageCurriculum = () => {
 
   const handleSelectSemester = (sem) => {
     setSelectedSemester(sem);
-    if (sem <= 3) setSelectedYearTab(1);
-    else if (sem <= 6) setSelectedYearTab(2);
-    else if (sem <= 9) setSelectedYearTab(3);
-    else setSelectedYearTab(4);
+    const spy = Number(semestersPerYear) || 3;
+    const calculatedYear = Math.ceil(sem / spy);
+    setSelectedYearTab(calculatedYear);
   };
 
+  // 4. Xử lý nạp file Excel kèm thông tin Ngành và Khóa chỉ định
   const handleFileUpload = async (e) => {
     const file = e.target.files[0];
     if (!file) return;
 
+    if (!selectedMajor || !selectedCohort) {
+      alert("Vui lòng chọn Ngành đào tạo và Khóa tuyển sinh trước khi nạp file!");
+      if (fileInputRef.current) fileInputRef.current.value = "";
+      return;
+    }
+
     const data = new FormData();
     data.append("file", file);
+    data.append("target_major", selectedMajor);
+    data.append("target_cohort", selectedCohort);
+    data.append("target_class", selectedClass);
 
     setUploading(true);
     try {
@@ -129,6 +156,7 @@ export const ManageCurriculum = () => {
     }
   };
 
+  // 5. Lưu thêm mới hoặc cập nhật học phần
   const handleSave = async (e) => {
     e.preventDefault();
     try {
@@ -159,6 +187,7 @@ export const ManageCurriculum = () => {
     }
   };
 
+  // 6. Xóa học phần
   const handleDelete = async (id, name) => {
     if (!window.confirm(`Xác nhận xóa môn "${name}" khỏi Học kỳ ${selectedSemester}?`)) return;
     try {
@@ -179,13 +208,7 @@ export const ManageCurriculum = () => {
   const semCredits = filteredList.reduce((acc, cur) => acc + (Number(cur.credits) || 0), 0);
   const mandatoryCount = filteredList.filter((m) => m.subject_type === "mandatory").length;
   const electiveCount = filteredList.filter((m) => m.subject_type === "elective").length;
-
-  const semestersInYear = {
-    1: [1, 2, 3],
-    2: [4, 5, 6],
-    3: [7, 8, 9],
-    4: [10, 11, 12, 13],
-  };
+  const activeCohorts = majorMap[selectedMajor]?.cohorts || [];
 
   return (
     <div className="w-100 d-flex flex-column pb-5" style={{ color: "#1e293b" }}>
@@ -210,7 +233,7 @@ export const ManageCurriculum = () => {
               <div className="d-flex align-items-center gap-2">
                 <h5 className="fw-black text-dark mb-0 fs-6">Kế Hoạch Khung Đào Tạo</h5>
                 <span className="badge rounded-pill bg-primary-subtle text-primary border border-primary-subtle px-2.5 py-1" style={{ fontSize: "10.5px" }}>
-                  Mô hình 3 HK/Năm
+                  Mô hình {semestersPerYear} HK/Năm
                 </span>
               </div>
               <small className="text-secondary fw-medium d-block mt-0.5" style={{ fontSize: "12px" }}>
@@ -262,15 +285,23 @@ export const ManageCurriculum = () => {
           </div>
         </div>
 
-        {/* Bộ lọc 3 cấp */}
-        <div className="row g-2.5 pt-3 border-top" style={{ borderColor: "#f1f5f9" }}>
+        {/* Bộ lọc Ngành, Khóa và Lớp */}
+        <div className="row g-2.5 pt-3 pb-3">
           <div className="col-12 col-md-5">
             <label className="form-label text-uppercase text-secondary fw-bold mb-1" style={{ fontSize: "10px" }}>
               Ngành Đào Tạo
             </label>
             <select
               value={selectedMajor}
-              onChange={(e) => setSelectedMajor(e.target.value)}
+              onChange={(e) => {
+                const newMajor = e.target.value;
+                setSelectedMajor(newMajor);
+                const spy = Number(majorMap[newMajor]?.semestersPerYear) || 3;
+                setSemestersPerYear(spy);
+                setSelectedCohort(majorMap[newMajor]?.cohorts?.[0] || "");
+                setSelectedYearTab(1);
+                setSelectedSemester(1);
+              }}
               className="form-select form-select-sm rounded-3 fw-semibold bg-light border shadow-none"
               style={{ fontSize: "12.5px" }}
             >
@@ -290,12 +321,12 @@ export const ManageCurriculum = () => {
               className="form-select form-select-sm rounded-3 fw-semibold bg-light border shadow-none"
               style={{ fontSize: "12.5px" }}
             >
-              {cohorts.length === 0 ? (
-                <option value="">Đang nạp khóa...</option>
+              {activeCohorts.length === 0 ? (
+                <option value="">Chưa có khóa...</option>
               ) : (
-                cohorts.map((c) => (
+                activeCohorts.map((c) => (
                   <option key={c} value={c}>
-                    {c.startsWith("Khóa") ? c : (c.startsWith("K") ? `Khóa ${c}` : `Khóa K${c}`)}
+                    {c}
                   </option>
                 ))
               )}
@@ -304,58 +335,54 @@ export const ManageCurriculum = () => {
 
           <div className="col-6 col-md-4">
             <label className="form-label text-uppercase text-secondary fw-bold mb-1" style={{ fontSize: "10px" }}>
-              Lớp Sinh Hoạt
+              Lớp Học
             </label>
             <select
               value={selectedClass}
               onChange={(e) => setSelectedClass(e.target.value)}
-              className="form-select form-select-sm rounded-3 fw-semibold bg-light border shadow-none font-monospace text-primary"
+              className="form-select form-select-sm rounded-3 fw-semibold bg-light border shadow-none"
               style={{ fontSize: "12.5px" }}
             >
-              {availableClasses.map((cls) => (
-                <option key={cls} value={cls}>
-                  {cls === "all" ? "Tất cả các lớp" : cls}
-                </option>
+              <option value="all">Tất cả các lớp</option>
+              {availableClasses.filter((cls) => cls !== "all").map((cls) => (
+                <option key={cls} value={cls}>{cls}</option>
               ))}
             </select>
           </div>
         </div>
 
-        {/* Hàng chọn Năm & Kỳ */}
-        <div className="pt-3 border-top d-flex flex-column flex-lg-row align-items-lg-center justify-content-between gap-3" style={{ borderColor: "#f1f5f9" }}>
+        {/* Hàng chọn Năm & Kỳ Động Theo Mô Hình */}
+        <div className="pt-2 d-flex flex-column flex-lg-row align-items-lg-center justify-content-between gap-3">
           <div className="d-flex align-items-center gap-2">
             <span className="text-secondary small fw-bold text-uppercase" style={{ fontSize: "11px" }}>NĂM:</span>
             <div className="p-1 bg-light rounded-pill border d-inline-flex gap-1" style={{ borderColor: "#f1f5f9" }}>
-              {[
-                { id: 1, label: "Năm 1" },
-                { id: 2, label: "Năm 2" },
-                { id: 3, label: "Năm 3" },
-                { id: 4, label: "Năm 4 & TN" },
-              ].map((y) => (
+              {[1, 2, 3, 4].map((y) => (
                 <button
-                  key={y.id}
+                  key={y}
                   onClick={() => {
-                    setSelectedYearTab(y.id);
-                    handleSelectSemester(semestersInYear[y.id][0]);
+                    setSelectedYearTab(y);
+                    if (semestersInYear[y] && semestersInYear[y].length > 0) {
+                      handleSelectSemester(semestersInYear[y][0]);
+                    }
                   }}
                   className={`btn btn-sm rounded-pill px-3 py-1 fw-bold border-0 transition ${
-                    selectedYearTab === y.id ? "btn-primary text-white shadow-xs" : "text-secondary bg-transparent hover:text-dark"
+                    selectedYearTab === y ? "btn-primary text-white shadow-xs" : "text-secondary bg-transparent hover:text-dark"
                   }`}
                   style={{
                     fontSize: "11.5px",
-                    background: selectedYearTab === y.id ? "#185bf0" : "transparent",
+                    background: selectedYearTab === y ? "#185bf0" : "transparent",
                   }}
                 >
-                  {y.label}
+                  Năm {y}
                 </button>
               ))}
             </div>
           </div>
 
           <div className="d-flex align-items-center gap-2 overflow-x-auto">
-            <span className="text-secondary small fw-bold text-uppercase" style={{ fontSize: "11px" }}>KỲ:</span>
+            <span className="text-secondary small fw-bold text-uppercase" style={{ fontSize: "11px" }}>KỲ TÍCH LŨY:</span>
             <div className="d-flex align-items-center gap-1.5 flex-nowrap">
-              {semestersInYear[selectedYearTab].map((sem) => {
+              {semestersInYear[selectedYearTab]?.map((sem) => {
                 const isActive = selectedSemester === sem;
                 return (
                   <button
@@ -375,7 +402,7 @@ export const ManageCurriculum = () => {
         </div>
       </div>
 
-      {/* 2. BẢNG DỮ LIỆU */}
+      {/* 2. BẢNG DỮ LIỆU HỌC PHẦN */}
       <div 
         className="bg-white rounded-4 p-4 border shadow-sm d-flex flex-column gap-3"
         style={{ borderColor: "#f1f5f9", boxShadow: "0 4px 16px rgba(0,0,0,0.03)" }}
@@ -446,8 +473,8 @@ export const ManageCurriculum = () => {
                 <tr>
                   <td colSpan={8} className="text-center py-5 text-muted">
                     <i className="bi bi-inbox fs-2 d-block text-secondary opacity-50 mb-1"></i>
-                    Chưa có học phần nào cho <b>Học kỳ {selectedSemester}</b>.<br />
-                    Bấm nút <b>"Nhập Excel (.xlsx)"</b> ở phía trên để tự động nạp.
+                    Chưa có học phần nào cho <b>Học kỳ {selectedSemester}</b> của <b>{selectedCohort}</b>.<br />
+                    Bấm nút <b>"Nhập Excel (.xlsx)"</b> ở phía trên để nạp danh sách môn học.
                   </td>
                 </tr>
               ) : (
@@ -505,11 +532,11 @@ export const ManageCurriculum = () => {
                           onClick={() => {
                             setEditingItem(item);
                             setFormData({
-                              subject_code: item.subject_code,
-                              subject_name: item.subject_name,
+                              subject_code: item.subject_code || "",
+                              subject_name: item.subject_name || "",
                               credits_structure: item.credits_structure || "3(3,0,0)",
-                              credits: item.credits,
-                              subject_type: item.subject_type,
+                              credits: item.credits || 3,
+                              subject_type: item.subject_type || "mandatory",
                               prerequisite: item.prerequisite || "",
                             });
                             setShowModal(true);

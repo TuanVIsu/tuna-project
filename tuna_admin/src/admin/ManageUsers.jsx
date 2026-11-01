@@ -369,7 +369,7 @@ export const ManageUsers = () => {
   const paginatedData = filteredUsers.slice((currentPage - 1) * itemsPerPage, currentPage * itemsPerPage);
 
   return (
-    <div className="d-flex flex-column gap-3.5 w-100" style={{ color: "#1e293b" }}>
+    <div className="d-flex flex-column gap-4 w-100" style={{ color: "#1e293b" }}>
       {/* 1. KHỐI THẺ CARD ĐIỀU KHIỂN & BỘ LỌC */}
       <div 
         className="bg-white rounded-4 p-4 border shadow-sm mb-2"
@@ -483,7 +483,7 @@ export const ManageUsers = () => {
               <option value="all">Tất cả khóa</option>
               {options.cohorts.map((c) => (
                 <option key={c} value={c}>
-                  Khóa {c}
+                  {c}
                 </option>
               ))}
             </select>

@@ -372,7 +372,7 @@ export const ManageSchedules = () => {
   const paginatedData = schedules.slice((currentPage - 1) * itemsPerPage, currentPage * itemsPerPage);
 
   return (
-    <div className="d-flex flex-column gap-3.5 w-100" style={{ color: "#1e293b" }}>
+    <div className="d-flex flex-column gap-4 w-100" style={{ color: "#1e293b" }}>
       {/* 1. KHỐI ĐIỀU KHIỂN & BỘ LỌC */}
       <div 
         className="bg-white rounded-4 p-4 border shadow-sm mb-2"
@@ -411,7 +411,7 @@ export const ManageSchedules = () => {
         </div>
 
         {/* Bộ lọc chuẩn từ CSDL */}
-        <div className="row g-2.5 pt-1">
+        <div className="row g-5 pt-1">
           <div className="col-12 col-md-3">
             <label className="form-label text-uppercase text-secondary fw-bold mb-1" style={{ fontSize: "10px" }}>Ngành Đào Tạo</label>
             <select
@@ -444,24 +444,9 @@ export const ManageSchedules = () => {
             </select>
           </div>
 
-          <div className="col-6 col-md-2">
-            <label className="form-label text-uppercase text-secondary fw-bold mb-1" style={{ fontSize: "10px" }}>Lớp Sinh Hoạt</label>
-            <select
-              value={filterClass}
-              onChange={(e) => setFilterClass(e.target.value)}
-              className="form-select form-select-sm rounded-3 bg-white shadow-none fw-semibold font-monospace text-primary"
-              style={{ fontSize: "12.5px", borderColor: "#e2e8f0" }}
-            >
-              <option value="all">Tất cả các lớp</option>
-              {options.classes.map((cls, idx) => (
-                <option key={idx} value={cls}>
-                  {cls}
-                </option>
-              ))}
-            </select>
-          </div>
 
-          <div className="col-4 col-md-1">
+
+          <div className="col-4 col-md-2">
             <label className="form-label text-uppercase text-secondary fw-bold mb-1" style={{ fontSize: "10px" }}>Năm Học</label>
             <select
               value={filterYear}
@@ -522,7 +507,7 @@ export const ManageSchedules = () => {
               <tr style={{ fontSize: "11px", color: "#64748b", letterSpacing: "0.5px" }} className="text-uppercase">
                 <th style={{ width: "50px", textAlign: "center" }}>STT</th>
                 <th>Môn Học & Mã Học Phần</th>
-                <th>Lớp</th>
+              
                 <th>Phân Loại</th>
                 <th>Ngày Diễn Ra</th>
                 <th>Tiết Học</th>
@@ -559,11 +544,7 @@ export const ManageSchedules = () => {
                           )}
                         </div>
                       </td>
-                      <td>
-                        <span className="badge bg-light text-primary border font-monospace px-2 py-0.5 fw-bold" style={{ fontSize: "11px" }}>
-                          {item.className || "Chưa xếp lớp"}
-                        </span>
-                      </td>
+                
                       <td>
                         <span
                           className="badge rounded-pill px-2.5 py-1 fw-bold"
@@ -723,31 +704,7 @@ export const ManageSchedules = () => {
                   )}
 
                   {/* Lớp sinh hoạt: Cho phép chọn từ danh sách lớp hoặc nhập trực tiếp */}
-                  <div>
-                    <label className="form-label text-uppercase text-secondary fw-bold mb-1" style={{ fontSize: "10px" }}>
-                      Lớp Sinh Hoạt *
-                    </label>
-                    <input
-                      list="modal-available-classes"
-                      type="text"
-                      required
-                      placeholder="Chọn hoặc nhập mã lớp..."
-                      value={formData.className}
-                      onChange={(e) => {
-                        const newClass = e.target.value.trim();
-                        setFormData((prev) => ({ ...prev, className: newClass }));
-                        if (newClass && entryMode === "from_curriculum") {
-                          loadCurriculumSubjects(newClass, formData.semesterIndex);
-                        }
-                      }}
-                      className="form-control form-control-sm rounded-3 fw-bold font-monospace text-primary shadow-none"
-                    />
-                    <datalist id="modal-available-classes">
-                      {options.classes.map((cls, idx) => (
-                        <option key={idx} value={cls} />
-                      ))}
-                    </datalist>
-                  </div>
+
 
                   {entryMode === "from_curriculum" ? (
                     <div className="d-flex flex-column gap-2">
