@@ -22,12 +22,14 @@ const storage = multer.diskStorage({
 });
 const upload = multer({ storage });
 
-// 1. Lấy danh sách học liệu kèm bộ lọc (UNION ALL cả admin_library_resources và exam_tests)
+// =============================================================================
+// 1. LẤY DANH SÁCH HỌC LIỆU & ĐỀ THI (KÈM BỘ LỌC ĐỒNG BỘ)
+// =============================================================================
 router.get('/', async (req, res) => {
   try {
     const { major, year, semester, isReference, subCategory, isPublished, search } = req.query;
 
-    let baseUnionQuery = `
+    const baseUnionQuery = `
       SELECT 
         id::text AS id,
         faculty_majors AS "facultyMajors",
@@ -75,14 +77,11 @@ router.get('/', async (req, res) => {
       FROM exam_tests
     `;
 
-    let query = `
-      SELECT * FROM (${baseUnionQuery}) AS combined_library
-      WHERE 1=1
-    `;
+    let query = `SELECT * FROM (${baseUnionQuery}) AS combined_library WHERE 1=1`;
     const params = [];
 
     if (major && major !== 'Tất cả' && major !== 'all') {
-      params.push(major);
+      params.push(major.trim());
       query += ` AND $${params.length} = ANY("facultyMajors")`;
     }
     if (year && year !== 'all') {
@@ -107,7 +106,12 @@ router.get('/', async (req, res) => {
     }
     if (search && search.trim()) {
       params.push(`%${search.trim().toLowerCase()}%`);
-      query += ` AND (LOWER(title) ILIKE $${params.length} OR LOWER("subject") ILIKE $${params.length} OR LOWER(author) ILIKE $${params.length})`;
+      query += ` AND (
+        LOWER(title) ILIKE $${params.length} 
+        OR LOWER("subject") ILIKE $${params.length} 
+        OR LOWER(COALESCE("curriculumSubjectCode", '')) ILIKE $${params.length}
+        OR LOWER(author) ILIKE $${params.length}
+      )`;
     }
 
     query += ` ORDER BY created_at DESC`;
@@ -119,19 +123,23 @@ router.get('/', async (req, res) => {
   }
 });
 
-// 2. Lấy danh mục môn học đồng bộ từ Khung CTĐT
+// =============================================================================
+// 2. LẤY DANH MỤC MÔN HỌC ĐỒNG BỘ TỪ KHUNG CTĐT (KÈM SỐ KỲ/NĂM CỦA NGÀNH)
+// =============================================================================
 router.get('/curriculum-sync-subjects', async (req, res) => {
   try {
     const query = `
-      SELECT DISTINCT ON (subject_name)
-        subject_code AS "subjectCode",
-        subject_name AS "subjectName",
-        credits,
-        semester_index AS "semesterIndex",
-        academic_year AS "academicYear",
-        major_name AS "majorName"
-      FROM curriculum_plans
-      ORDER BY subject_name, id ASC
+      SELECT DISTINCT ON (cp.subject_code, cp.major_name)
+        cp.subject_code AS "subjectCode",
+        cp.subject_name AS "subjectName",
+        cp.credits,
+        cp.semester_index AS "semesterIndex",
+        cp.academic_year AS "academicYear",
+        cp.major_name AS "majorName",
+        COALESCE(fm.semesters_per_year, 3) AS "semestersPerYear"
+      FROM curriculum_plans cp
+      LEFT JOIN faculty_majors fm ON cp.major_name = fm.major_name
+      ORDER BY cp.subject_code, cp.major_name, cp.id ASC
     `;
     const { rows } = await pool.query(query);
     res.json({ success: true, data: rows });
@@ -140,10 +148,12 @@ router.get('/curriculum-sync-subjects', async (req, res) => {
   }
 });
 
-// 3. Đổi nhanh trạng thái hiển thị
+// =============================================================================
+// 3. ĐỔI NHANH TRẠNG THÁI HIỂN THỊ (ẨN / HIỆN)
+// =============================================================================
 router.patch('/:id/toggle-status', authenticateToken, async (req, res) => {
   try {
-    const rawId = req.params.id;
+    const rawId = String(req.params.id);
     const isExam = rawId.startsWith('exam_');
     const realId = isExam ? Number(rawId.replace('exam_', '')) : Number(rawId);
 
@@ -164,7 +174,9 @@ router.patch('/:id/toggle-status', authenticateToken, async (req, res) => {
   }
 });
 
-// 4. Đăng tải học liệu hàng loạt
+// =============================================================================
+// 4. ĐĂNG TẢI HỌC LIỆU HÀNG LOẠT (HỖ TRỢ PHÂN LOẠI RIÊNG TỪNG FILE)
+// =============================================================================
 router.post('/batch', authenticateToken, upload.array('files'), async (req, res) => {
   try {
     const {
@@ -180,9 +192,17 @@ router.post('/batch', authenticateToken, upload.array('files'), async (req, res)
       items,
     } = req.body;
 
+    if (!subject || !subject.trim()) {
+      return res.status(400).json({ success: false, error: 'Tên môn học không được để trống!' });
+    }
+
     const parsedMajors = typeof facultyMajors === 'string' ? JSON.parse(facultyMajors) : facultyMajors;
     const parsedItems = typeof items === 'string' ? JSON.parse(items) : items;
     const uploadedFiles = req.files || [];
+
+    if (!Array.isArray(parsedItems) || parsedItems.length === 0) {
+      return res.status(400).json({ success: false, error: 'Không có học liệu nào để lưu!' });
+    }
 
     let fileIndex = 0;
     const insertedIds = [];
@@ -197,11 +217,15 @@ router.post('/batch', authenticateToken, upload.array('files'), async (req, res)
       if (item.resourceType === 'doc' && uploadedFiles[fileIndex]) {
         const f = uploadedFiles[fileIndex];
         downloadUrl = `/uploads/library/${f.filename}`;
-        fileType = path.extname(f.originalname).replace('.', '').toUpperCase();
+        fileType = path.extname(f.originalname).replace('.', '').toUpperCase() || 'FILE';
         const sizeMB = f.size / (1024 * 1024);
-        fileSize = sizeMB >= 1 ? `${sizeMB.toFixed(1)} MB` : `${(f.size / 1024).toFixed(0)} KB`;
+        fileSize = sizeMB >= 1 ? `${sizeMB.toFixed(1)} MB` : `${Math.max(1, (f.size / 1024).toFixed(0))} KB`;
         fileIndex++;
       }
+
+      // Ưu tiên subCategory riêng của từng file, nếu không có mới lấy mặc định của form
+      const itemSubCategory = item.subCategory || subCategory || 'lecture_slide';
+      const itemIsReference = itemSubCategory === 'reference' ? true : (isReference === 'true' || isReference === true);
 
       const insertRes = await pool.query(
         `INSERT INTO admin_library_resources 
@@ -211,16 +235,16 @@ router.post('/batch', authenticateToken, upload.array('files'), async (req, res)
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
          RETURNING id`,
         [
-          parsedMajors || ['Hệ Thống Thông Tin'],
+          Array.isArray(parsedMajors) && parsedMajors.length > 0 ? parsedMajors : ['Hệ Thống Thông Tin'],
           Number(year) || 1,
           Number(semester) || 1,
           subject.trim(),
-          subjectCode || null,
-          isReference === 'true' || isReference === true,
-          subCategory || 'lecture_slide',
+          subjectCode ? subjectCode.trim() : null,
+          itemIsReference,
+          itemSubCategory,
           isPublished === 'true' || isPublished === true,
           item.resourceType || 'doc',
-          item.title.trim(),
+          (item.title || subject).trim(),
           fileType,
           fileSize,
           downloadUrl,
@@ -238,7 +262,9 @@ router.post('/batch', authenticateToken, upload.array('files'), async (req, res)
   }
 });
 
-// 5. Cập nhật thông tin học liệu đơn lẻ
+// =============================================================================
+// 5. CẬP NHẬT THÔNG TIN HỌC LIỆU / ĐỀ THI
+// =============================================================================
 router.put('/:id', authenticateToken, upload.single('file'), async (req, res) => {
   try {
     const rawId = String(req.params.id);
@@ -259,10 +285,10 @@ router.put('/:id', authenticateToken, upload.single('file'), async (req, res) =>
       embedUrl,
     } = req.body;
 
-    if (isExam) {
-      const parsedMajors = typeof facultyMajors === 'string' ? JSON.parse(facultyMajors) : facultyMajors;
-      const majorName = Array.isArray(parsedMajors) && parsedMajors.length > 0 ? parsedMajors[0] : 'Hệ Thống Thông Tin';
+    const parsedMajors = typeof facultyMajors === 'string' ? JSON.parse(facultyMajors) : facultyMajors;
 
+    if (isExam) {
+      const majorName = Array.isArray(parsedMajors) && parsedMajors.length > 0 ? parsedMajors[0] : 'Hệ Thống Thông Tin';
       const result = await pool.query(
         `UPDATE exam_tests 
          SET title = $1, subject_name = $2, subject_code = $3,
@@ -287,8 +313,6 @@ router.put('/:id', authenticateToken, upload.single('file'), async (req, res) =>
       return res.json({ success: true, message: 'Cập nhật đề thi thành công!', data: result.rows[0] });
     }
 
-    const parsedMajors = typeof facultyMajors === 'string' ? JSON.parse(facultyMajors) : facultyMajors;
-
     let updateQuery = `
       UPDATE admin_library_resources
       SET title = $1, subject_name = $2, curriculum_subject_code = $3,
@@ -299,7 +323,7 @@ router.put('/:id', authenticateToken, upload.single('file'), async (req, res) =>
       title.trim(),
       subject.trim(),
       subjectCode ? subjectCode.trim() : null,
-      parsedMajors || ['Hệ Thống Thông Tin'],
+      Array.isArray(parsedMajors) && parsedMajors.length > 0 ? parsedMajors : ['Hệ Thống Thông Tin'],
       Number(year) || 1,
       Number(semester) || 1,
       isReference === 'true' || isReference === true,
@@ -314,8 +338,16 @@ router.put('/:id', authenticateToken, upload.single('file'), async (req, res) =>
     }
 
     if (req.file) {
+      // Xóa file vật lý cũ nếu thay file mới
+      const oldFileRes = await pool.query(`SELECT download_url FROM admin_library_resources WHERE id = $1`, [realId]);
+      const oldUrl = oldFileRes.rows[0]?.download_url;
+      if (oldUrl && oldUrl.startsWith('/uploads/library/')) {
+        const oldPath = path.join(__dirname, '..', oldUrl);
+        if (fs.existsSync(oldPath)) fs.unlinkSync(oldPath);
+      }
+
       const sizeMB = req.file.size / (1024 * 1024);
-      const sizeStr = sizeMB >= 1 ? `${sizeMB.toFixed(1)} MB` : `${(req.file.size / 1024).toFixed(0)} KB`;
+      const sizeStr = sizeMB >= 1 ? `${sizeMB.toFixed(1)} MB` : `${Math.max(1, (req.file.size / 1024).toFixed(0))} KB`;
       const ext = path.extname(req.file.originalname).replace('.', '').toUpperCase();
       const url = `/uploads/library/${req.file.filename}`;
 
@@ -337,10 +369,12 @@ router.put('/:id', authenticateToken, upload.single('file'), async (req, res) =>
   }
 });
 
-// 6. Xóa học liệu
+// =============================================================================
+// 6. XÓA HỌC LIỆU HOẶC XÓA TOÀN BỘ HỌC LIỆU CỦA 1 MÔN
+// =============================================================================
 router.delete('/:id', authenticateToken, async (req, res) => {
   try {
-    const rawId = req.params.id;
+    const rawId = String(req.params.id);
     const isExam = rawId.startsWith('exam_');
     const realId = isExam ? Number(rawId.replace('exam_', '')) : Number(rawId);
 
@@ -364,21 +398,23 @@ router.delete('/:id', authenticateToken, async (req, res) => {
   }
 });
 
-// 7. Lấy danh mục ngành
+// =============================================================================
+// 7. LẤY DANH SÁCH NGÀNH CHUẨN TỪ BẢNG QUẢN LÝ NGÀNH (KHÔNG HARDCODE)
+// =============================================================================
 router.get('/majors', async (req, res) => {
   try {
     const query = `
-      SELECT DISTINCT major_name AS name FROM faculty_majors
-      UNION
-      SELECT DISTINCT major_name AS name FROM curriculum_plans WHERE major_name IS NOT NULL AND major_name <> ''
+      SELECT DISTINCT major_name AS name 
+      FROM faculty_majors 
+      WHERE major_name IS NOT NULL AND major_name <> ''
       ORDER BY name ASC
     `;
     const { rows } = await pool.query(query);
-    const majors = rows.map((r) => r.name);
+    const majors = rows.map((r) => r.name.trim());
 
     res.json({
       success: true,
-      data: majors.length > 0 ? majors : ["Hệ Thống Thông Tin", "Công Nghệ Thông Tin", "Kỹ Thuật Phần Mềm", "An Ninh Mạng"]
+      data: majors.length > 0 ? majors : ["Hệ Thống Thông Tin"]
     });
   } catch (error) {
     res.status(500).json({ success: false, error: error.message });
