@@ -1,6 +1,6 @@
 // src/pages/index/ProfileSection.jsx
 import React, { useState, useEffect, useMemo, useCallback } from "react";
-import { io } from "socket.io-client"; // <-- Thêm thư viện socket
+import { io } from "socket.io-client";
 import { getCurrentUser } from "../../services/authService";
 
 const API_BASE = "https://tuna-project.onrender.com/api";
@@ -67,7 +67,7 @@ export const ProfileSection = ({ currentUser: initialUser }) => {
     }
   }, [getAuthHeaders]);
 
-  // Đồng bộ thông hồ sơ và điểm streak thực tế từ DB
+  // Đồng bộ thông tin hồ sơ và điểm streak thực tế từ DB
   const fetchProfileAndStats = useCallback(async () => {
     if (!myUserId) return;
 
@@ -146,7 +146,7 @@ export const ProfileSection = ({ currentUser: initialUser }) => {
     };
   }, [fetchFaculties, fetchProfileAndStats]);
 
-  // LOGIC LẮNG NGHE SOCKET TỪ BACKEND
+  // LOGIC LẮNG NGHE SOCKET TỪ BACKEND ĐỂ CHỐNG KẸT TRẠNG THÁI
   useEffect(() => {
     if (!myUserId) return;
     const socket = io(API_BASE.replace('/api', '')); 
@@ -177,6 +177,7 @@ export const ProfileSection = ({ currentUser: initialUser }) => {
     };
   }, [myUserId]);
 
+  // Tự động suy ra mã lớp khi sinh viên gõ MSSV (Ví dụ: HTTT2311052 -> HTTT2311)
   const handleStudentCodeChange = (val) => {
     const cleanVal = val.toUpperCase().trim();
     setStudentCodeInput(cleanVal);
@@ -248,14 +249,17 @@ export const ProfileSection = ({ currentUser: initialUser }) => {
         });
       }
 
-// Tìm hàm handleSaveProfile trong ProfileSection.jsx và sửa đoạn cập nhật state:
       const data = await res.json();
       if (data.success || res.ok) {
-        // LUÔN LẤY TRẠNG THÁI TỪ SERVER TRẢ VỀ (data.user)
+        // LẤY TRỰC TIẾP TRẠNG THÁI TỪ SERVER TRẢ VỀ THAY VÌ GÁN CỨNG
         const serverStatus = data.user?.verification_status || "pending";
         const serverVerified = data.user?.is_verified || false;
 
-        showToast(serverStatus === "pending" ? "Đã lưu, vui lòng chờ duyệt!" : "Cập nhật hồ sơ thành công!");
+        if (serverStatus === "pending") {
+          showToast("Đã lưu hồ sơ! Vui lòng chờ Quản trị viên duyệt lại.", "success");
+        } else {
+          showToast("Cập nhật hồ sơ sinh viên thành công!");
+        }
         
         const updatedUser = {
           ...user,
@@ -275,7 +279,14 @@ export const ProfileSection = ({ currentUser: initialUser }) => {
 
         setShowEditModal(false);
         fetchProfileAndStats();
-      
+      } else {
+        showToast(data.message || "Không thể cập nhật hồ sơ!", "error");
+      }
+    } catch (err) {
+      showToast("Lỗi kết nối máy chủ đào tạo!", "error");
+    } finally {
+      setIsUpdating(false);
+    }
   };
 
   const onLogoutClick = () => {
@@ -338,15 +349,20 @@ export const ProfileSection = ({ currentUser: initialUser }) => {
               <h6 className="font-black text-slate-900 mb-0 text-[15px] truncate break-words">
                 {user?.name || "Sinh viên"}
               </h6>
+              {/* CHỈ HIỂN THỊ TRẠNG THÁI ĐÃ DUYỆT NẾU SERVER TRẢ VỀ APPROVED */}
               <span
                 className={`px-2 py-0.5 text-[9.5px] font-extrabold rounded-full uppercase shrink-0 ${
-                  user?.is_verified || user?.verification_status === "approved"
+                  user?.verification_status === "approved"
                     ? "bg-emerald-50 text-emerald-700 border border-emerald-200"
+                    : user?.verification_status === "rejected"
+                    ? "bg-rose-50 text-rose-700 border border-rose-200"
                     : "bg-amber-50 text-amber-700 border border-amber-200"
                 }`}
               >
-                {user?.is_verified || user?.verification_status === "approved"
+                {user?.verification_status === "approved"
                   ? "Đã duyệt"
+                  : user?.verification_status === "rejected"
+                  ? "Bị từ chối"
                   : "Chờ duyệt"}
               </span>
             </div>

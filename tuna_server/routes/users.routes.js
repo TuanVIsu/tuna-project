@@ -278,8 +278,8 @@ router.post(['/student/link', '/sync'], async (req, res) => {
     }
 
     let updatedUser;
+// routes/users.routes.js (Kiểm tra lại đoạn này ở POST /sync)
 
-// Thay thế đoạn code xử lý existingUser trong API /student/link hoặc /sync
     if (existingUser) {
       const oldCode = existingUser.student_code || "";
       const oldClass = existingUser.class_name || "";
@@ -287,7 +287,7 @@ router.post(['/student/link', '/sync'], async (req, res) => {
       let newVerificationStatus = existingUser.verification_status;
       let newIsVerified = existingUser.is_verified;
 
-      // NẾU ĐỔI MSSV HOẶC LỚP SAU KHI ĐÃ ĐƯỢC DUYỆT -> BẮT BUỘC HẠ CẤP VỀ CHỜ DUYỆT
+      // NẾU SINH VIÊN ĐỔI MSSV HOẶC LỚP SAU KHI ĐÃ ĐƯỢC DUYỆT -> ÉP VỀ PENDING CHỜ ADMIN DUYỆT LẠI
       if (cleanCode !== oldCode || cleanClass !== oldClass) {
         newVerificationStatus = 'pending';
         newIsVerified = false;
@@ -297,7 +297,7 @@ router.post(['/student/link', '/sync'], async (req, res) => {
         `UPDATE users 
          SET name = $1, 
              student_code = $2, 
-             class_name = COALESCE($3, class_name), 
+             class_name = $3, 
              faculty = $4,
              is_verified = $5,
              verification_status = $6,
@@ -308,7 +308,7 @@ router.post(['/student/link', '/sync'], async (req, res) => {
       );
       updatedUser = updateRes.rows[0];
     } else {
-      // NẾU LÀ TÀI KHOẢN MỚI HOÀN TOÀN (VỪA XÓA ĐĂNG NHẬP LẠI) -> LUÔN CHỜ DUYỆT
+      // TÀI KHOẢN MỚI LUÔN LÀ PENDING
       const insertRes = await pool.query(
         `INSERT INTO users 
            (name, student_code, class_name, faculty, zalo_id, email, role, is_verified, verification_status)
@@ -317,10 +317,6 @@ router.post(['/student/link', '/sync'], async (req, res) => {
         [cleanName, cleanCode, cleanClass, cleanFaculty, zaloId || `user_${Date.now()}`, email || null]
       );
       updatedUser = insertRes.rows[0];
-    }
-
-    if (updatedUser.is_active === false) {
-      return res.status(403).json({ success: false, message: 'Tài khoản của bạn đã bị vô hiệu hóa!' });
     }
 
     res.json({
