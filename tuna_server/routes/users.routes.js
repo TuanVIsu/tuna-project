@@ -325,22 +325,25 @@ router.post(['/student/link', '/sync'], async (req, res) => {
 
     let updatedUser;
 
-    if (existingUser) {
-      const updateRes = await pool.query(
-        `UPDATE users 
-         SET name = $1, 
-             student_code = $2, 
-             class_name = $3, 
-             faculty = $4,
-             is_verified = FALSE, 
-             verification_status = 'pending',
-             updated_at = CURRENT_TIMESTAMP
-         WHERE id = $5 
-         RETURNING id, name, email, student_code AS "studentCode", class_name AS "className", faculty, avatar, role, is_verified AS "isVerified", verification_status AS "verificationStatus", is_active AS "isActive"`,
-        [cleanName, cleanCode, cleanClass, cleanFaculty, existingUser.id]
-      );
-      updatedUser = updateRes.rows[0];
-    } else {
+// routes/users.routes.js (Trong router.post(['/student/link', '/sync'], ...))
+
+if (existingUser) {
+  // BẮT BUỘC ÉP VỀ CHỜ DUYỆT (PENDING) MỖI KHI SINH VIÊN BẤM CẬP NHẬT TỪ APP
+  const updateRes = await pool.query(
+    `UPDATE users 
+     SET name = $1, 
+         student_code = $2, 
+         class_name = $3, 
+         faculty = $4,
+         is_verified = FALSE,            -- <--- QUAN TRỌNG: Ngắt trạng thái đã duyệt
+         verification_status = 'pending', -- <--- QUAN TRỌNG: Đưa về pending
+         updated_at = CURRENT_TIMESTAMP
+     WHERE id = $5 
+     RETURNING id, name, email, student_code AS "studentCode", class_name AS "className", faculty, avatar, role, is_verified AS "isVerified", verification_status AS "verificationStatus", is_active AS "isActive"`,
+    [cleanName, cleanCode, cleanClass, cleanFaculty, existingUser.id]
+  );
+  updatedUser = updateRes.rows[0];
+} else {
       const insertRes = await pool.query(
         `INSERT INTO users 
            (name, student_code, class_name, faculty, zalo_id, email, role, is_verified, verification_status)
