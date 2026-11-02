@@ -59,7 +59,7 @@ const parseExcelDate = (val) => {
   return null;
 };
 
-// Helper tính Semester Index từ text (VD: "Học kỳ 1 (2025-2026)" -> 1, "Học kỳ 1 (2028-2029)" -> 10)
+// Helper tính Semester Index từ text (VD: "Học kỳ 1 (2025-2026)" -> 1)
 const parseSemesterFromText = (text, baseYear = 2025, spy = 3) => {
   if (!text) return null;
   const str = String(text).trim();
@@ -77,40 +77,93 @@ const parseSemesterFromText = (text, baseYear = 2025, spy = 3) => {
   return null;
 };
 
+// Helper: Kiểm tra tính hợp lệ của Ngành và Khóa từ bảng faculty_majors
+const validateMajorAndCohort = async (majorName, cohort) => {
+  if (!majorName || !cohort) {
+    return { valid: false, message: 'Vui lòng chọn đầy đủ Ngành đào tạo và Khóa tuyển sinh!' };
+  }
+
+  const majorRes = await pool.query(
+    `SELECT major_code, major_name, applied_cohort, semesters_per_year 
+     FROM faculty_majors 
+     WHERE major_name ILIKE $1 AND is_active = TRUE 
+     LIMIT 1`,
+    [majorName.trim()]
+  );
+
+  if (majorRes.rows.length === 0) {
+    return { 
+      valid: false, 
+      message: `Ngành "${majorName}" chưa được khởi tạo hoặc đang bị khóa bên Quản Lý Ngành!` 
+    };
+  }
+
+  const major = majorRes.rows[0];
+  const appliedCohort = (major.applied_cohort || '').trim().toUpperCase();
+  const inputCohort = cohort.trim().toUpperCase();
+
+  const numApplied = appliedCohort.replace(/\D/g, '').slice(-2);
+  const numInput = inputCohort.replace(/\D/g, '').slice(-2);
+
+  const isMatched = appliedCohort === 'ALL' || 
+                    appliedCohort === inputCohort || 
+                    (numApplied && numInput && numApplied === numInput);
+
+  if (!isMatched) {
+    return { 
+      valid: false, 
+      message: `Ngành "${major.major_name}" trong hệ thống hiện chỉ áp dụng cho "${major.applied_cohort}". Khóa "${cohort}" chưa được thiết lập bên Quản Lý Ngành!` 
+    };
+  }
+
+  return { valid: true, major };
+};
+
 // =============================================================================
-// 1. LẤY DANH MỤC NGÀNH VÀ KHÓA THẬT TỪ CSDL
+// 1. LẤY DANH MỤC NGÀNH VÀ KHÓA CHUẨN TỪ FACULTY_MAJORS (KHÔNG LẤY TỪ SCHEDULES)
 // =============================================================================
 router.get('/admin/meta-options', authenticateToken, async (req, res) => {
   try {
-    const [majorsRes, cohortsRes, classesRes] = await Promise.all([
+    const [majorsRes, classesRes] = await Promise.all([
       pool.query(`
-        SELECT major_code AS "majorCode", major_name AS "majorName" 
+        SELECT major_code AS "majorCode", major_name AS "majorName", 
+               applied_cohort AS "appliedCohort", COALESCE(semesters_per_year, 3) AS "semestersPerYear"
         FROM faculty_majors 
+        WHERE is_active = TRUE
         ORDER BY id ASC
-      `),
-      pool.query(`
-        SELECT DISTINCT applied_cohort AS "cohortCode" 
-        FROM faculty_majors 
-        WHERE applied_cohort IS NOT NULL AND applied_cohort <> '' AND UPPER(applied_cohort) <> 'ALL'
-        ORDER BY "cohortCode" DESC
       `),
       pool.query(`
         SELECT DISTINCT class_name AS "className"
         FROM curriculum_plans 
         WHERE class_name IS NOT NULL AND class_name <> ''
-        UNION
-        SELECT DISTINCT class_name AS "className"
-        FROM schedules
-        WHERE class_name IS NOT NULL AND class_name <> ''
         ORDER BY "className" ASC
       `)
     ]);
 
+    const majorMap = {};
+    const allCohorts = new Set();
+
+    majorsRes.rows.forEach(r => {
+      const mName = r.majorName.trim();
+      if (!majorMap[mName]) {
+        majorMap[mName] = {
+          code: r.majorCode,
+          semestersPerYear: r.semestersPerYear,
+          cohorts: []
+        };
+      }
+      if (r.appliedCohort && r.appliedCohort.toUpperCase() !== 'ALL') {
+        majorMap[mName].cohorts.push(r.appliedCohort);
+        allCohorts.add(r.appliedCohort);
+      }
+    });
+
     res.json({
       success: true,
       data: {
-        majors: majorsRes.rows.length > 0 ? majorsRes.rows : [{ majorCode: "HTTT", majorName: "Hệ Thống Thông Tin" }],
-        cohorts: cohortsRes.rows.map(r => r.cohortCode).filter(Boolean),
+        majors: majorsRes.rows,
+        majorMap,
+        cohorts: Array.from(allCohorts),
         classes: classesRes.rows.map(r => r.className).filter(Boolean)
       }
     });
@@ -121,7 +174,148 @@ router.get('/admin/meta-options', authenticateToken, async (req, res) => {
 });
 
 // =============================================================================
-// 2. NẠP THỜI KHÓA BIỂU TỪ EXCEL (CÓ HỎI XÁC NHẬN GHI ĐÈ & KHẮC PHỤC TÊN MÔN)
+// 2. GỢI Ý MÔN HỌC TỪ KHUNG CTĐT CHO FORM XẾP LỊCH
+// =============================================================================
+router.get('/available-subjects', authenticateToken, async (req, res) => {
+  try {
+    const { major, cohort, className, semesterIndex } = req.query;
+
+    if (!major || !semesterIndex) {
+      return res.status(400).json({ success: false, message: 'Thiếu thông tin ngành hoặc học kỳ!' });
+    }
+
+    let query = `
+      SELECT 
+        cp.id AS curriculum_plan_id,
+        cp.subject_code,
+        cp.subject_name,
+        cp.credits,
+        cp.credits_structure,
+        cp.subject_type,
+        cp.prerequisite,
+        EXISTS (
+          SELECT 1 FROM schedules sch 
+          WHERE sch.schedule_scope = 'academic'
+            AND sch.curriculum_plan_id = cp.id
+            AND ($3::text IS NULL OR sch.class_name = $3)
+        ) AS is_scheduled
+      FROM curriculum_plans cp
+      WHERE cp.major_name ILIKE $1 
+        AND cp.semester_index = $2
+    `;
+    const params = [
+      `%${major.trim()}%`, 
+      parseInt(semesterIndex, 10), 
+      className && className !== 'all' ? className.trim() : null
+    ];
+
+    if (cohort && cohort !== 'all') {
+      const shortCohort = cohort.replace(/\D/g, '').slice(-2);
+      params.push(`%${shortCohort}%`);
+      query += ` AND cp.cohort ILIKE $${params.length}`;
+    }
+
+    query += ` ORDER BY cp.subject_type DESC, cp.subject_code ASC`;
+
+    const result = await pool.query(query, params);
+    res.json({ success: true, data: result.rows });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
+// =============================================================================
+// 3. THÊM TIẾT HỌC THỦ CÔNG (RÀNG BUỘC CHẶT VỚI CTĐT & BẢNG QUẢN LÝ NGÀNH)
+// =============================================================================
+router.post('/admin/create', authenticateToken, async (req, res) => {
+  const {
+    facultyMajor,
+    cohort,
+    className,
+    curriculumPlanId,
+    scheduleType,
+    specificDate,
+    startPeriod,
+    endPeriod,
+    room,
+    teacherName,
+    note,
+    subjectCode,
+    subjectName,
+    credits
+  } = req.body;
+
+  try {
+    // 1. Kiểm tra khóa hợp lệ từ bảng Quản Lý Ngành
+    const checkCohort = await validateMajorAndCohort(facultyMajor, cohort);
+    if (!checkCohort.valid) {
+      return res.status(400).json({ success: false, message: checkCohort.message });
+    }
+
+    let finalSubjectCode = subjectCode?.trim() || null;
+    let finalSubjectName = subjectName?.trim() || '';
+    let finalCredits = Number(credits) || 3;
+    let finalPlanId = curriculumPlanId ? Number(curriculumPlanId) : null;
+
+    // 2. Kế thừa thông tin từ Khung CTĐT để đảm bảo khớp 100%
+    if (finalPlanId) {
+      const planRes = await pool.query(
+        `SELECT subject_code, subject_name, credits FROM curriculum_plans WHERE id = $1`,
+        [finalPlanId]
+      );
+      if (planRes.rows.length === 0) {
+        return res.status(400).json({ success: false, message: 'Học phần không tồn tại trong Khung CTĐT!' });
+      }
+      finalSubjectCode = planRes.rows[0].subject_code;
+      finalSubjectName = planRes.rows[0].subject_name;
+      finalCredits = planRes.rows[0].credits;
+    }
+
+    if (!finalSubjectName || !room || !specificDate || !startPeriod || !endPeriod) {
+      return res.status(400).json({ 
+        success: false, 
+        message: 'Vui lòng điền đủ: Tên môn, Ngày diễn ra, Phòng học và Tiết học!' 
+      });
+    }
+
+    const dateObj = new Date(specificDate);
+    const jsDay = dateObj.getDay(); 
+    const computedDayOfWeek = jsDay === 0 ? 8 : jsDay + 1;
+
+    const insertRes = await pool.query(
+      `INSERT INTO schedules 
+        (schedule_scope, faculty_major, cohort, class_name, curriculum_plan_id, credits, 
+         subject_code, title, schedule_type, day_of_week, specific_date, 
+         start_period, end_period, room, teacher_name, note)
+       VALUES ('academic', $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
+       RETURNING id`,
+      [
+        facultyMajor.trim(), 
+        cohort.trim(), 
+        className || null, 
+        finalPlanId, 
+        finalCredits,
+        finalSubjectCode, 
+        finalSubjectName, 
+        scheduleType || 'study', 
+        computedDayOfWeek, 
+        specificDate,
+        Number(startPeriod), 
+        Number(endPeriod), 
+        room.trim(), 
+        teacherName?.trim() || 'Giảng viên', 
+        note || null,
+      ]
+    );
+
+    res.json({ success: true, message: 'Đã lưu lịch vào hệ thống!', id: insertRes.rows[0].id });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+// =============================================================================
+// 4. NẠP FILE EXCEL TKB (CHẶN KHÓA CHƯA ĐĂNG KÝ & TỰ ĐỘNG KHỚP VỚI KHUNG CTĐT)
 // =============================================================================
 router.post('/admin/upload-excel', authenticateToken, upload.single('file'), async (req, res) => {
   try {
@@ -130,14 +324,17 @@ router.post('/admin/upload-excel', authenticateToken, upload.single('file'), asy
     }
 
     const { targetMajor, targetCohort, targetClass, isOverwrite } = req.body;
-    if (!targetMajor || !targetCohort) {
-      return res.status(400).json({ success: false, message: 'Thiếu thông tin Ngành hoặc Khóa tuyển sinh!' });
+
+    // 1. Kiểm tra khóa tuyển sinh có thuộc ngành hay không
+    const checkCohort = await validateMajorAndCohort(targetMajor, targetCohort);
+    if (!checkCohort.valid) {
+      return res.status(400).json({ success: false, message: checkCohort.message });
     }
 
     const cleanCohort = targetCohort.replace(/[^0-9]/g, '').slice(-2);
     const className = targetClass && targetClass !== 'all' ? targetClass.trim() : null;
 
-    // 1. Kiểm tra xem đã có lịch của Ngành & Khóa này trong CSDL hay chưa
+    // 2. Kiểm tra dữ liệu cũ để xác nhận ghi đè
     let checkQuery = `
       SELECT COUNT(*) as count 
       FROM schedules 
@@ -155,7 +352,6 @@ router.post('/admin/upload-excel', authenticateToken, upload.single('file'), asy
     const checkRes = await pool.query(checkQuery, checkParams);
     const existingCount = parseInt(checkRes.rows[0]?.count || 0, 10);
 
-    // Nếu đã có dữ liệu và người dùng chưa bấm xác nhận ghi đè -> Phản hồi 409 yêu cầu xác nhận
     if (existingCount > 0 && String(isOverwrite) !== 'true') {
       return res.status(409).json({
         success: false,
@@ -165,7 +361,6 @@ router.post('/admin/upload-excel', authenticateToken, upload.single('file'), asy
       });
     }
 
-    // Nếu đồng ý ghi đè -> Thực hiện xóa toàn bộ lịch cũ của Ngành & Khóa này
     if (String(isOverwrite) === 'true' && existingCount > 0) {
       let delQuery = `
         DELETE FROM schedules 
@@ -189,7 +384,28 @@ router.post('/admin/upload-excel', authenticateToken, upload.single('file'), asy
       return res.status(400).json({ success: false, message: 'File Excel rỗng hoặc không có dữ liệu!' });
     }
 
-    // 2. Nhận diện các cột tiêu đề (Khắc phục triệt để lỗi cột Tên HP)
+    // 3. Đọc toàn bộ khung CTĐT của ngành và khóa tương ứng
+    const curRes = await pool.query(
+      `SELECT id, subject_code, subject_name, semester_index, credits 
+       FROM curriculum_plans 
+       WHERE major_name ILIKE $1 AND cohort ILIKE $2`,
+      [`%${targetMajor.trim()}%`, `%${cleanCohort}%`]
+    ).catch(() => ({ rows: [] }));
+
+    const planMap = new Map();
+    curRes.rows.forEach(p => {
+      if (p.subject_code) planMap.set(p.subject_code.trim().toUpperCase(), p);
+    });
+
+    const majorCfg = await pool.query(
+      `SELECT COALESCE(semesters_per_year, 3) as spy FROM faculty_majors WHERE major_name ILIKE $1 LIMIT 1`,
+      [`%${targetMajor.trim()}%`]
+    ).catch(() => ({ rows: [] }));
+    const spy = majorCfg.rows[0]?.spy || 3;
+
+    const baseYear = parseInt(targetCohort.replace(/\D/g, ''), 10) || 2025;
+
+    // 4. Nhận diện tiêu đề cột
     let headerRowIdx = 0;
     let colMap = {
       sem: -1,
@@ -235,22 +451,6 @@ router.post('/admin/upload-excel', authenticateToken, upload.single('file'), asy
       }
     }
 
-    // 3. Tải danh mục CTĐT để gắn đúng curriculum_plan_id, số tín chỉ và tên môn chuẩn xác
-    const curRes = await pool.query(
-      `SELECT id, subject_code, subject_name, semester_index, credits 
-       FROM curriculum_plans 
-       WHERE major_name ILIKE $1`,
-      [`%${targetMajor.trim()}%`]
-    ).catch(() => ({ rows: [] }));
-
-    // Đọc số kỳ/năm của ngành để tính toán semester_index chuẩn
-    const majorCfg = await pool.query(
-      `SELECT COALESCE(semesters_per_year, 3) as spy FROM faculty_majors WHERE major_name ILIKE $1 LIMIT 1`,
-      [`%${targetMajor.trim()}%`]
-    ).catch(() => ({ rows: [] }));
-    const spy = majorCfg.rows[0]?.spy || 3;
-
-    const baseYear = parseInt(targetCohort.replace(/\D/g, ''), 10) || 2025;
     const parsedSchedules = [];
 
     for (let r = headerRowIdx + 1; r < rawData.length; r++) {
@@ -261,30 +461,26 @@ router.post('/admin/upload-excel', authenticateToken, upload.single('file'), asy
       const rawSubName = colMap.subName !== -1 ? String(row[colMap.subName] || '').trim() : '';
       if (!rawSubName && !rawSubCode) continue;
 
-      // Tính toán học kỳ tương ứng
       let calculatedSemIdx = null;
       if (colMap.sem !== -1 && row[colMap.sem]) {
         calculatedSemIdx = parseSemesterFromText(row[colMap.sem], baseYear > 2000 ? baseYear : baseYear + 2000, spy);
       }
 
-      // Đối chiếu vào khung CTĐT
-      const matchedPlan = curRes.rows.find(p => 
-        p.subject_code?.trim().toUpperCase() === rawSubCode.toUpperCase() && 
-        (calculatedSemIdx ? p.semester_index === calculatedSemIdx : true)
-      ) || curRes.rows.find(p => p.subject_code?.trim().toUpperCase() === rawSubCode.toUpperCase());
+      // ĐỒNG BỘ: Kế thừa thông tin từ curriculum_plans để không bị lệch với Khung CTĐT
+      const matchedPlan = planMap.get(rawSubCode.toUpperCase()) || 
+                          curRes.rows.find(p => p.subject_name?.trim().toLowerCase() === rawSubName.toLowerCase());
 
       const curPlanId = matchedPlan ? matchedPlan.id : null;
-      const finalTitle = rawSubName || (matchedPlan ? matchedPlan.subject_name : rawSubCode);
+      const finalTitle = matchedPlan ? matchedPlan.subject_name : rawSubName;
+      const finalCode = matchedPlan ? matchedPlan.subject_code : (rawSubCode || null);
       let credits = matchedPlan ? matchedPlan.credits : 3;
-      if (colMap.credits !== -1 && row[colMap.credits]) {
+
+      if (!matchedPlan && colMap.credits !== -1 && row[colMap.credits]) {
         const cNum = parseInt(row[colMap.credits], 10);
         if (!isNaN(cNum) && cNum > 0) credits = cNum;
       }
 
-      // Xử lý ngày học
       let specificDate = colMap.date !== -1 ? parseExcelDate(row[colMap.date]) : null;
-
-      // Xử lý thứ trong tuần (2 - 8)
       let dayOfWeek = null;
       if (specificDate) {
         const dObj = new Date(specificDate);
@@ -296,7 +492,6 @@ router.post('/admin/upload-excel', authenticateToken, upload.single('file'), asy
         if (dowNum >= 2 && dowNum <= 8) dayOfWeek = dowNum;
       }
 
-      // Xử lý tiết học
       let startP = 1;
       let endP = 3;
       if (colMap.startPeriod !== -1 && row[colMap.startPeriod] !== undefined) {
@@ -316,7 +511,6 @@ router.post('/admin/upload-excel', authenticateToken, upload.single('file'), asy
         const temp = startP; startP = endP; endP = temp;
       }
 
-      // Phân loại
       let scheduleType = 'study';
       const rawType = colMap.type !== -1 ? String(row[colMap.type] || '').toLowerCase() : '';
       if (rawType.includes('thi') || rawType.includes('exam')) scheduleType = 'exam';
@@ -324,8 +518,7 @@ router.post('/admin/upload-excel', authenticateToken, upload.single('file'), asy
 
       const room = colMap.room !== -1 ? String(row[colMap.room] || 'C201').trim() : 'C201';
       const teacher = colMap.teacher !== -1 ? String(row[colMap.teacher] || 'Giảng viên').trim() : 'Giảng viên';
-      
-      // Ghi chú đính kèm index học kỳ nếu không map được CTĐT
+
       let note = colMap.note !== -1 ? String(row[colMap.note] || '').trim() : null;
       if (!curPlanId && calculatedSemIdx) {
         note = note ? `[HK${calculatedSemIdx}] ${note}` : `[HK${calculatedSemIdx}]`;
@@ -340,7 +533,7 @@ router.post('/admin/upload-excel', authenticateToken, upload.single('file'), asy
         className: rowClass || null,
         curriculumPlanId: curPlanId,
         credits,
-        subjectCode: rawSubCode || null,
+        subjectCode: finalCode,
         title: finalTitle,
         scheduleType,
         dayOfWeek: dayOfWeek || 2,
@@ -357,7 +550,6 @@ router.post('/admin/upload-excel', authenticateToken, upload.single('file'), asy
       return res.status(400).json({ success: false, message: 'Không thể bóc tách được tiết học nào từ file Excel!' });
     }
 
-    // 4. Lưu dữ liệu hàng loạt vào cơ sở dữ liệu
     for (const s of parsedSchedules) {
       await pool.query(
         `INSERT INTO schedules 
@@ -375,7 +567,7 @@ router.post('/admin/upload-excel', authenticateToken, upload.single('file'), asy
 
     res.json({
       success: true,
-      message: `Đã nạp thành công ${parsedSchedules.length} tiết học/lịch thi cho ${targetMajor} (${targetCohort})!`
+      message: `Đã nạp thành công ${parsedSchedules.length} tiết học đồng bộ chính xác với Khung CTĐT của ${targetMajor} (${targetCohort})!`
     });
   } catch (err) {
     console.error("Lỗi nạp Excel thời khóa biểu:", err);
@@ -384,52 +576,7 @@ router.post('/admin/upload-excel', authenticateToken, upload.single('file'), asy
 });
 
 // =============================================================================
-// 3. GỢI Ý HỌC PHẦN TỪ KHUNG CTĐT CHO FORM XẾP LỊCH THỦ CÔNG
-// =============================================================================
-router.get('/available-subjects', authenticateToken, async (req, res) => {
-  try {
-    const { className, semesterIndex } = req.query;
-
-    if (!className || !semesterIndex) {
-      return res.status(400).json({
-        success: false,
-        message: 'Vui lòng cung cấp className và semesterIndex',
-      });
-    }
-
-    const query = `
-      SELECT 
-        cp.id AS curriculum_plan_id,
-        cp.subject_code,
-        cp.subject_name,
-        cp.credits,
-        cp.credits_structure,
-        cp.subject_type,
-        cp.prerequisite,
-        EXISTS (
-          SELECT 1 FROM schedules sch 
-          WHERE sch.schedule_scope = 'academic'
-            AND sch.class_name = cp.class_name 
-            AND sch.subject_code = cp.subject_code
-        ) AS is_scheduled
-      FROM curriculum_plans cp
-      WHERE cp.class_name = $1 AND cp.semester_index = $2
-      ORDER BY cp.subject_type DESC, cp.subject_code ASC;
-    `;
-
-    const result = await pool.query(query, [className.trim(), parseInt(semesterIndex, 10)]);
-
-    res.json({
-      success: true,
-      data: result.rows,
-    });
-  } catch (error) {
-    res.status(500).json({ success: false, message: error.message });
-  }
-});
-
-// =============================================================================
-// 4. DANH SÁCH THỜI KHÓA BIỂU ADMIN (LỌC CHUẨN XÁC NĂM HỌC & HỌC KỲ)
+// 5. DANH SÁCH THỜI KHÓA BIỂU ADMIN (KẾ THỪA THÔNG TIN TỪ CURRICULUM_PLANS)
 // =============================================================================
 router.get('/admin/list', authenticateToken, async (req, res) => {
   const { major, cohort, year, semester, type, className } = req.query;
@@ -441,9 +588,9 @@ router.get('/admin/list', authenticateToken, async (req, res) => {
         sch.cohort, 
         sch.class_name AS "className",
         sch.curriculum_plan_id AS "curriculumPlanId", 
-        COALESCE(sch.credits, cp.credits, 3) AS "credits",
-        COALESCE(sch.subject_code, cp.subject_code) AS "subjectCode", 
-        sch.title AS "subjectName",
+        COALESCE(cp.credits, sch.credits, 3) AS "credits",
+        COALESCE(cp.subject_code, sch.subject_code) AS "subjectCode", 
+        COALESCE(cp.subject_name, sch.title) AS "subjectName",
         sch.schedule_type AS "scheduleType", 
         sch.day_of_week AS "dayOfWeek",
         TO_CHAR(sch.specific_date, 'YYYY-MM-DD') AS "specificDate",
@@ -478,7 +625,6 @@ router.get('/admin/list', authenticateToken, async (req, res) => {
       query += ` AND sch.schedule_type = $${params.length}`;
     }
 
-    // Lọc theo Năm học và Kỳ học (quy đổi sang Semester Index)
     if (year && year !== 'all' && semester && semester !== 'all') {
       const y = parseInt(year, 10);
       const s = parseInt(semester, 10);
@@ -494,7 +640,6 @@ router.get('/admin/list', authenticateToken, async (req, res) => {
 
       const targetSemIndex = (y - 1) * spy + s;
       params.push(targetSemIndex);
-      // So khớp với semester_index của CTĐT hoặc tag [HK...] trong trường note
       query += ` AND (cp.semester_index = $${params.length} OR sch.note ILIKE '%HK' || $${params.length} || '%')`;
     }
 
@@ -507,128 +652,47 @@ router.get('/admin/list', authenticateToken, async (req, res) => {
   }
 });
 
-router.post('/admin/create', authenticateToken, async (req, res) => {
-  const {
-    facultyMajor,
-    cohort,
-    className,
-    curriculumPlanId,
-    credits,
-    subjectCode,
-    subjectName,
-    scheduleType,
-    specificDate,
-    startPeriod,
-    endPeriod,
-    room,
-    teacherName,
-    note,
-    semesterIndex
-  } = req.body;
-
-  try {
-    const finalClassName = className || null;
-    const finalSubjectName = (subjectName || '').trim();
-    const finalSubjectCode = (subjectCode || '').trim() || null;
-    const finalStartPeriod = Number(startPeriod);
-    const finalEndPeriod = Number(endPeriod);
-    const finalRoom = (room || '').trim();
-    const finalTeacher = (teacherName || req.user?.full_name || 'Giảng viên').trim();
-    const finalScheduleType = scheduleType || 'study';
-    let finalPlanId = curriculumPlanId ? Number(curriculumPlanId) : null;
-    const finalCredits = Number(credits) || 3;
-    const finalMajor = facultyMajor || 'Hệ Thống Thông Tin';
-    const finalCohort = cohort || 'Khóa 2023';
-
-    if (!finalSubjectName || !finalRoom || !specificDate || isNaN(finalStartPeriod) || isNaN(finalEndPeriod)) {
-      return res.status(400).json({ 
-        success: false, 
-        message: 'Vui lòng điền đủ: Tên môn, Ngày diễn ra, Phòng học và Tiết học!' 
-      });
-    }
-
-    // Nếu không có planId, cố gắng tìm đối chiếu theo mã môn
-    if (!finalPlanId && finalSubjectCode) {
-      const matchP = await pool.query(
-        `SELECT id FROM curriculum_plans WHERE major_name ILIKE $1 AND subject_code ILIKE $2 LIMIT 1`,
-        [`%${finalMajor}%`, finalSubjectCode]
-      ).catch(() => ({ rows: [] }));
-      if (matchP.rows.length > 0) finalPlanId = matchP.rows[0].id;
-    }
-
-    const dateObj = new Date(specificDate);
-    const jsDay = dateObj.getDay(); 
-    const computedDayOfWeek = jsDay === 0 ? 8 : jsDay + 1;
-
-    let finalNote = note ? note.trim() : null;
-    if (!finalPlanId && semesterIndex) {
-      finalNote = finalNote ? `[HK${semesterIndex}] ${finalNote}` : `[HK${semesterIndex}]`;
-    }
-
-    const insertRes = await pool.query(
-      `INSERT INTO schedules 
-        (schedule_scope, faculty_major, cohort, class_name, curriculum_plan_id, credits, 
-         subject_code, title, schedule_type, day_of_week, specific_date, 
-         start_period, end_period, room, teacher_name, note)
-       VALUES ('academic', $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
-       RETURNING id`,
-      [
-        finalMajor, finalCohort, finalClassName, finalPlanId, finalCredits,
-        finalSubjectCode, finalSubjectName, finalScheduleType, computedDayOfWeek, specificDate,
-        finalStartPeriod, finalEndPeriod, finalRoom, finalTeacher, finalNote,
-      ]
-    );
-
-    res.json({ success: true, message: 'Đã lưu lịch vào hệ thống!', id: insertRes.rows[0].id });
-  } catch (err) {
-    res.status(500).json({ success: false, message: err.message });
-  }
-});
-
 router.put('/admin/:id', authenticateToken, async (req, res) => {
   const { id } = req.params;
   const {
-    facultyMajor,
-    cohort,
-    className,
-    curriculumPlanId,
-    credits,
-    subjectCode,
-    subjectName,
-    scheduleType,
-    dayOfWeek,
-    specificDate,
-    startPeriod,
-    endPeriod,
     room,
     teacherName,
     note,
+    startPeriod,
+    endPeriod,
+    scheduleType,
+    specificDate,
+    dayOfWeek
   } = req.body;
 
   try {
+    let computedDow = dayOfWeek ? Number(dayOfWeek) : null;
+    if (specificDate && !computedDow) {
+      const dObj = new Date(specificDate);
+      const jsDay = dObj.getDay();
+      computedDow = jsDay === 0 ? 8 : jsDay + 1;
+    }
+
     await pool.query(
       `UPDATE schedules
-       SET faculty_major = $1, cohort = $2, class_name = $3, curriculum_plan_id = $4,
-           credits = $5, subject_code = $6, title = $7, schedule_type = $8,
-           day_of_week = $9, specific_date = $10, start_period = $11, end_period = $12,
-           room = $13, teacher_name = $14, note = $15
-       WHERE id = $16 AND schedule_scope = 'academic'`,
+       SET room = $1, 
+           teacher_name = $2, 
+           note = $3, 
+           start_period = $4, 
+           end_period = $5, 
+           schedule_type = $6, 
+           specific_date = $7,
+           day_of_week = COALESCE($8, day_of_week)
+       WHERE id = $9 AND schedule_scope = 'academic'`,
       [
-        facultyMajor,
-        cohort,
-        className?.trim() || null,
-        curriculumPlanId ? Number(curriculumPlanId) : null,
-        Number(credits) || 3,
-        subjectCode?.trim() || null,
-        subjectName.trim(),
-        scheduleType || 'study',
-        dayOfWeek ? Number(dayOfWeek) : null,
-        specificDate || null,
-        Number(startPeriod),
-        Number(endPeriod),
-        room.trim(),
+        room?.trim(),
         teacherName?.trim() || 'Giảng viên',
         note?.trim() || null,
+        Number(startPeriod),
+        Number(endPeriod),
+        scheduleType || 'study',
+        specificDate || null,
+        computedDow,
         id,
       ]
     );
@@ -648,7 +712,7 @@ router.delete('/admin/:id', authenticateToken, async (req, res) => {
 });
 
 // =============================================================================
-// 5. LẤY LỊCH HỌC CHO PHÍA SINH VIÊN (ZALO MINI APP / WEB APP)
+// 6. LẤY LỊCH HỌC CHO PHÍA SINH VIÊN (ZALO MINI APP / WEB APP)
 // =============================================================================
 router.get('/student-schedule', async (req, res) => {
   const { studentCode, zaloId, identifier, month, year } = req.query;
@@ -717,33 +781,34 @@ router.get('/student-schedule', async (req, res) => {
 
     let scheduleQuery = `
       SELECT 
-        id,
-        title,
-        TO_CHAR(specific_date, 'YYYY-MM-DD') AS date,
-        'Tiết ' || start_period || ' - ' || end_period AS time,
-        room,
-        teacher_name AS teacher,
+        sch.id,
+        COALESCE(cp.subject_name, sch.title) AS title,
+        TO_CHAR(sch.specific_date, 'YYYY-MM-DD') AS date,
+        'Tiết ' || sch.start_period || ' - ' || sch.end_period AS time,
+        sch.room,
+        sch.teacher_name AS teacher,
         CASE 
-          WHEN room ILIKE '%truc tuyen%' THEN 'Lịch trực tuyến'
-          WHEN schedule_type = 'exam' THEN 'Lịch thi'
+          WHEN sch.room ILIKE '%truc tuyen%' THEN 'Lịch trực tuyến'
+          WHEN sch.schedule_type = 'exam' THEN 'Lịch thi'
           ELSE 'Lịch học'
         END AS category
-      FROM schedules
-      WHERE schedule_scope = 'academic'
-        AND faculty_major ILIKE $1 
-        AND (cohort ILIKE $2 OR cohort IS NULL OR cohort = '' OR cohort ILIKE '%' || $3 || '%')
-        AND ($4::text IS NULL OR class_name IS NULL OR class_name = '' OR class_name = $4)
-        AND specific_date IS NOT NULL
+      FROM schedules sch
+      LEFT JOIN curriculum_plans cp ON sch.curriculum_plan_id = cp.id
+      WHERE sch.schedule_scope = 'academic'
+        AND sch.faculty_major ILIKE $1 
+        AND (sch.cohort ILIKE $2 OR sch.cohort IS NULL OR sch.cohort = '' OR sch.cohort ILIKE '%' || $3 || '%')
+        AND ($4::text IS NULL OR sch.class_name IS NULL OR sch.class_name = '' OR sch.class_name = $4)
+        AND sch.specific_date IS NOT NULL
     `;
     const cleanCohort = cohort.replace(/\D/g, '');
     const scheduleParams = [facultyMajor, cohort, cleanCohort, className || null];
 
     if (month && year) {
       scheduleParams.push(Number(month), Number(year));
-      scheduleQuery += ` AND EXTRACT(MONTH FROM specific_date) = $${scheduleParams.length - 1} AND EXTRACT(YEAR FROM specific_date) = $${scheduleParams.length}`;
+      scheduleQuery += ` AND EXTRACT(MONTH FROM sch.specific_date) = $${scheduleParams.length - 1} AND EXTRACT(YEAR FROM sch.specific_date) = $${scheduleParams.length}`;
     }
 
-    scheduleQuery += ` ORDER BY specific_date ASC, start_period ASC`;
+    scheduleQuery += ` ORDER BY sch.specific_date ASC, sch.start_period ASC`;
 
     const { rows } = await pool.query(scheduleQuery, scheduleParams).catch(() => ({ rows: [] }));
 
@@ -766,7 +831,7 @@ router.get('/student-schedule', async (req, res) => {
 });
 
 // =============================================================================
-// 6. MÔN HỌC KHUNG CHƯƠNG TRÌNH ĐÀO TẠO
+// 7. MÔN HỌC KHUNG CHƯƠNG TRÌNH ĐÀO TẠO
 // =============================================================================
 router.get(['/curriculum', '/curriculum-subjects', '/curriculum/subjects'], async (req, res) => {
   const { major } = req.query;
@@ -792,7 +857,7 @@ router.get(['/curriculum', '/curriculum-subjects', '/curriculum/subjects'], asyn
 });
 
 // =============================================================================
-// 7. LỘ TRÌNH THÍCH ỨNG & THỜI KHÓA BIỂU CÁ NHÂN
+// 8. LỘ TRÌNH THÍCH ỨNG & THỜI KHÓA BIỂU CÁ NHÂN
 // =============================================================================
 router.get(['/timelines', '/api/timelines'], async (req, res) => {
   const userId = await resolveUserId(req);
@@ -1086,7 +1151,7 @@ router.post(['/generate-wrr-plan', '/timelines/generate-wrr-plan'], async (req, 
 });
 
 // =============================================================================
-// 8. ĐIỂM DANH STREAK
+// 9. ĐIỂM DANH STREAK
 // =============================================================================
 router.get('/streak/:userId', async (req, res) => {
   const userId = await resolveUserId(req);
@@ -1173,7 +1238,7 @@ router.post('/streak/complete', async (req, res) => {
 });
 
 // =============================================================================
-// 9. THỜI KHÓA BIỂU CÁ NHÂN (SCHEDULE_SCOPE = 'PERSONAL')
+// 10. THỜI KHÓA BIỂU CÁ NHÂN (SCHEDULE_SCOPE = 'PERSONAL')
 // =============================================================================
 router.get('/', authenticateToken, async (req, res) => {
   try {

@@ -1,5 +1,5 @@
 // src/admin/ManageSchedules.jsx
-import React, { useState, useEffect, useRef, useCallback } from "react";
+import React, { useState, useEffect, useRef, useCallback, useMemo } from "react";
 
 const API_BASE = import.meta.env.VITE_API_URL || "https://tuna-project.onrender.com/api";
 
@@ -9,53 +9,47 @@ export const ManageSchedules = () => {
   const [uploading, setUploading] = useState(false);
   const fileInputRef = useRef(null);
 
-  // Danh mục động 100% từ CSDL
-  const [options, setOptions] = useState({
-    majors: [],
-    cohorts: [],
-    classes: [],
-  });
+  // Danh mục lấy 100% từ bảng faculty_majors
+  const [majorMap, setMajorMap] = useState({});
+  const [majors, setMajors] = useState([]);
+  const [classes, setClasses] = useState([]);
 
   // Bộ lọc dữ liệu
   const [filterMajor, setFilterMajor] = useState("");
   const [filterCohort, setFilterCohort] = useState("");
   const [filterClass, setFilterClass] = useState("all");
-  const [filterYear, setFilterYear] = useState("4");
+  const [filterYear, setFilterYear] = useState("1");
   const [filterSemester, setFilterSemester] = useState("1");
   const [filterType, setFilterType] = useState("all");
 
-  // Floating Action Menu Fixed
   const [activeMenuData, setActiveMenuData] = useState(null);
   const menuDropdownRef = useRef(null);
 
-  // Modal Xếp Lịch
   const [showScheduleModal, setShowScheduleModal] = useState(false);
   const [editingItem, setEditingItem] = useState(null);
 
-  // Chế độ nhập môn: 'from_curriculum' | 'custom'
   const [entryMode, setEntryMode] = useState("from_curriculum");
   const [curriculumSubjects, setCurriculumSubjects] = useState([]);
   const [loadingCurriculum, setLoadingCurriculum] = useState(false);
   const [selectedPlanId, setSelectedPlanId] = useState("");
 
-  // Phân trang
   const [currentPage, setCurrentPage] = useState(1);
   const itemsPerPage = 8;
 
   const getTodayStr = () => new Date().toISOString().split("T")[0];
 
   const getCalculatedSemesterIndex = (year, sem) => {
-    return (Number(year) - 1) * 3 + Number(sem);
+    const spy = Number(majorMap[filterMajor]?.semestersPerYear) || 3;
+    return (Number(year) - 1) * spy + Number(sem);
   };
 
-  // Form State
   const [formData, setFormData] = useState({
     facultyMajor: "",
     cohort: "",
     className: "",
-    academicYear: 4,
+    academicYear: 1,
     semester: 1,
-    semesterIndex: 10,
+    semesterIndex: 1,
     curriculumPlanId: null,
     subjectCode: "",
     subjectName: "",
@@ -81,17 +75,11 @@ export const ManageSchedules = () => {
         setActiveMenuData(null);
       }
     };
-    const handleScroll = () => setActiveMenuData(null);
-
     document.addEventListener("mousedown", handleOutsideClick);
-    window.addEventListener("scroll", handleScroll, true);
-    return () => {
-      document.removeEventListener("mousedown", handleOutsideClick);
-      window.removeEventListener("scroll", handleScroll, true);
-    };
+    return () => document.removeEventListener("mousedown", handleOutsideClick);
   }, []);
 
-  // 1. Tải danh mục Ngành, Khóa và Lớp thực tế từ CSDL
+  // 1. Nạp danh mục Ngành & Khóa chuẩn xác từ faculty_majors
   useEffect(() => {
     let isMounted = true;
     const fetchMetaOptions = async () => {
@@ -99,34 +87,40 @@ export const ManageSchedules = () => {
         const res = await fetch(`${API_BASE}/schedules/admin/meta-options`, { headers: getHeaders() });
         const d = await res.json();
         if (isMounted && d.success && d.data) {
-          const loadedMajors = d.data.majors || [];
-          const loadedCohorts = d.data.cohorts || [];
-          const loadedClasses = Array.isArray(d.data.classes)
-            ? d.data.classes
-            : Object.values(d.data.classes || {}).flat();
+          const mMap = d.data.majorMap || {};
+          const mList = d.data.majors || [];
+          setMajorMap(mMap);
+          setMajors(mList);
+          setClasses(d.data.classes || []);
 
-          setOptions({
-            majors: loadedMajors,
-            cohorts: loadedCohorts,
-            classes: loadedClasses,
-          });
-
-          if (loadedMajors.length > 0) {
-            setFilterMajor((prev) => prev || loadedMajors[0].majorName);
-          }
-          if (loadedCohorts.length > 0) {
-            setFilterCohort((prev) => prev || loadedCohorts[0]);
+          if (mList.length > 0) {
+            const firstMajor = mList[0].majorName;
+            setFilterMajor(firstMajor);
+            const availableCohorts = mMap[firstMajor]?.cohorts || [];
+            setFilterCohort(availableCohorts[0] || "");
           }
         }
       } catch (e) {
-        console.error("Lỗi nạp danh mục ngành & khóa từ CSDL:", e);
+        console.error("Lỗi nạp danh mục:", e);
       }
     };
     fetchMetaOptions();
     return () => { isMounted = false; };
   }, [getHeaders]);
 
-  // 2. Tải thời khóa biểu từ CSDL theo bộ lọc
+  // Danh sách khóa hợp lệ của ngành đang chọn
+  const activeCohorts = useMemo(() => {
+    return majorMap[filterMajor]?.cohorts || [];
+  }, [majorMap, filterMajor]);
+
+  // Khi đổi ngành, tự động chuyển về khóa đầu tiên của ngành đó
+  const handleMajorChange = (newMajor) => {
+    setFilterMajor(newMajor);
+    const cohortsOfMajor = majorMap[newMajor]?.cohorts || [];
+    setFilterCohort(cohortsOfMajor[0] || "");
+  };
+
+  // 2. Tải thời khóa biểu
   const fetchSchedules = useCallback(async () => {
     if (!filterMajor || !filterCohort) return;
     setLoading(true);
@@ -144,7 +138,7 @@ export const ManageSchedules = () => {
       const d = await res.json();
       if (d.success) setSchedules(d.data || []);
     } catch (e) {
-      console.error("Lỗi tải lịch học:", e);
+      console.error("Lỗi tải TKB:", e);
     } finally {
       setLoading(false);
     }
@@ -156,14 +150,15 @@ export const ManageSchedules = () => {
     setActiveMenuData(null);
   }, [fetchSchedules]);
 
-  // 3. Nạp môn từ Khung CTĐT theo đúng lớp và kỳ học
-  const loadCurriculumSubjects = async (cls, semIdx) => {
-    if (!cls || !semIdx) return;
+  // 3. Nạp môn từ Khung CTĐT theo kỳ để xếp lịch
+  const loadCurriculumSubjects = async (semIdx) => {
+    if (!filterMajor || !semIdx) return;
     setLoadingCurriculum(true);
     try {
-      const res = await fetch(`${API_BASE}/schedules/available-subjects?className=${encodeURIComponent(cls)}&semesterIndex=${semIdx}`, {
-        headers: getHeaders(),
-      });
+      const res = await fetch(
+        `${API_BASE}/schedules/available-subjects?major=${encodeURIComponent(filterMajor)}&cohort=${encodeURIComponent(filterCohort)}&semesterIndex=${semIdx}`,
+        { headers: getHeaders() }
+      );
       const d = await res.json();
       if (d.success && d.data && d.data.length > 0) {
         setCurriculumSubjects(d.data);
@@ -188,21 +183,17 @@ export const ManageSchedules = () => {
     }
   };
 
-  // 4. Mở Modal Xếp Lịch
   const handleOpenScheduleModal = () => {
     setActiveMenuData(null);
     setEditingItem(null);
     setEntryMode("from_curriculum");
 
-    const defaultMajor = filterMajor || options.majors[0]?.majorName || "";
-    const defaultCohort = filterCohort || options.cohorts[0] || "";
-    const targetClass = filterClass !== "all" ? filterClass : (options.classes[0] || "");
     const semIndex = getCalculatedSemesterIndex(filterYear, filterSemester);
 
     setFormData({
-      facultyMajor: defaultMajor,
-      cohort: defaultCohort,
-      className: targetClass,
+      facultyMajor: filterMajor,
+      cohort: filterCohort,
+      className: filterClass !== "all" ? filterClass : "",
       academicYear: Number(filterYear),
       semester: Number(filterSemester),
       semesterIndex: semIndex,
@@ -221,67 +212,7 @@ export const ManageSchedules = () => {
     });
 
     setShowScheduleModal(true);
-    if (targetClass) {
-      loadCurriculumSubjects(targetClass, semIndex);
-    }
-  };
-
-// 5. Nạp Excel Thời Khóa Biểu (Hỗ trợ Xóa Ghi Đè)
-  const handleFileUpload = async (e, isOverwrite = false) => {
-    const file = e.target.files ? e.target.files[0] : (fileInputRef.current ? fileInputRef.current.files[0] : null);
-    if (!file) return;
-
-    if (!filterMajor || !filterCohort) {
-      alert("Vui lòng chọn Ngành đào tạo và Khóa tuyển sinh trước khi nạp file!");
-      if (fileInputRef.current) fileInputRef.current.value = "";
-      return;
-    }
-
-    const data = new FormData();
-    data.append("file", file);
-    data.append("targetMajor", filterMajor);
-    data.append("targetCohort", filterCohort);
-    data.append("targetClass", filterClass);
-    if (isOverwrite) data.append("isOverwrite", "true");
-
-    setUploading(true);
-    try {
-      const res = await fetch(`${API_BASE}/schedules/admin/upload-excel`, {
-        method: "POST",
-        headers: { Authorization: `Bearer ${localStorage.getItem("admin_token") || localStorage.getItem("token") || ""}` },
-        body: data,
-      });
-      
-      const resData = await res.json();
-      
-      // BẮT MÃ LỖI 409 TỪ BACKEND: Đã có dữ liệu, yêu cầu xác nhận ghi đè
-      if (res.status === 409 && resData.requireConfirmation) {
-        setUploading(false); // Dừng loading để hiện popup
-        const userConfirmed = window.confirm(resData.message);
-        
-        if (userConfirmed) {
-          // Nếu đồng ý, gọi lại hàm với cờ isOverwrite = true
-          return handleFileUpload({ target: { files: [file] } }, true);
-        } else {
-          // Nếu hủy, xóa file đã chọn
-          if (fileInputRef.current) fileInputRef.current.value = "";
-          return;
-        }
-      }
-
-      if (resData.success) {
-        alert("✅ " + (resData.message || "Đã cập nhật thành công thời khóa biểu từ Excel!"));
-        fetchSchedules(); // Refresh bảng
-      } else {
-        alert("Lỗi: " + resData.message);
-      }
-    } catch (err) {
-      alert("Lỗi kết nối máy chủ");
-    } finally {
-      setUploading(false);
-      // Chỉ clear input nếu không ở vòng lặp đệ quy hỏi ghi đè
-      if (!isOverwrite && fileInputRef.current) fileInputRef.current.value = "";
-    }
+    loadCurriculumSubjects(semIndex);
   };
 
   const handleSelectCurriculumSubject = (e) => {
@@ -300,87 +231,69 @@ export const ManageSchedules = () => {
     }
   };
 
-  const handleOpenEdit = (item) => {
-    setActiveMenuData(null);
-    setEditingItem(item);
-    setEntryMode(item.curriculumPlanId ? "from_curriculum" : "custom");
+  const handleFileUpload = async (e, isOverwrite = false) => {
+    const file = e.target.files ? e.target.files[0] : (fileInputRef.current ? fileInputRef.current.files[0] : null);
+    if (!file) return;
 
-    const semIndex = item.semesterIndex || getCalculatedSemesterIndex(item.academicYear, item.semester);
-
-    setFormData({
-      facultyMajor: item.facultyMajor || filterMajor,
-      cohort: item.cohort || filterCohort,
-      className: item.className || "",
-      academicYear: item.academicYear || Number(filterYear),
-      semester: item.semester || Number(filterSemester),
-      semesterIndex: semIndex,
-      curriculumPlanId: item.curriculumPlanId || null,
-      subjectCode: item.subjectCode || "",
-      subjectName: item.subjectName || "",
-      credits: item.credits || 3,
-      creditsStructure: "3(3,0,0)",
-      scheduleType: item.scheduleType || "study",
-      specificDate: item.specificDate || getTodayStr(),
-      startPeriod: item.startPeriod || 1,
-      endPeriod: item.endPeriod || 3,
-      room: item.room || "",
-      teacherName: item.teacherName || "",
-      note: item.note || "",
-    });
-
-    setShowScheduleModal(true);
-    if (item.className) {
-      loadCurriculumSubjects(item.className, semIndex);
-    }
-  };
-
-  const toggleActionMenu = (e, item) => {
-    e.stopPropagation();
-    if (activeMenuData && activeMenuData.item.id === item.id) {
-      setActiveMenuData(null);
+    if (!filterMajor || !filterCohort) {
+      alert("Vui lòng chọn Ngành và Khóa tuyển sinh hợp lệ trước khi nạp file!");
+      if (fileInputRef.current) fileInputRef.current.value = "";
       return;
     }
-    const rect = e.currentTarget.getBoundingClientRect();
-    const spaceBelow = window.innerHeight - rect.bottom;
-    let top = rect.bottom + 4;
-    if (spaceBelow < 90) top = rect.top - 90 - 4;
 
-    setActiveMenuData({
-      item,
-      top,
-      right: window.innerWidth - rect.right,
-    });
+    const data = new FormData();
+    data.append("file", file);
+    data.append("targetMajor", filterMajor);
+    data.append("targetCohort", filterCohort);
+    data.append("targetClass", filterClass);
+    if (isOverwrite) data.append("isOverwrite", "true");
+
+    setUploading(true);
+    try {
+      const res = await fetch(`${API_BASE}/schedules/admin/upload-excel`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${localStorage.getItem("admin_token") || localStorage.getItem("token") || ""}` },
+        body: data,
+      });
+
+      const resData = await res.json();
+
+      if (res.status === 409 && resData.requireConfirmation) {
+        setUploading(false);
+        const userConfirmed = window.confirm(resData.message);
+        if (userConfirmed) {
+          return handleFileUpload({ target: { files: [file] } }, true);
+        } else {
+          if (fileInputRef.current) fileInputRef.current.value = "";
+          return;
+        }
+      }
+
+      if (resData.success) {
+        alert("✅ " + resData.message);
+        fetchSchedules();
+      } else {
+        alert("Lỗi: " + resData.message);
+      }
+    } catch (err) {
+      alert("Lỗi kết nối máy chủ");
+    } finally {
+      setUploading(false);
+      if (!isOverwrite && fileInputRef.current) fileInputRef.current.value = "";
+    }
   };
 
   const handleSubmit = async (e) => {
     e.preventDefault();
-    if (!formData.subjectName.trim()) {
-      alert("Vui lòng điền tên môn học!");
-      return;
-    }
-    if (!formData.specificDate) {
-      alert("Vui lòng chọn ngày diễn ra!");
-      return;
-    }
-    if (Number(formData.startPeriod) > Number(formData.endPeriod)) {
-      alert("Lỗi: Tiết bắt đầu không được lớn hơn tiết kết thúc!");
-      return;
-    }
-
     try {
       const isEdit = !!editingItem;
       const url = isEdit ? `${API_BASE}/schedules/admin/${editingItem.id}` : `${API_BASE}/schedules/admin/create`;
       const method = isEdit ? "PUT" : "POST";
 
-      const payload = {
-        ...formData,
-        curriculumPlanId: entryMode === "from_curriculum" ? formData.curriculumPlanId : null,
-      };
-
       const res = await fetch(url, {
         method,
         headers: getHeaders(),
-        body: JSON.stringify(payload),
+        body: JSON.stringify(formData),
       });
 
       const data = await res.json();
@@ -398,32 +311,14 @@ export const ManageSchedules = () => {
 
   const handleDelete = async (item) => {
     setActiveMenuData(null);
-    if (!window.confirm(`Xác nhận xóa môn/tiết học "${item.subjectName}"?`)) return;
+    if (!window.confirm(`Xác nhận xóa tiết học môn "${item.subjectName}"?`)) return;
     try {
-      const res = await fetch(`${API_BASE}/schedules/admin/${item.id}`, {
-        method: "DELETE",
-        headers: getHeaders(),
-      });
-      const data = await res.json();
-      if (data.success) fetchSchedules();
-      else alert(data.message);
+      const res = await fetch(`${API_BASE}/schedules/admin/${item.id}`, { method: "DELETE", headers: getHeaders() });
+      const d = await res.json();
+      if (d.success) fetchSchedules();
     } catch (e) {
       alert("Lỗi máy chủ");
     }
-  };
-
-  const formatTimeSlot = (item) => {
-    const days = { 2: "Thứ Hai", 3: "Thứ Ba", 4: "Thứ Tư", 5: "Thứ Năm", 6: "Thứ Sáu", 7: "Thứ Bảy", 8: "Chủ Nhật" };
-    const dayLabel = days[item.dayOfWeek] || "";
-    if (item.specificDate) {
-      return (
-        <div>
-          <span className="fw-semibold text-dark">{item.specificDate}</span>
-          {dayLabel && <small className="text-secondary d-block" style={{ fontSize: "11px" }}>({dayLabel})</small>}
-        </div>
-      );
-    }
-    return <span className="fw-semibold text-dark">{dayLabel || "Lịch linh hoạt"}</span>;
   };
 
   const totalPages = Math.ceil(schedules.length / itemsPerPage) || 1;
@@ -431,29 +326,20 @@ export const ManageSchedules = () => {
 
   return (
     <div className="d-flex flex-column gap-4 w-100" style={{ color: "#1e293b" }}>
-      {/* 1. KHỐI ĐIỀU KHIỂN & BỘ LỌC */}
-      <div 
-        className="bg-white rounded-4 p-4 border shadow-sm mb-2"
-        style={{ borderColor: "#e2e8f0", boxShadow: "0 2px 8px rgba(0,0,0,0.02)" }}
-      >
+      {/* 1. KHỐI BỘ LỌC ĐỒNG BỘ */}
+      <div className="bg-white rounded-4 p-4 border shadow-sm mb-2" style={{ borderColor: "#e2e8f0" }}>
         <div className="d-flex flex-wrap align-items-center justify-content-between gap-2 mb-3 pb-1">
           <div className="d-flex align-items-center gap-3">
             <span
               className="rounded-3 d-flex align-items-center justify-content-center text-white flex-shrink-0"
-              style={{
-                width: "40px",
-                height: "40px",
-                background: "linear-gradient(135deg, #185bf0 0%, #0d9488 100%)",
-              }}
+              style={{ width: "40px", height: "40px", background: "linear-gradient(135deg, #185bf0 0%, #0d9488 100%)" }}
             >
               <i className="bi bi-calendar3-range-fill fs-5"></i>
             </span>
             <div>
-              <h6 className="fw-black text-dark mb-0 fs-6">
-                Thời Khóa Biểu Theo Lớp & Chuyên Ngành
-              </h6>
+              <h6 className="fw-black text-dark mb-0 fs-6">Thời Khóa Biểu Đào Tạo</h6>
               <small className="text-secondary fw-medium" style={{ fontSize: "12px" }}>
-                Đồng bộ lịch học, ngày diễn ra và thời khóa biểu cùng khung CTĐT
+                Ràng buộc chặt chẽ với Ngành đào tạo và Khung CTĐT ban hành
               </small>
             </div>
           </div>
@@ -462,69 +348,80 @@ export const ManageSchedules = () => {
             <input type="file" ref={fileInputRef} onChange={handleFileUpload} accept=".xlsx, .xls" className="d-none" />
             <button
               onClick={() => fileInputRef.current?.click()}
-              disabled={uploading}
+              disabled={uploading || activeCohorts.length === 0}
               className="btn btn-sm btn-outline-success rounded-pill px-3 py-2 fw-bold d-flex align-items-center gap-1.5 shadow-2xs"
               style={{ fontSize: "12px" }}
             >
-              {uploading ? (
-                <>
-                  <span className="spinner-border spinner-border-sm"></span>
-                  <span>Đang nạp file...</span>
-                </>
-              ) : (
-                <>
-                  <i className="bi bi-file-earmark-arrow-up"></i>
-                  <span>Nhập Excel TKB (.xlsx)</span>
-                </>
-              )}
+              {uploading ? "Đang nạp file..." : "Nhập Excel TKB (.xlsx)"}
             </button>
 
             <button
               onClick={handleOpenScheduleModal}
+              disabled={activeCohorts.length === 0}
               className="btn btn-primary rounded-pill px-3.5 py-2 fw-bold shadow-xs d-flex align-items-center gap-1.5 border-0 text-white cursor-pointer"
-              style={{ fontSize: "12.5px", background: "linear-gradient(135deg, #185bf0 0%, #1546cd 100%)" }}
+              style={{ fontSize: "12.5px", background: "#185bf0" }}
             >
               <i className="bi bi-plus-circle-fill fs-6"></i>
-              <span>Xếp Lịch Học / Thi</span>
+              <span>Xếp Lịch Mới</span>
             </button>
           </div>
         </div>
 
-        {/* Bộ lọc chuẩn từ CSDL */}
+        {/* Hàng bộ lọc */}
         <div className="row g-3 pt-1">
           <div className="col-12 col-md-4">
             <label className="form-label text-uppercase text-secondary fw-bold mb-1" style={{ fontSize: "10px" }}>Ngành Đào Tạo</label>
             <select
               value={filterMajor}
-              onChange={(e) => setFilterMajor(e.target.value)}
+              onChange={(e) => handleMajorChange(e.target.value)}
               className="form-select form-select-sm rounded-3 bg-white shadow-none fw-semibold"
               style={{ fontSize: "12.5px", borderColor: "#e2e8f0" }}
             >
-              {options.majors.map((m, idx) => (
-                <option key={idx} value={m.majorName}>
+              {majors.map((m) => (
+                <option key={m.majorCode} value={m.majorName}>
                   [{m.majorCode}] {m.majorName}
                 </option>
               ))}
             </select>
           </div>
 
+          {/* Khóa tuyển sinh: CHỈ HIỆN CÁC KHÓA ĐÃ TẠO TRONG QUẢN LÝ NGÀNH */}
           <div className="col-6 col-md-2">
-            <label className="form-label text-uppercase text-secondary fw-bold mb-1" style={{ fontSize: "10px" }}>Khóa Tuyển Sinh</label>
+            <label className="form-label text-uppercase text-secondary fw-bold mb-1" style={{ fontSize: "10px" }}>
+              Khóa Tuyển Sinh (Đã duyệt)
+            </label>
             <select
               value={filterCohort}
               onChange={(e) => setFilterCohort(e.target.value)}
-              className="form-select form-select-sm rounded-3 bg-white shadow-none fw-semibold"
+              className="form-select form-select-sm rounded-3 bg-white shadow-none fw-semibold font-monospace text-primary"
               style={{ fontSize: "12.5px", borderColor: "#e2e8f0" }}
             >
-              {options.cohorts.map((c, idx) => (
-                <option key={idx} value={c}>
-                  {c}
-                </option>
-              ))}
+              {activeCohorts.length === 0 ? (
+                <option value="">Chưa gán khóa</option>
+              ) : (
+                activeCohorts.map((c) => (
+                  <option key={c} value={c}>{c}</option>
+                ))
+              )}
             </select>
           </div>
 
           <div className="col-6 col-md-2">
+            <label className="form-label text-uppercase text-secondary fw-bold mb-1" style={{ fontSize: "10px" }}>Lớp Học</label>
+            <select
+              value={filterClass}
+              onChange={(e) => setFilterClass(e.target.value)}
+              className="form-select form-select-sm rounded-3 bg-white shadow-none fw-semibold"
+              style={{ fontSize: "12.5px", borderColor: "#e2e8f0" }}
+            >
+              <option value="all">Tất cả các lớp</option>
+              {classes.map((cls) => (
+                <option key={cls} value={cls}>{cls}</option>
+              ))}
+            </select>
+          </div>
+
+          <div className="col-4 col-md-2">
             <label className="form-label text-uppercase text-secondary fw-bold mb-1" style={{ fontSize: "10px" }}>Năm Học</label>
             <select
               value={filterYear}
@@ -539,7 +436,7 @@ export const ManageSchedules = () => {
             </select>
           </div>
 
-          <div className="col-6 col-md-2">
+          <div className="col-4 col-md-2">
             <label className="form-label text-uppercase text-secondary fw-bold mb-1" style={{ fontSize: "10px" }}>Học Kỳ</label>
             <select
               value={filterSemester}
@@ -549,32 +446,17 @@ export const ManageSchedules = () => {
             >
               <option value="1">Kỳ 1</option>
               <option value="2">Kỳ 2</option>
-              <option value="3">Kỳ 3 (Hè)</option>
-            </select>
-          </div>
-
-          <div className="col-6 col-md-2">
-            <label className="form-label text-uppercase text-secondary fw-bold mb-1" style={{ fontSize: "10px" }}>Phân Loại</label>
-            <select
-              value={filterType}
-              onChange={(e) => setFilterType(e.target.value)}
-              className="form-select form-select-sm rounded-3 bg-white shadow-none fw-semibold"
-              style={{ fontSize: "12.5px", borderColor: "#e2e8f0" }}
-            >
-              <option value="all">Tất cả</option>
-              <option value="study">Lý thuyết</option>
-              <option value="practice">Thực hành</option>
-              <option value="exam">Lịch thi</option>
+              <option value="3">Kỳ 3</option>
             </select>
           </div>
         </div>
       </div>
 
-      {/* 2. BẢNG DANH SÁCH LỊCH HỌC */}
+      {/* 2. BẢNG THỜI KHÓA BIỂU */}
       <div className="rounded-4 p-4 shadow-sm bg-white border" style={{ borderColor: "#f1f5f9" }}>
         <div className="d-flex justify-content-between align-items-center mb-3">
           <span className="badge bg-primary-subtle text-primary border border-primary-subtle px-3 py-1.5 rounded-pill fw-bold" style={{ fontSize: "11px" }}>
-            {filterMajor || "Hệ Thống Thông Tin"} • {filterCohort || "Khóa 2023"} • Năm {filterYear} (Kỳ {filterSemester} - HK {getCalculatedSemesterIndex(filterYear, filterSemester)})
+            {filterMajor} • {filterCohort || "Chưa chọn khóa"} • Năm {filterYear} (Kỳ {filterSemester})
           </span>
           <small className="text-muted fw-semibold">Tổng: <b>{schedules.length}</b> tiết học/lịch thi</small>
         </div>
@@ -582,9 +464,9 @@ export const ManageSchedules = () => {
         <div className="table-responsive" style={{ minHeight: "260px" }}>
           <table className="table table-hover align-middle mb-0 text-nowrap" style={{ minWidth: "860px" }}>
             <thead className="table-light">
-              <tr style={{ fontSize: "11px", color: "#64748b", letterSpacing: "0.5px" }} className="text-uppercase">
+              <tr style={{ fontSize: "11px", color: "#64748b" }} className="text-uppercase">
                 <th style={{ width: "50px", textAlign: "center" }}>STT</th>
-                <th>Môn Học & Mã Học Phần</th>
+                <th>Môn Học & Mã HP (Theo Khung CTĐT)</th>
                 <th>Phân Loại</th>
                 <th>Ngày Diễn Ra</th>
                 <th>Tiết Học</th>
@@ -596,10 +478,16 @@ export const ManageSchedules = () => {
             <tbody style={{ fontSize: "13px" }}>
               {loading ? (
                 <tr><td colSpan={8} className="text-center py-5 text-muted">Đang nạp dữ liệu...</td></tr>
+              ) : activeCohorts.length === 0 ? (
+                <tr>
+                  <td colSpan={8} className="text-center py-5 text-danger fw-bold">
+                    Ngành "{filterMajor}" chưa có khóa tuyển sinh nào trong Quản Lý Ngành. Vui lòng tạo khóa trước!
+                  </td>
+                </tr>
               ) : paginatedData.length === 0 ? (
                 <tr>
                   <td colSpan={8} className="text-center py-5 text-muted">
-                    Không có lịch học/thi cho tiêu chí đã chọn. Bấm <b>"Nhập Excel TKB"</b> hoặc <b>"Xếp Lịch Học / Thi"</b> để tạo mới.
+                    Chưa có lịch cho tiêu chí này. Bấm <b>"Nhập Excel TKB"</b> hoặc <b>"Xếp Lịch Mới"</b>.
                   </td>
                 </tr>
               ) : (
@@ -608,52 +496,36 @@ export const ManageSchedules = () => {
                   return (
                     <tr key={item.id}>
                       <td className="fw-bold text-muted text-center" style={{ fontSize: "12px" }}>
-                        {virtualIndex < 10 ? `#0${virtualIndex}` : `#${virtualIndex}`}
+                        #{virtualIndex}
                       </td>
                       <td>
                         <span className="fw-bold text-dark d-block">{item.subjectName}</span>
                         <div className="d-flex align-items-center gap-1">
-                          <code className="text-muted" style={{ fontSize: "11px" }}>{item.subjectCode || "NGOÀI_KHUNG"}</code>
-                          {item.credits && (
-                            <span className="badge bg-light text-secondary border px-1.5 py-0 font-monospace" style={{ fontSize: "9.5px" }}>
-                              {item.credits} TC
-                            </span>
-                          )}
+                          <code className="text-primary font-monospace fw-bold" style={{ fontSize: "11px" }}>
+                            {item.subjectCode}
+                          </code>
+                          <span className="badge bg-light text-secondary border px-1.5 py-0 font-monospace" style={{ fontSize: "9.5px" }}>
+                            {item.credits} TC
+                          </span>
                         </div>
                       </td>
                       <td>
-                        <span
-                          className="badge rounded-pill px-2.5 py-1 fw-bold"
-                          style={{
-                            background: item.scheduleType === "exam" ? "#fef2f2" : item.scheduleType === "practice" ? "#ecfeff" : "#eff6ff",
-                            color: item.scheduleType === "exam" ? "#dc2626" : item.scheduleType === "practice" ? "#0891b2" : "#185bf0",
-                            border: `1px solid ${item.scheduleType === "exam" ? "#fecaca" : item.scheduleType === "practice" ? "#a5f3fc" : "#bfdbfe"}`,
-                            fontSize: "10.5px",
-                          }}
-                        >
+                        <span className="badge rounded-pill px-2.5 py-1 fw-bold bg-primary-subtle text-primary" style={{ fontSize: "10.5px" }}>
                           {item.scheduleType === "exam" ? "Lịch Thi" : item.scheduleType === "practice" ? "Thực Hành" : "Lý Thuyết"}
                         </span>
                       </td>
-                      <td>{formatTimeSlot(item)}</td>
-                      <td>
-                        <span className="badge bg-light text-secondary border px-2 py-1">
-                          Tiết {item.startPeriod} - {item.endPeriod}
-                        </span>
-                      </td>
-                      <td>
-                        <span className="badge bg-light text-dark border px-2.5 py-1 fw-bold">
-                          {item.room}
-                        </span>
-                      </td>
+                      <td>{item.specificDate} (Thứ {item.dayOfWeek})</td>
+                      <td>Tiết {item.startPeriod} - {item.endPeriod}</td>
+                      <td><span className="badge bg-light text-dark border px-2 py-1 fw-bold">{item.room}</span></td>
                       <td className="text-secondary">{item.teacherName}</td>
                       <td className="text-end pe-3">
                         <button
                           type="button"
-                          onClick={(e) => toggleActionMenu(e, item)}
-                          className="btn btn-sm btn-light rounded-circle d-inline-flex align-items-center justify-content-center p-0 border"
-                          style={{ width: "32px", height: "32px", color: "#64748b" }}
+                          onClick={() => handleDelete(item)}
+                          className="btn btn-sm btn-light rounded-circle border text-danger p-0"
+                          style={{ width: "30px", height: "30px" }}
                         >
-                          <i className="bi bi-three-dots-vertical fs-6"></i>
+                          <i className="bi bi-trash3-fill"></i>
                         </button>
                       </td>
                     </tr>
@@ -663,295 +535,105 @@ export const ManageSchedules = () => {
             </tbody>
           </table>
         </div>
-
-        {/* Phân trang */}
-        {!loading && (
-          <div className="d-flex flex-wrap justify-content-between align-items-center pt-3 mt-2 border-top gap-2" style={{ borderColor: "#f1f5f9" }}>
-            <small className="text-muted" style={{ fontSize: "12px" }}>
-              Hiển thị <b>{schedules.length ? (currentPage - 1) * itemsPerPage + 1 : 0}</b> - <b>{Math.min(currentPage * itemsPerPage, schedules.length)}</b> / <b>{schedules.length}</b> bản ghi
-            </small>
-
-            <div className="d-flex align-items-center gap-1 ms-auto">
-              <button className="btn btn-sm btn-light border px-2 py-1 rounded-2 shadow-none" disabled={currentPage === 1} onClick={() => setCurrentPage(1)}>
-                <i className="bi bi-chevron-double-left small"></i>
-              </button>
-              <button className="btn btn-sm btn-light border px-2 py-1 rounded-2 shadow-none" disabled={currentPage === 1} onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}>
-                <i className="bi bi-chevron-left small"></i>
-              </button>
-              <span className="small fw-bold px-2 text-secondary" style={{ fontSize: "12px" }}>{currentPage} / {totalPages}</span>
-              <button className="btn btn-sm btn-light border px-2 py-1 rounded-2 shadow-none" disabled={currentPage === totalPages} onClick={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}>
-                <i className="bi bi-chevron-right small"></i>
-              </button>
-              <button className="btn btn-sm btn-light border px-2 py-1 rounded-2 shadow-none" disabled={currentPage === totalPages} onClick={() => setCurrentPage(totalPages)}>
-                <i className="bi bi-chevron-double-right small"></i>
-              </button>
-            </div>
-          </div>
-        )}
       </div>
 
-      {/* 3. Floating Action Menu */}
-      {activeMenuData && (
-        <div
-          ref={menuDropdownRef}
-          className="card border-0 shadow-lg rounded-3 py-1 text-start position-fixed"
-          style={{
-            width: "155px",
-            backgroundColor: "#ffffff",
-            border: "1px solid #e2e8f0",
-            fontSize: "12px",
-            zIndex: 99999,
-            top: `${activeMenuData.top}px`,
-            right: `${activeMenuData.right}px`,
-          }}
-        >
-          <button type="button" onClick={() => handleOpenEdit(activeMenuData.item)} className="dropdown-item d-flex align-items-center gap-2 px-3 py-1.5 text-dark border-0 bg-transparent cursor-pointer">
-            <i className="bi bi-pencil-fill text-primary" style={{ fontSize: "11px" }}></i>
-            <span>Chỉnh sửa</span>
-          </button>
-          <div className="dropdown-divider my-1 border-top" style={{ borderColor: "#f1f5f9" }}></div>
-          <button type="button" onClick={() => handleDelete(activeMenuData.item)} className="dropdown-item d-flex align-items-center gap-2 px-3 py-1.5 text-danger border-0 bg-transparent cursor-pointer">
-            <i className="bi bi-trash3-fill text-danger" style={{ fontSize: "11px" }}></i>
-            <span>Xóa tiết học</span>
-          </button>
-        </div>
-      )}
-
-      {/* 4. MODAL XẾP LỊCH */}
+      {/* 3. MODAL XẾP LỊCH: ĐỒNG BỘ MÔN VỚI KHUNG CTĐT */}
       {showScheduleModal && (
         <div className="modal show d-block p-2 p-sm-3" style={{ backgroundColor: "rgba(15, 23, 42, 0.55)", zIndex: 1065 }}>
           <div className="modal-dialog modal-dialog-centered" style={{ maxWidth: "500px" }}>
             <div className="modal-content border-0 shadow-lg rounded-4 overflow-hidden bg-white">
               <div className="d-flex align-items-center justify-content-between px-4 pt-4 pb-2 border-bottom">
-                <div className="d-flex align-items-center gap-2.5">
-                  <div className="rounded-circle d-flex align-items-center justify-content-center text-white" style={{ width: "36px", height: "36px", background: "linear-gradient(135deg, #185bf0 0%, #0d9488 100%)" }}>
-                    <i className="bi bi-calendar-check fs-6"></i>
-                  </div>
-                  <div>
-                    <h6 className="fw-bold mb-0 text-dark">
-                      {editingItem ? "Cập Nhật Tiết Học / Thi" : "Xếp Lịch Thời Khóa Biểu"}
-                    </h6>
-                    <small className="text-secondary fw-semibold">
-                      Khóa: <b className="text-primary font-monospace">{formData.cohort || filterCohort}</b> • Học kỳ: <b>{formData.semesterIndex}</b>
-                    </small>
-                  </div>
-                </div>
-                <button type="button" onClick={() => setShowScheduleModal(false)} className="btn btn-sm btn-light rounded-circle p-0" style={{ width: "30px", height: "30px" }}>
-                  <i className="bi bi-x-lg"></i>
-                </button>
+                <h6 className="fw-bold mb-0 text-dark">Xếp Lịch Học / Thi</h6>
+                <button type="button" onClick={() => setShowScheduleModal(false)} className="btn-close"></button>
               </div>
 
               <form onSubmit={handleSubmit}>
                 <div className="modal-body px-4 py-3 d-flex flex-column gap-3">
-                  {!editingItem && (
-                    <div className="p-1 bg-slate-100 rounded-pill border d-flex gap-1" style={{ borderColor: "#f1f5f9" }}>
-                      <button
-                        type="button"
-                        onClick={() => setEntryMode("from_curriculum")}
-                        className={`btn btn-sm rounded-pill flex-fill py-1 fw-bold border-0 transition ${
-                          entryMode === "from_curriculum" ? "btn-primary text-white shadow-xs" : "text-secondary bg-transparent"
-                        }`}
-                        style={{ fontSize: "11.5px", background: entryMode === "from_curriculum" ? "#185bf0" : "transparent" }}
+                  <div>
+                    <label className="form-label text-uppercase text-secondary fw-bold mb-1" style={{ fontSize: "10px" }}>
+                      Môn học trong Khung CTĐT ban hành *
+                    </label>
+                    {loadingCurriculum ? (
+                      <div className="text-muted small">Đang tải danh sách môn học...</div>
+                    ) : curriculumSubjects.length === 0 ? (
+                      <div className="alert alert-warning p-2 small mb-0">
+                        Chưa có học phần nào trong Khung CTĐT của Kỳ {formData.semesterIndex}. Vui lòng nạp Khung CTĐT trước!
+                      </div>
+                    ) : (
+                      <select
+                        value={selectedPlanId}
+                        onChange={handleSelectCurriculumSubject}
+                        className="form-select form-select-sm fw-bold text-primary shadow-none"
                       >
-                        <i className="bi bi-magic me-1"></i>
-                        Chọn Từ Khung CTĐT
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setEntryMode("custom");
-                          setFormData((prev) => ({
-                            ...prev,
-                            curriculumPlanId: null,
-                            subjectCode: "",
-                            subjectName: "",
-                            credits: 3,
-                          }));
-                        }}
-                        className={`btn btn-sm rounded-pill flex-fill py-1 fw-bold border-0 transition ${
-                          entryMode === "custom" ? "btn-dark text-white shadow-xs" : "text-secondary bg-transparent"
-                        }`}
-                        style={{ fontSize: "11.5px" }}
-                      >
-                        <i className="bi bi-pencil-square me-1"></i>
-                        Tự Nhập Môn Ngoài Khung
-                      </button>
-                    </div>
-                  )}
+                        {curriculumSubjects.map((s) => (
+                          <option key={s.curriculum_plan_id} value={s.curriculum_plan_id}>
+                            [{s.subject_code}] {s.subject_name} ({s.credits} TC)
+                          </option>
+                        ))}
+                      </select>
+                    )}
+                  </div>
 
-                  {entryMode === "from_curriculum" ? (
-                    <div className="d-flex flex-column gap-2">
-                      <label className="form-label text-uppercase text-secondary fw-bold mb-0" style={{ fontSize: "10px" }}>
-                        Môn Học Theo Khung CTĐT Đã Ban Hành *
-                      </label>
-                      {loadingCurriculum ? (
-                        <div className="text-muted small py-1.5">
-                          <span className="spinner-border spinner-border-sm text-primary me-1.5"></span>
-                          Đang tải danh sách học phần...
-                        </div>
-                      ) : curriculumSubjects.length === 0 ? (
-                        <div className="alert alert-warning p-2 small mb-0 rounded-3">
-                          Chưa có học phần nào trong khung CTĐT kỳ này. Bạn có thể chọn <b>"Tự Nhập Môn Ngoài Khung"</b>.
-                        </div>
-                      ) : (
-                        <select
-                          value={selectedPlanId}
-                          onChange={handleSelectCurriculumSubject}
-                          className="form-select form-select-sm rounded-3 fw-bold text-primary shadow-none"
-                          style={{ fontSize: "12.5px" }}
-                        >
-                          {curriculumSubjects.map((s) => (
-                            <option key={s.curriculum_plan_id} value={s.curriculum_plan_id}>
-                              [{s.subject_code}] {s.subject_name} ({s.credits} TC) {s.is_scheduled ? "• [ĐÃ XẾP]" : ""}
-                            </option>
-                          ))}
-                        </select>
-                      )}
-
-                      <div className="p-2.5 rounded-3 bg-light border row g-2 mt-1">
-                        <div className="col-4">
-                          <small className="text-muted d-block" style={{ fontSize: "9.5px", textTransform: "uppercase" }}>Mã Học Phần</small>
-                          <b className="font-monospace text-dark" style={{ fontSize: "12px" }}>{formData.subjectCode || "—"}</b>
-                        </div>
-                        <div className="col-4">
-                          <small className="text-muted d-block" style={{ fontSize: "9.5px", textTransform: "uppercase" }}>Số Tín Chỉ</small>
-                          <b className="text-success" style={{ fontSize: "12px" }}>{formData.credits} TC</b>
-                        </div>
-                        <div className="col-4">
-                          <small className="text-muted d-block" style={{ fontSize: "9.5px", textTransform: "uppercase" }}>Cấu Trúc Giờ</small>
-                          <b className="text-secondary font-monospace" style={{ fontSize: "12px" }}>{formData.creditsStructure || "3(3,0,0)"}</b>
-                        </div>
-                      </div>
+                  <div className="row g-2">
+                    <div className="col-6">
+                      <label className="form-label text-uppercase text-secondary fw-bold mb-1" style={{ fontSize: "10px" }}>Ngày học *</label>
+                      <input
+                        type="date"
+                        required
+                        value={formData.specificDate}
+                        onChange={(e) => setFormData({ ...formData, specificDate: e.target.value })}
+                        className="form-control form-control-sm rounded-3 fw-bold"
+                      />
                     </div>
-                  ) : (
-                    <div className="row g-2">
-                      <div className="col-8">
-                        <label className="form-label text-uppercase text-secondary fw-bold mb-1" style={{ fontSize: "10px" }}>Tên Môn Học *</label>
-                        <input
-                          type="text"
-                          required
-                          placeholder="VD: Kỹ năng mềm / Sinh hoạt chuyên đề..."
-                          value={formData.subjectName}
-                          onChange={(e) => setFormData({ ...formData, subjectName: e.target.value })}
-                          className="form-control form-control-sm rounded-3 fw-bold shadow-none"
-                          style={{ fontSize: "12.5px" }}
-                        />
-                      </div>
-                      <div className="col-4">
-                        <label className="form-label text-uppercase text-secondary fw-bold mb-1" style={{ fontSize: "10px" }}>Số Tín Chỉ</label>
-                        <input
-                          type="number"
-                          min="0"
-                          max="15"
-                          value={formData.credits}
-                          onChange={(e) => setFormData({ ...formData, credits: Number(e.target.value) })}
-                          className="form-control form-control-sm rounded-3 text-center fw-bold shadow-none"
-                        />
-                      </div>
-                      <div className="col-6">
-                        <label className="form-label text-uppercase text-secondary fw-bold mb-1" style={{ fontSize: "10px" }}>Mã Môn (Tùy chọn)</label>
-                        <input
-                          type="text"
-                          placeholder="VD: SHL01 hoặc để trống"
-                          value={formData.subjectCode}
-                          onChange={(e) => setFormData({ ...formData, subjectCode: e.target.value })}
-                          className="form-control form-control-sm rounded-3 font-monospace shadow-none"
-                        />
-                      </div>
-                      <div className="col-6">
-                        <label className="form-label text-uppercase text-secondary fw-bold mb-1" style={{ fontSize: "10px" }}>Cấu Trúc Giờ (LT, TH, BTL)</label>
-                        <input
-                          type="text"
-                          placeholder="VD: 2(2,0,0)"
-                          value={formData.creditsStructure}
-                          onChange={(e) => setFormData({ ...formData, creditsStructure: e.target.value })}
-                          className="form-control form-control-sm rounded-3 font-monospace shadow-none"
-                        />
-                      </div>
-                    </div>
-                  )}
-
-                  {/* Thời gian và tiết học */}
-                  <div className="pt-2 border-top d-flex flex-column gap-2" style={{ borderColor: "#f1f5f9" }}>
-                    <div className="row g-2">
-                      <div className="col-6">
-                        <label className="form-label text-uppercase text-secondary fw-bold mb-1" style={{ fontSize: "10px" }}>Ngày Diễn Ra *</label>
-                        <input
-                          type="date"
-                          required
-                          value={formData.specificDate}
-                          onChange={(e) => setFormData({ ...formData, specificDate: e.target.value })}
-                          className="form-control form-control-sm rounded-3 fw-bold shadow-none"
-                        />
-                      </div>
-                      <div className="col-6">
-                        <label className="form-label text-uppercase text-secondary fw-bold mb-1" style={{ fontSize: "10px" }}>Phân Loại</label>
-                        <select
-                          value={formData.scheduleType}
-                          onChange={(e) => setFormData({ ...formData, scheduleType: e.target.value })}
-                          className="form-select form-select-sm rounded-3 shadow-none fw-semibold"
-                        >
-                          <option value="study">Lịch học</option>
-                          <option value="practice">Thực hành</option>
-                          <option value="exam">Lịch thi</option>
-                        </select>
-                      </div>
-                    </div>
-
-                    <div className="row g-2">
-                      <div className="col-6">
-                        <label className="form-label text-uppercase text-secondary fw-bold mb-1" style={{ fontSize: "10px" }}>Tiết Bắt Đầu *</label>
-                        <input
-                          type="number" min="1" max="12" required
-                          value={formData.startPeriod}
-                          onChange={(e) => setFormData({ ...formData, startPeriod: Number(e.target.value) })}
-                          className="form-control form-control-sm rounded-3 text-center fw-bold shadow-none"
-                        />
-                      </div>
-                      <div className="col-6">
-                        <label className="form-label text-uppercase text-secondary fw-bold mb-1" style={{ fontSize: "10px" }}>Tiết Kết Thúc *</label>
-                        <input
-                          type="number" min="1" max="12" required
-                          value={formData.endPeriod}
-                          onChange={(e) => setFormData({ ...formData, endPeriod: Number(e.target.value) })}
-                          className="form-control form-control-sm rounded-3 text-center fw-bold shadow-none"
-                        />
-                      </div>
+                    <div className="col-6">
+                      <label className="form-label text-uppercase text-secondary fw-bold mb-1" style={{ fontSize: "10px" }}>Phòng học *</label>
+                      <input
+                        type="text"
+                        required
+                        placeholder="VD: C201"
+                        value={formData.room}
+                        onChange={(e) => setFormData({ ...formData, room: e.target.value })}
+                        className="form-control form-control-sm rounded-3 fw-bold"
+                      />
                     </div>
                   </div>
 
-                  {/* Phòng học & Giảng viên */}
-                  <div className="pt-2 border-top" style={{ borderColor: "#f1f5f9" }}>
-                    <div className="row g-2">
-                      <div className="col-6">
-                        <label className="form-label text-uppercase text-secondary fw-bold mb-1" style={{ fontSize: "10px" }}>Phòng Học *</label>
-                        <input
-                          type="text" required placeholder="VD: C201 hoặc PM03"
-                          value={formData.room}
-                          onChange={(e) => setFormData({ ...formData, room: e.target.value })}
-                          className="form-control form-control-sm rounded-3 fw-bold shadow-none"
-                        />
-                      </div>
-                      <div className="col-6">
-                        <label className="form-label text-uppercase text-secondary fw-bold mb-1" style={{ fontSize: "10px" }}>Giảng Viên</label>
-                        <input
-                          type="text" placeholder="VD: ThS. Nguyễn Văn A"
-                          value={formData.teacherName}
-                          onChange={(e) => setFormData({ ...formData, teacherName: e.target.value })}
-                          className="form-control form-control-sm rounded-3 fw-semibold shadow-none"
-                        />
-                      </div>
+                  <div className="row g-2">
+                    <div className="col-6">
+                      <label className="form-label text-uppercase text-secondary fw-bold mb-1" style={{ fontSize: "10px" }}>Tiết BD *</label>
+                      <input
+                        type="number" min="1" max="12" required
+                        value={formData.startPeriod}
+                        onChange={(e) => setFormData({ ...formData, startPeriod: Number(e.target.value) })}
+                        className="form-control form-control-sm text-center fw-bold"
+                      />
                     </div>
+                    <div className="col-6">
+                      <label className="form-label text-uppercase text-secondary fw-bold mb-1" style={{ fontSize: "10px" }}>Tiết KT *</label>
+                      <input
+                        type="number" min="1" max="12" required
+                        value={formData.endPeriod}
+                        onChange={(e) => setFormData({ ...formData, endPeriod: Number(e.target.value) })}
+                        className="form-control form-control-sm text-center fw-bold"
+                      />
+                    </div>
+                  </div>
+
+                  <div>
+                    <label className="form-label text-uppercase text-secondary fw-bold mb-1" style={{ fontSize: "10px" }}>Giảng viên giảng dạy</label>
+                    <input
+                      type="text"
+                      placeholder="VD: ThS. Nguyễn Văn A"
+                      value={formData.teacherName}
+                      onChange={(e) => setFormData({ ...formData, teacherName: e.target.value })}
+                      className="form-control form-control-sm rounded-3 fw-semibold"
+                    />
                   </div>
                 </div>
 
                 <div className="modal-footer border-0 px-4 pt-1 pb-4 d-flex justify-content-end gap-2">
-                  <button type="button" onClick={() => setShowScheduleModal(false)} className="btn btn-light rounded-pill px-3.5 py-1.5 small border">
-                    Hủy bỏ
-                  </button>
-                  <button type="submit" className="btn btn-primary rounded-pill px-4 py-1.5 small border-0 text-white shadow-xs" style={{ background: "#185bf0" }}>
-                    Lưu vào cơ sở dữ liệu
-                  </button>
+                  <button type="button" onClick={() => setShowScheduleModal(false)} className="btn btn-light rounded-pill px-3.5 py-1.5 small border">Hủy</button>
+                  <button type="submit" disabled={curriculumSubjects.length === 0} className="btn btn-primary rounded-pill px-4 py-1.5 small border-0 text-white" style={{ background: "#185bf0" }}>Lưu vào CSDL</button>
                 </div>
               </form>
             </div>
@@ -962,4 +644,4 @@ export const ManageSchedules = () => {
   );
 };
 
-export default ManageSchedules; 
+export default ManageSchedules;
