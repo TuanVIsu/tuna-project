@@ -112,7 +112,7 @@ export const ManageUsers = () => {
     }
   }, [getHeaders]);
 
-  // 2. Tải danh sách người dùng
+  // 2. Tải danh sách người dùng (chỉ người đã duyệt)
   const fetchUsers = useCallback(async () => {
     setLoading(true);
     try {
@@ -202,12 +202,10 @@ export const ManageUsers = () => {
     };
   }, [searchTerm]);
 
-  // Bộ lọc thông minh đã sửa lỗi số khóa và tiền tố K
   const filteredUsers = useMemo(() => {
     let source = activeTab === "pending" ? pendingUsers : users;
 
     return source.filter((u) => {
-      // Bóc tách số khóa (VD: K23 -> "23") để so khớp chính xác với mã lớp HTTT2311 và MSSV
       if (selectedCohort !== "all") {
         const cohortDigits = selectedCohort.replace(/\D/g, "");
         const uClass = String(u.className || "").toUpperCase();
@@ -285,6 +283,7 @@ export const ManageUsers = () => {
       const d = await safeFetchUsersApi(`/${user.id}/toggle-status`, { method: "PATCH" });
       if (d.success) {
         setUsers((prev) => prev.map((u) => (u.id === user.id ? { ...u, isActive: d.isActive } : u)));
+        setPendingUsers((prev) => prev.map((u) => (u.id === user.id ? { ...u, isActive: d.isActive } : u)));
       }
     } catch (e) {
       alert("Lỗi máy chủ khi cập nhật trạng thái");
@@ -532,7 +531,7 @@ export const ManageUsers = () => {
           <span className={`badge px-3 py-1.5 rounded-pill fw-bold border ${
             activeTab === "pending" ? "bg-warning-subtle text-dark border-warning-subtle" : "bg-primary-subtle text-primary border-primary-subtle"
           }`} style={{ fontSize: "11px" }}>
-            {activeTab === "pending" ? `Hàng chờ phê duyệt (${pendingUsers.length} hồ sơ)` : "Danh sách sinh viên"}
+            {activeTab === "pending" ? `Hàng chờ phê duyệt (${pendingUsers.length} hồ sơ)` : "Danh sách sinh viên đã duyệt"}
           </span>
           <small className="text-muted fw-semibold">Tổng: <b>{filteredUsers.length}</b> tài khoản</small>
         </div>

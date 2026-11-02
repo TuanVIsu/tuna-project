@@ -1,5 +1,6 @@
 // src/pages/index/ProfileSection.jsx
 import React, { useState, useEffect, useMemo, useCallback } from "react";
+import { io } from "socket.io-client"; // <-- Thêm thư viện socket
 import { getCurrentUser } from "../../services/authService";
 
 const API_BASE = "https://tuna-project.onrender.com/api";
@@ -66,7 +67,7 @@ export const ProfileSection = ({ currentUser: initialUser }) => {
     }
   }, [getAuthHeaders]);
 
-  // Đồng bộ thông tin hồ sơ và điểm streak thực tế từ DB
+  // Đồng bộ thông hồ sơ và điểm streak thực tế từ DB
   const fetchProfileAndStats = useCallback(async () => {
     if (!myUserId) return;
 
@@ -145,12 +146,41 @@ export const ProfileSection = ({ currentUser: initialUser }) => {
     };
   }, [fetchFaculties, fetchProfileAndStats]);
 
-  // Tự động suy ra mã lớp khi sinh viên gõ MSSV (Ví dụ: HTTT2311052 -> HTTT2311)
+  // LOGIC LẮNG NGHE SOCKET TỪ BACKEND
+  useEffect(() => {
+    if (!myUserId) return;
+    const socket = io(API_BASE.replace('/api', '')); 
+
+    socket.on(`force_logout_${myUserId}`, (data) => {
+      alert(data.reason || "Tài khoản của bạn đã bị vô hiệu hóa bởi Quản trị viên!");
+      onLogoutClick(); 
+    });
+
+    socket.on(`user_verify_status_${myUserId}`, (data) => {
+      setUser((prev) => {
+        const updated = {
+          ...prev,
+          verification_status: data.status,
+          is_verified: data.status === 'approved'
+        };
+        localStorage.setItem("user", JSON.stringify(updated));
+        localStorage.setItem("user_info", JSON.stringify(updated));
+        localStorage.setItem("tuna_current_user", JSON.stringify(updated));
+        return updated;
+      });
+    });
+
+    return () => {
+      socket.off(`force_logout_${myUserId}`);
+      socket.off(`user_verify_status_${myUserId}`);
+      socket.disconnect();
+    };
+  }, [myUserId]);
+
   const handleStudentCodeChange = (val) => {
     const cleanVal = val.toUpperCase().trim();
     setStudentCodeInput(cleanVal);
     
-    // Nếu chưa nhập lớp hoặc lớp đang ăn theo format cũ thì tự đề xuất lớp
     if (!classNameInput || classNameInput.length < 4) {
       const match = cleanVal.match(/^([A-Z]{2,4}\d{4})/i);
       if (match) {
@@ -194,7 +224,6 @@ export const ProfileSection = ({ currentUser: initialUser }) => {
 
     setIsUpdating(true);
     try {
-      // Gửi lên endpoint đồng bộ tài khoản người dùng
       const payload = {
         userId: user.id || myUserId,
         zaloId: user.zalo_id || null,
@@ -205,14 +234,12 @@ export const ProfileSection = ({ currentUser: initialUser }) => {
         faculty: cleanFaculty,
       };
 
-      // Thử gọi endpoint student/link hoặc users/sync
       let res = await fetch(`${API_BASE}/student/link`, {
         method: "POST",
         headers: getAuthHeaders(),
         body: JSON.stringify(payload),
       });
 
-      // Nếu không có route student/link, fallback sang users/sync
       if (!res.ok && res.status === 404) {
         res = await fetch(`${API_BASE}/users/sync`, {
           method: "POST",
@@ -225,14 +252,12 @@ export const ProfileSection = ({ currentUser: initialUser }) => {
       if (data.success || res.ok) {
         showToast("Cập nhật hồ sơ sinh viên thành công!");
         
-        // Nhận dữ liệu chính thức từ server hoặc cập nhật state
         const updatedUser = {
           ...user,
           name: cleanName,
           student_code: cleanCode,
           class_name: cleanClass,
           faculty: cleanFaculty,
-          // Giữ nguyên trạng thái thực tế từ server trả về nếu có
           is_verified: data.user?.is_verified ?? user.is_verified,
           verification_status: data.user?.verification_status ?? user.verification_status ?? "approved",
         };
@@ -392,7 +417,7 @@ export const ProfileSection = ({ currentUser: initialUser }) => {
         </button>
       )}
 
-      {/* Modal Sửa Hồ Sơ: Bổ sung trường Lớp Sinh Hoạt */}
+      {/* Modal Sửa Hồ Sơ */}
       {showEditModal && (
         <div
           className="fixed inset-0 flex items-center justify-center p-3 z-50 animate-fade-in"
