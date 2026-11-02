@@ -6,9 +6,9 @@ const API_BASE = "https://tuna-project.onrender.com/api";
 const DEFAULT_AVATAR = "https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&w=256&q=80";
 
 export const ProfileSection = ({ currentUser: initialUser }) => {
-  const [user, setUser] = useState(initialUser || getCurrentUser());
+  const [user, setUser] = useState(() => initialUser || getCurrentUser());
   
-  // Khởi tạo state từ localStorage để hiển thị ngay tức thì, tránh nháy về 0
+  // Khởi tạo state từ localStorage để tránh giật số
   const [stats, setStats] = useState(() => {
     const cachedStreak = Number(localStorage.getItem("user_current_streak") || 0);
     const cachedXp = Number(localStorage.getItem("user_study_xp") || 0);
@@ -20,32 +20,43 @@ export const ProfileSection = ({ currentUser: initialUser }) => {
   });
 
   const [availableFaculties, setAvailableFaculties] = useState([]);
-
   const [toastMessage, setToastMessage] = useState(null);
+
   const showToast = (message, type = "success") => {
     setToastMessage({ message, type });
     setTimeout(() => setToastMessage(null), 3200);
   };
 
+  // State Form chỉnh sửa hồ sơ
   const [showEditModal, setShowEditModal] = useState(false);
   const [nameInput, setNameInput] = useState("");
   const [studentCodeInput, setStudentCodeInput] = useState("");
+  const [classNameInput, setClassNameInput] = useState("");
   const [facultyInput, setFacultyInput] = useState("");
   const [isUpdating, setIsUpdating] = useState(false);
 
-  // Định danh người dùng thực tế
+  // Định danh người dùng chuẩn xác
   const myUserId = useMemo(() => {
-    let savedId = localStorage.getItem("tuna_user_id");
-    if (!savedId) {
-      savedId = user?.student_code || user?.id || user?.zalo_id || "B2300001";
-      localStorage.setItem("tuna_user_id", String(savedId));
-    }
-    return String(savedId).trim();
+    const saved = localStorage.getItem("tuna_user_id") || user?.student_code || user?.id || user?.zalo_id || user?.email;
+    return saved ? String(saved).trim() : "";
   }, [user]);
 
-  const fetchFaculties = async () => {
+  const getAuthHeaders = useCallback(() => {
+    const token = localStorage.getItem("token") || localStorage.getItem("user_token") || localStorage.getItem("admin_token") || "";
+    const headers = {
+      "Content-Type": "application/json",
+      "x-user-id": myUserId || "",
+    };
+    if (token && token !== "null" && token !== "undefined") {
+      headers["Authorization"] = `Bearer ${token}`;
+    }
+    return headers;
+  }, [myUserId]);
+
+  // Nạp danh mục chuyên ngành từ CSDL
+  const fetchFaculties = useCallback(async () => {
     try {
-      const res = await fetch(`${API_BASE}/library/majors`);
+      const res = await fetch(`${API_BASE}/library/majors`, { headers: getAuthHeaders() });
       const json = await res.json();
       if (json.success && Array.isArray(json.data) && json.data.length > 0) {
         setAvailableFaculties(json.data);
@@ -53,34 +64,37 @@ export const ProfileSection = ({ currentUser: initialUser }) => {
     } catch (e) {
       console.warn("Không tải được danh mục khoa:", e);
     }
-  };
+  }, [getAuthHeaders]);
 
-  // ĐỒNG BỘ DỮ LIỆU THỰC TẾ TỪ STREAK & LEADERBOARD
+  // Đồng bộ thông tin hồ sơ và điểm streak thực tế từ DB
   const fetchProfileAndStats = useCallback(async () => {
     if (!myUserId) return;
 
     try {
-      // 1. Gọi song song cả API thông tin hồ sơ, streak thực tế và bảng xếp hạng
       const [profileRes, streakRes, lbRes] = await Promise.all([
-        fetch(`${API_BASE}/student/profile/${encodeURIComponent(myUserId)}`).catch(() => null),
-        fetch(`${API_BASE}/streak/${encodeURIComponent(myUserId)}`).catch(() => null),
-        fetch(`${API_BASE}/leaderboard`).catch(() => null),
+        fetch(`${API_BASE}/student/profile/${encodeURIComponent(myUserId)}`, { headers: getAuthHeaders() }).catch(() => null),
+        fetch(`${API_BASE}/streak/${encodeURIComponent(myUserId)}`, { headers: getAuthHeaders() }).catch(() => null),
+        fetch(`${API_BASE}/leaderboard`, { headers: getAuthHeaders() }).catch(() => null),
       ]);
 
-      // Cập nhật thông tin sinh viên
+      // Cập nhật thông tin sinh viên từ server
       if (profileRes && profileRes.ok) {
         const json = await profileRes.json();
-        if (json.success && json.data?.user) {
-          setUser((prev) => ({ ...prev, ...json.data.user }));
-          localStorage.setItem("user", JSON.stringify(json.data.user));
-          localStorage.setItem("user_info", JSON.stringify(json.data.user));
+        const serverUser = json.data?.user || json.user;
+        if (serverUser) {
+          setUser((prev) => {
+            const merged = { ...prev, ...serverUser };
+            localStorage.setItem("user", JSON.stringify(merged));
+            localStorage.setItem("user_info", JSON.stringify(merged));
+            localStorage.setItem("tuna_current_user", JSON.stringify(merged));
+            return merged;
+          });
         }
       }
 
       let currentStreak = Number(localStorage.getItem("user_current_streak") || 0);
       let currentXp = Number(localStorage.getItem("user_study_xp") || 0);
 
-      // Cập nhật điểm Streak & XP từ backend
       if (streakRes && streakRes.ok) {
         const sJson = await streakRes.json();
         if (sJson.success) {
@@ -91,18 +105,18 @@ export const ProfileSection = ({ currentUser: initialUser }) => {
         }
       }
 
-      // Tính toán thứ hạng Top thực tế từ mảng Leaderboard
       let rankText = "-";
       if (lbRes && lbRes.ok) {
         const lbJson = await lbRes.json();
         if (lbJson.success && Array.isArray(lbJson.leaderboard)) {
           const myIndex = lbJson.leaderboard.findIndex(
-            (item) => String(item.user_id).toLowerCase() === myUserId.toLowerCase()
+            (item) =>
+              String(item.user_id).toLowerCase() === myUserId.toLowerCase() ||
+              String(item.student_code || "").toLowerCase() === String(user?.student_code || "").toLowerCase()
           );
           if (myIndex !== -1) {
             rankText = String(myIndex + 1);
           } else {
-            // Nếu chưa lọt bảng, gán bằng độ dài bảng + 1
             rankText = String(lbJson.leaderboard.length + 1);
           }
         }
@@ -116,31 +130,130 @@ export const ProfileSection = ({ currentUser: initialUser }) => {
     } catch (err) {
       console.error("Lỗi nạp thông tin hồ sơ và điểm thưởng:", err);
     }
-  }, [myUserId]);
+  }, [myUserId, getAuthHeaders, user?.student_code]);
 
   useEffect(() => {
     fetchFaculties();
     fetchProfileAndStats();
 
-    // Tự động làm mới khi vừa nộp bài tập xong ở các tab khác
-    const handleSync = () => {
-      fetchProfileAndStats();
-    };
+    const handleSync = () => fetchProfileAndStats();
     window.addEventListener("tuna_study_task_completed", handleSync);
     window.addEventListener("storage", handleSync);
     return () => {
       window.removeEventListener("tuna_study_task_completed", handleSync);
       window.removeEventListener("storage", handleSync);
     };
-  }, [fetchProfileAndStats]);
+  }, [fetchFaculties, fetchProfileAndStats]);
 
-  useEffect(() => {
-    if (user) {
-      setNameInput(user.name || "");
-      setStudentCodeInput(user.student_code || "");
-      setFacultyInput(user.faculty || (availableFaculties[0] || "Hệ Thống Thông Tin"));
+  // Tự động suy ra mã lớp khi sinh viên gõ MSSV (Ví dụ: HTTT2311052 -> HTTT2311)
+  const handleStudentCodeChange = (val) => {
+    const cleanVal = val.toUpperCase().trim();
+    setStudentCodeInput(cleanVal);
+    
+    // Nếu chưa nhập lớp hoặc lớp đang ăn theo format cũ thì tự đề xuất lớp
+    if (!classNameInput || classNameInput.length < 4) {
+      const match = cleanVal.match(/^([A-Z]{2,4}\d{4})/i);
+      if (match) {
+        setClassNameInput(match[1]);
+      }
     }
-  }, [user, availableFaculties]);
+  };
+
+  const handleOpenEdit = () => {
+    if (!user) {
+      showToast("Vui lòng xác thực tài khoản trước!", "error");
+      return;
+    }
+    setNameInput(user.name || "");
+    setStudentCodeInput(user.student_code || "");
+    setClassNameInput(user.class_name || "");
+    setFacultyInput(user.faculty || (availableFaculties[0] || "Hệ Thống Thông Tin"));
+    setShowEditModal(true);
+  };
+
+  // CẬP NHẬT HỒ SƠ CHUẨN XÁC LÊN SERVER
+  const handleSaveProfile = async (e) => {
+    e.preventDefault();
+    const cleanName = nameInput.trim();
+    const cleanCode = studentCodeInput.trim().toUpperCase();
+    const cleanClass = classNameInput.trim().toUpperCase();
+    const cleanFaculty = facultyInput.trim();
+
+    if (!cleanName) {
+      showToast("Vui lòng nhập Họ và tên sinh viên!", "error");
+      return;
+    }
+    if (!cleanCode) {
+      showToast("Vui lòng nhập Mã số sinh viên (MSSV)!", "error");
+      return;
+    }
+    if (!cleanClass) {
+      showToast("Vui lòng nhập Lớp sinh hoạt (VD: HTTT2311)!", "error");
+      return;
+    }
+
+    setIsUpdating(true);
+    try {
+      // Gửi lên endpoint đồng bộ tài khoản người dùng
+      const payload = {
+        userId: user.id || myUserId,
+        zaloId: user.zalo_id || null,
+        email: user.email || null,
+        name: cleanName,
+        studentCode: cleanCode,
+        className: cleanClass,
+        faculty: cleanFaculty,
+      };
+
+      // Thử gọi endpoint student/link hoặc users/sync
+      let res = await fetch(`${API_BASE}/student/link`, {
+        method: "POST",
+        headers: getAuthHeaders(),
+        body: JSON.stringify(payload),
+      });
+
+      // Nếu không có route student/link, fallback sang users/sync
+      if (!res.ok && res.status === 404) {
+        res = await fetch(`${API_BASE}/users/sync`, {
+          method: "POST",
+          headers: getAuthHeaders(),
+          body: JSON.stringify(payload),
+        });
+      }
+
+      const data = await res.json();
+      if (data.success || res.ok) {
+        showToast("Cập nhật hồ sơ sinh viên thành công!");
+        
+        // Nhận dữ liệu chính thức từ server hoặc cập nhật state
+        const updatedUser = {
+          ...user,
+          name: cleanName,
+          student_code: cleanCode,
+          class_name: cleanClass,
+          faculty: cleanFaculty,
+          // Giữ nguyên trạng thái thực tế từ server trả về nếu có
+          is_verified: data.user?.is_verified ?? user.is_verified,
+          verification_status: data.user?.verification_status ?? user.verification_status ?? "approved",
+        };
+
+        setUser(updatedUser);
+        localStorage.setItem("user", JSON.stringify(updatedUser));
+        localStorage.setItem("user_info", JSON.stringify(updatedUser));
+        localStorage.setItem("tuna_current_user", JSON.stringify(updatedUser));
+        localStorage.setItem("tuna_user_id", cleanCode);
+
+        setShowEditModal(false);
+        fetchProfileAndStats();
+      } else {
+        showToast(data.message || "Không thể cập nhật hồ sơ!", "error");
+      }
+    } catch (err) {
+      showToast("Lỗi kết nối máy chủ đào tạo!", "error");
+    } finally {
+      setIsUpdating(false);
+    }
+  };
 
   const onLogoutClick = () => {
     localStorage.removeItem("user_token");
@@ -153,68 +266,6 @@ export const ProfileSection = ({ currentUser: initialUser }) => {
     setUser(null);
     showToast("Đã đăng xuất tài khoản!");
     window.location.reload();
-  };
-
-  const handleOpenEdit = () => {
-    if (!user) {
-      showToast("Vui lòng xác thực tài khoản trước!", "error");
-      return;
-    }
-    setNameInput(user.name || "");
-    setStudentCodeInput(user.student_code || "");
-    setFacultyInput(user.faculty || (availableFaculties[0] || "Hệ Thống Thông Tin"));
-    setShowEditModal(true);
-  };
-
-  const handleSaveProfile = async (e) => {
-    e.preventDefault();
-    if (!nameInput.trim()) {
-      showToast("Vui lòng nhập Họ và tên!", "error");
-      return;
-    }
-    if (!studentCodeInput.trim()) {
-      showToast("Vui lòng nhập Mã số sinh viên (MSSV)!", "error");
-      return;
-    }
-
-    setIsUpdating(true);
-    try {
-      const res = await fetch(`${API_BASE}/student/link`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          zaloId: user.zalo_id || `ctut_${studentCodeInput.trim().toLowerCase()}`,
-          name: nameInput.trim(),
-          studentCode: studentCodeInput.trim().toUpperCase(),
-          faculty: facultyInput.trim(),
-        }),
-      });
-
-      const data = await res.json();
-      if (data.success) {
-        showToast("Cập nhật hồ sơ sinh viên thành công!");
-        const updatedUser = {
-          ...user,
-          name: nameInput.trim(),
-          student_code: studentCodeInput.trim().toUpperCase(),
-          faculty: facultyInput.trim(),
-          verification_status: "approved",
-          is_verified: true,
-        };
-        setUser(updatedUser);
-        localStorage.setItem("user", JSON.stringify(updatedUser));
-        localStorage.setItem("user_info", JSON.stringify(updatedUser));
-        localStorage.setItem("tuna_user_id", studentCodeInput.trim().toUpperCase());
-        setShowEditModal(false);
-        fetchProfileAndStats();
-      } else {
-        showToast(data.message || "Không thể cập nhật hồ sơ!", "error");
-      }
-    } catch (err) {
-      showToast("Lỗi kết nối máy chủ đào tạo!", "error");
-    } finally {
-      setIsUpdating(false);
-    }
   };
 
   return (
@@ -277,15 +328,16 @@ export const ProfileSection = ({ currentUser: initialUser }) => {
               </span>
             </div>
             <p className="text-[11.5px] text-slate-500 mb-0 mt-0.5 truncate font-medium">
-              MSSV: <b className="text-[#0045ce]">{user?.student_code || "Chưa cập nhật"}</b>
+              MSSV: <b className="text-[#0045ce] font-mono">{user?.student_code || "Chưa cập nhật"}</b>
+              {user?.class_name && <span> • Lớp: <b className="text-slate-800">{user.class_name}</b></span>}
             </p>
             <p className="text-[11px] text-slate-400 mb-0 truncate font-semibold">
-              Ngành: {user?.faculty || "Chưa xác nhận"}
+              Ngành: {user?.faculty || "Hệ Thống Thông Tin"}
             </p>
           </div>
         </div>
 
-        {/* 3 Ô Thống kê: Tự động cập nhật đồng bộ theo thời gian thực */}
+        {/* 3 Ô Thống kê */}
         <div className="grid grid-cols-3 gap-2 pt-2.5 border-t border-slate-100 text-center">
           <div className="bg-slate-50 p-2.5 rounded-2xl border border-slate-100">
             <span className="text-[10px] text-slate-500 font-bold block">Chuỗi học</span>
@@ -297,9 +349,7 @@ export const ProfileSection = ({ currentUser: initialUser }) => {
           </div>
           <div className="bg-slate-50 p-2.5 rounded-2xl border border-slate-100">
             <span className="text-[10px] text-slate-500 font-bold block">Xếp hạng</span>
-            <span className="text-xs font-black text-amber-600">
-              🏆 Top {stats.rank}
-            </span>
+            <span className="text-xs font-black text-amber-600">🏆 Top {stats.rank}</span>
           </div>
         </div>
       </div>
@@ -322,8 +372,8 @@ export const ProfileSection = ({ currentUser: initialUser }) => {
               <p className="text-xs font-black text-slate-800 m-0 leading-tight">Chỉnh sửa hồ sơ</p>
               <p className="text-[11px] text-slate-500 m-0 mt-0.5 truncate font-medium">
                 {user?.student_code
-                  ? `${user.name} • ${user.student_code} • ${user.faculty || "Hệ Thống Thông Tin"}`
-                  : "Cập nhật MSSV và chuyên ngành"}
+                  ? `${user.name} • ${user.student_code} • ${user.class_name || "Chưa có lớp"}`
+                  : "Cập nhật MSSV, lớp và chuyên ngành"}
               </p>
             </div>
           </div>
@@ -342,31 +392,30 @@ export const ProfileSection = ({ currentUser: initialUser }) => {
         </button>
       )}
 
-      {/* Modal Sửa Hồ Sơ */}
+      {/* Modal Sửa Hồ Sơ: Bổ sung trường Lớp Sinh Hoạt */}
       {showEditModal && (
         <div
-          className="position-fixed top-0 start-0 w-100 h-100 d-flex align-items-center justify-content-center p-3 z-50 animate-fade-in"
+          className="fixed inset-0 flex items-center justify-center p-3 z-50 animate-fade-in"
           style={{ backgroundColor: "rgba(15, 23, 42, 0.65)", backdropFilter: "blur(4px)" }}
         >
-          <div className="bg-white p-4 rounded-3xl shadow-2xl w-100 border border-slate-200" style={{ maxWidth: "390px" }}>
-            <div className="d-flex align-items-center justify-content-between mb-3 border-b pb-2">
-              <h6 className="fw-black text-dark mb-0 d-flex align-items-center gap-2 text-sm">
-                <i className="bi bi-person-vcard text-[#0045ce] fs-5"></i>
+          <div className="bg-white p-5 rounded-3xl shadow-2xl w-full border border-slate-200" style={{ maxWidth: "400px" }}>
+            <div className="flex items-center justify-between mb-3 border-b border-slate-100 pb-2.5">
+              <h6 className="font-black text-slate-900 mb-0 flex items-center gap-2 text-sm">
+                <i className="bi bi-person-vcard text-[#0045ce] text-lg"></i>
                 Hồ Sơ Sinh Viên
               </h6>
               <button
                 type="button"
                 onClick={() => setShowEditModal(false)}
-                className="btn btn-sm btn-light rounded-circle p-0"
-                style={{ width: "28px", height: "28px" }}
+                className="w-7 h-7 rounded-full bg-slate-100 text-slate-500 flex items-center justify-center border-0 cursor-pointer"
               >
-                <i className="bi bi-x-lg"></i>
+                ✕
               </button>
             </div>
 
-            <form onSubmit={handleSaveProfile} className="d-flex flex-column gap-2.5">
+            <form onSubmit={handleSaveProfile} className="flex flex-col gap-3">
               <div>
-                <label className="form-label text-muted small fw-bold mb-1">
+                <label className="text-slate-500 text-[11px] font-bold mb-1 block">
                   Họ và Tên Sinh Viên *
                 </label>
                 <input
@@ -375,30 +424,46 @@ export const ProfileSection = ({ currentUser: initialUser }) => {
                   placeholder="VD: Nguyễn Văn A"
                   value={nameInput}
                   onChange={(e) => setNameInput(e.target.value)}
-                  className="form-control form-control-sm rounded-3 fw-bold text-dark"
+                  className="w-full px-3 py-2 border border-slate-200 rounded-xl text-xs font-bold text-slate-900 focus:outline-none focus:border-[#0045ce]"
                 />
               </div>
 
-              <div>
-                <label className="form-label text-muted small fw-bold mb-1">
-                  Mã Số Sinh Viên (MSSV) *
-                </label>
-                <input
-                  type="text"
-                  required
-                  placeholder="VD: B2300001"
-                  value={studentCodeInput}
-                  onChange={(e) => setStudentCodeInput(e.target.value.toUpperCase())}
-                  className="form-control form-control-sm rounded-3 fw-bold text-[#0045ce] uppercase"
-                />
+              <div className="grid grid-cols-2 gap-2">
+                <div>
+                  <label className="text-slate-500 text-[11px] font-bold mb-1 block">
+                    Mã Sinh Viên (MSSV) *
+                  </label>
+                  <input
+                    type="text"
+                    required
+                    placeholder="VD: HTTT2311052"
+                    value={studentCodeInput}
+                    onChange={(e) => handleStudentCodeChange(e.target.value)}
+                    className="w-full px-3 py-2 border border-slate-200 rounded-xl text-xs font-bold text-[#0045ce] font-mono uppercase focus:outline-none focus:border-[#0045ce]"
+                  />
+                </div>
+
+                <div>
+                  <label className="text-slate-500 text-[11px] font-bold mb-1 block">
+                    Lớp Sinh Hoạt *
+                  </label>
+                  <input
+                    type="text"
+                    required
+                    placeholder="VD: HTTT2311"
+                    value={classNameInput}
+                    onChange={(e) => setClassNameInput(e.target.value.toUpperCase())}
+                    className="w-full px-3 py-2 border border-slate-200 rounded-xl text-xs font-bold text-slate-800 font-mono uppercase focus:outline-none focus:border-[#0045ce]"
+                  />
+                </div>
               </div>
 
               <div>
-                <label className="form-label text-muted small fw-bold mb-1">Chuyên Ngành</label>
+                <label className="text-slate-500 text-[11px] font-bold mb-1 block">Chuyên Ngành *</label>
                 <select
                   value={facultyInput}
                   onChange={(e) => setFacultyInput(e.target.value)}
-                  className="form-select form-select-sm rounded-3 fw-semibold"
+                  className="w-full px-3 py-2 border border-slate-200 rounded-xl text-xs font-bold text-slate-800 focus:outline-none focus:border-[#0045ce] bg-white"
                 >
                   {availableFaculties.length > 0 ? (
                     availableFaculties.map((f, i) => (
@@ -414,20 +479,18 @@ export const ProfileSection = ({ currentUser: initialUser }) => {
                 </select>
               </div>
 
-              <div className="d-flex gap-2 mt-3">
+              <div className="flex gap-2 mt-2 pt-2 border-t border-slate-100">
                 <button
                   type="button"
                   onClick={() => setShowEditModal(false)}
-                  className="btn btn-light rounded-pill py-2 fw-bold flex-1 border text-secondary"
-                  style={{ fontSize: "12px" }}
+                  className="flex-1 py-2.5 rounded-xl border border-slate-200 text-slate-600 text-xs font-bold bg-slate-50 cursor-pointer"
                 >
                   Hủy
                 </button>
                 <button
                   type="submit"
                   disabled={isUpdating}
-                  className="btn rounded-pill py-2 fw-bold flex-1 border-0 text-white"
-                  style={{ background: "#0045ce", fontSize: "12px" }}
+                  className="flex-1 py-2.5 rounded-xl border-0 text-white text-xs font-black bg-[#0045ce] hover:bg-blue-700 cursor-pointer shadow-xs"
                 >
                   {isUpdating ? "Đang lưu..." : "Cập nhật ngay"}
                 </button>
