@@ -10,7 +10,6 @@ const { authenticateToken } = require('../middlewares/auth');
 router.get('/', async (req, res) => {
   const { search, major, cohort, year, class: classNameFilter } = req.query;
   try {
-    // CHỈ LẤY SINH VIÊN ĐÃ DUYỆT (is_verified = true) cho Tab Tất cả sinh viên
     let query = `
       SELECT 
         u.id, 
@@ -136,7 +135,6 @@ router.post('/verify', authenticateToken, async (req, res) => {
       return res.status(404).json({ success: false, message: 'Không tìm thấy sinh viên!' });
     }
 
-    // Bắn socket thông báo cho App Sinh viên
     const io = req.app.get('io');
     if (io) {
       io.emit(`user_verify_status_${userId}`, { status: newStatus });
@@ -206,10 +204,9 @@ router.patch('/:id/toggle-status', authenticateToken, async (req, res) => {
       return res.status(404).json({ success: false, message: 'Không tìm thấy người dùng' });
     }
 
-    const newStatus = !check.rows[0].is_active; // true (mở) hoặc false (khóa)
+    const newStatus = !check.rows[0].is_active;
     await pool.query(`UPDATE users SET is_active = $1 WHERE id = $2`, [newStatus, id]);
 
-    // Bắn Socket để App Zalo / Web tự động logout hoặc thông báo
     const io = req.app.get('io');
     if (io) {
       if (!newStatus) {
@@ -247,7 +244,7 @@ router.delete('/:id', authenticateToken, async (req, res) => {
 });
 
 // =============================================================================
-// 7. ĐỒNG BỘ HỒ SƠ TỪ ZALO MINI APP (NẾU ĐỔI MSSV -> HẠ CẤP VỀ PENDING)
+// 7. ĐỒNG BỘ HỒ SƠ TỪ ZALO MINI APP (FIX LỖI NHÂN ĐÔI & HẠ CẤP PENDING)
 // =============================================================================
 router.post(['/student/link', '/sync'], async (req, res) => {
   try {
@@ -262,32 +259,36 @@ router.post(['/student/link', '/sync'], async (req, res) => {
     const cleanClass = className ? className.trim().toUpperCase() : null;
     const cleanFaculty = faculty ? faculty.trim() : 'Hệ Thống Thông Tin';
 
+    // 1. TÌM CHÍNH XÁC USER ĐANG ĐĂNG NHẬP DỰA TRÊN HEADER (Tuyệt đối không tìm bằng cleanCode trước)
+    const currentIdentity = String(req.headers['x-user-id'] || userId || zaloId || email || '').trim();
     let existingUser = null;
 
-    if (userId && /^\d+$/.test(String(userId))) {
-      const byId = await pool.query(`SELECT * FROM users WHERE id = $1 LIMIT 1`, [parseInt(userId, 10)]);
-      if (byId.rows.length > 0) existingUser = byId.rows[0];
+    if (currentIdentity && currentIdentity !== 'guest_user' && currentIdentity !== 'undefined') {
+      let checkQuery = `SELECT * FROM users WHERE student_code = $1 OR zalo_id = $1 OR LOWER(email) = LOWER($1)`;
+      if (/^\d+$/.test(currentIdentity)) {
+        checkQuery += ` OR id = ${currentIdentity}`;
+      }
+      const uRes = await pool.query(checkQuery + ` ORDER BY id ASC LIMIT 1`, [currentIdentity]);
+      if (uRes.rows.length > 0) existingUser = uRes.rows[0];
     }
+
+    // Nếu vẫn không thấy, thử tìm theo mã SV mới (đề phòng họ nhập MSSV đã từng tồn tại)
     if (!existingUser && cleanCode) {
-      const byCode = await pool.query(`SELECT * FROM users WHERE student_code = $1 LIMIT 1`, [cleanCode]);
-      if (byCode.rows.length > 0) existingUser = byCode.rows[0];
-    }
-    if (!existingUser && zaloId) {
-      const byZalo = await pool.query(`SELECT * FROM users WHERE zalo_id = $1 LIMIT 1`, [zaloId]);
-      if (byZalo.rows.length > 0) existingUser = byZalo.rows[0];
+      const codeRes = await pool.query(`SELECT * FROM users WHERE student_code = $1 LIMIT 1`, [cleanCode]);
+      if (codeRes.rows.length > 0) existingUser = codeRes.rows[0];
     }
 
     let updatedUser;
-// routes/users.routes.js (Kiểm tra lại đoạn này ở POST /sync)
 
     if (existingUser) {
+      // ĐÃ TÌM THẤY USER -> UPDATE (Không sinh thêm dòng mới)
       const oldCode = existingUser.student_code || "";
       const oldClass = existingUser.class_name || "";
       
       let newVerificationStatus = existingUser.verification_status;
       let newIsVerified = existingUser.is_verified;
 
-      // NẾU SINH VIÊN ĐỔI MSSV HOẶC LỚP SAU KHI ĐÃ ĐƯỢC DUYỆT -> ÉP VỀ PENDING CHỜ ADMIN DUYỆT LẠI
+      // HẠ CẤP VỀ CHỜ DUYỆT (PENDING) NẾU HỌ ĐỔI LỚP HOẶC ĐỔI MSSV
       if (cleanCode !== oldCode || cleanClass !== oldClass) {
         newVerificationStatus = 'pending';
         newIsVerified = false;
@@ -308,7 +309,7 @@ router.post(['/student/link', '/sync'], async (req, res) => {
       );
       updatedUser = updateRes.rows[0];
     } else {
-      // TÀI KHOẢN MỚI LUÔN LÀ PENDING
+      // CHƯA TỪNG TỒN TẠI -> TẠO MỚI HOÀN TOÀN
       const insertRes = await pool.query(
         `INSERT INTO users 
            (name, student_code, class_name, faculty, zalo_id, email, role, is_verified, verification_status)
@@ -317,6 +318,10 @@ router.post(['/student/link', '/sync'], async (req, res) => {
         [cleanName, cleanCode, cleanClass, cleanFaculty, zaloId || `user_${Date.now()}`, email || null]
       );
       updatedUser = insertRes.rows[0];
+    }
+
+    if (updatedUser.is_active === false) {
+      return res.status(403).json({ success: false, message: 'Tài khoản của bạn đã bị vô hiệu hóa!' });
     }
 
     res.json({
