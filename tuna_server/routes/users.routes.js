@@ -10,27 +10,30 @@ const { authenticateToken } = require('../middlewares/auth');
 router.get('/', async (req, res) => {
   const { search, major, cohort, year, class: classNameFilter } = req.query;
   try {
-    let query = `
-      SELECT 
-        u.id, 
-        u.zalo_id AS "zaloId", 
-        u.name, 
-        COALESCE(u.email, '') AS "email",
-        u.avatar, 
-        u.role, 
-        u.student_code AS "studentCode", 
-        u.class_name AS "className", 
-        COALESCE(u.total_credits, 0) AS "totalCredits", 
-        u.faculty,
-        COALESCE(u.is_active, true) AS "isActive",
-        COALESCE(u.is_verified, false) AS "isVerified",
-        COALESCE(u.verification_status, 'pending') AS "verificationStatus",
-        TO_CHAR(u.created_at, 'DD/MM/YYYY') AS "createdAt",
-        COALESCE(u.current_streak, 0) AS "currentStreak",
-        COALESCE(u.longest_streak, 0) AS "longestStreak"
-      FROM users u
-      WHERE u.role = 'student' AND (u.is_verified = TRUE OR u.verification_status = 'approved')
-    `;
+// routes/users.routes.js (Tại route GET '/')
+let query = `
+  SELECT 
+    u.id, 
+    u.zalo_id AS "zaloId", 
+    u.name, 
+    COALESCE(u.email, '') AS "email",
+    u.avatar, 
+    u.role, 
+    u.student_code AS "studentCode", 
+    u.class_name AS "className", 
+    COALESCE(u.total_credits, 0) AS "totalCredits", 
+    u.faculty,
+    COALESCE(u.is_active, true) AS "isActive",
+    COALESCE(u.is_verified, false) AS "isVerified",
+    COALESCE(u.verification_status, 'pending') AS "verificationStatus",
+    TO_CHAR(u.created_at, 'DD/MM/YYYY') AS "createdAt",
+    COALESCE(u.current_streak, 0) AS "currentStreak",
+    COALESCE(u.longest_streak, 0) AS "longestStreak"
+  FROM users u
+  WHERE u.role = 'student' 
+    AND u.is_verified = TRUE 
+    AND u.verification_status = 'approved'
+`;
     const params = [];
 
     if (search && search.trim()) {
