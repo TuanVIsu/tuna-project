@@ -74,7 +74,6 @@ export const ManageUsers = () => {
     };
   }, []);
 
-  // 1. Tải danh mục Ngành & Khóa
   useEffect(() => {
     let isMounted = true;
     const fetchMetaOptions = async () => {
@@ -112,7 +111,6 @@ export const ManageUsers = () => {
     }
   }, [getHeaders]);
 
-  // 2. Tải danh sách người dùng (chỉ người đã duyệt)
   const fetchUsers = useCallback(async () => {
     setLoading(true);
     try {
@@ -132,7 +130,6 @@ export const ManageUsers = () => {
     }
   }, [searchTerm, selectedMajor, selectedCohort, selectedClass, safeFetchUsersApi]);
 
-  // 3. Tải danh sách chờ phê duyệt
   const fetchPendingUsers = useCallback(async () => {
     try {
       const d = await safeFetchUsersApi(`/pending`);
@@ -149,7 +146,6 @@ export const ManageUsers = () => {
     setActiveMenuData(null);
   }, [selectedMajor, selectedCohort, selectedClass, fetchUsers, fetchPendingUsers]);
 
-  // Natural Language Parser
   const parsedNL = useMemo(() => {
     const raw = searchTerm.trim();
     if (!raw) return null;
@@ -323,7 +319,7 @@ export const ManageUsers = () => {
     });
   };
 
-const handleSaveEdit = async (e) => {
+  const handleSaveEdit = async (e) => {
     e.preventDefault();
     if (!editingUser) return;
     try {

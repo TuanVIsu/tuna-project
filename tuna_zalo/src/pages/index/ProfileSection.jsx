@@ -1,6 +1,6 @@
 // src/pages/index/ProfileSection.jsx
 import React, { useState, useEffect, useMemo, useCallback } from "react";
-import { io } from "socket.io-client";
+import { io } from "socket.io-client"; 
 import { getCurrentUser } from "../../services/authService";
 
 const API_BASE = "https://tuna-project.onrender.com/api";
@@ -9,7 +9,6 @@ const DEFAULT_AVATAR = "https://images.unsplash.com/photo-1534528741775-53994a69
 export const ProfileSection = ({ currentUser: initialUser }) => {
   const [user, setUser] = useState(() => initialUser || getCurrentUser());
   
-  // Khởi tạo state từ localStorage để tránh giật số
   const [stats, setStats] = useState(() => {
     const cachedStreak = Number(localStorage.getItem("user_current_streak") || 0);
     const cachedXp = Number(localStorage.getItem("user_study_xp") || 0);
@@ -28,7 +27,6 @@ export const ProfileSection = ({ currentUser: initialUser }) => {
     setTimeout(() => setToastMessage(null), 3200);
   };
 
-  // State Form chỉnh sửa hồ sơ
   const [showEditModal, setShowEditModal] = useState(false);
   const [nameInput, setNameInput] = useState("");
   const [studentCodeInput, setStudentCodeInput] = useState("");
@@ -36,7 +34,6 @@ export const ProfileSection = ({ currentUser: initialUser }) => {
   const [facultyInput, setFacultyInput] = useState("");
   const [isUpdating, setIsUpdating] = useState(false);
 
-  // Định danh người dùng chuẩn xác
   const myUserId = useMemo(() => {
     const saved = localStorage.getItem("tuna_user_id") || user?.student_code || user?.id || user?.zalo_id || user?.email;
     return saved ? String(saved).trim() : "";
@@ -54,7 +51,6 @@ export const ProfileSection = ({ currentUser: initialUser }) => {
     return headers;
   }, [myUserId]);
 
-  // Nạp danh mục chuyên ngành từ CSDL
   const fetchFaculties = useCallback(async () => {
     try {
       const res = await fetch(`${API_BASE}/library/majors`, { headers: getAuthHeaders() });
@@ -67,7 +63,6 @@ export const ProfileSection = ({ currentUser: initialUser }) => {
     }
   }, [getAuthHeaders]);
 
-  // Đồng bộ thông tin hồ sơ và điểm streak thực tế từ DB
   const fetchProfileAndStats = useCallback(async () => {
     if (!myUserId) return;
 
@@ -78,7 +73,6 @@ export const ProfileSection = ({ currentUser: initialUser }) => {
         fetch(`${API_BASE}/leaderboard`, { headers: getAuthHeaders() }).catch(() => null),
       ]);
 
-      // Cập nhật thông tin sinh viên từ server
       if (profileRes && profileRes.ok) {
         const json = await profileRes.json();
         const serverUser = json.data?.user || json.user;
@@ -146,7 +140,6 @@ export const ProfileSection = ({ currentUser: initialUser }) => {
     };
   }, [fetchFaculties, fetchProfileAndStats]);
 
-  // LOGIC LẮNG NGHE SOCKET TỪ BACKEND ĐỂ CHỐNG KẸT TRẠNG THÁI
   useEffect(() => {
     if (!myUserId) return;
     const socket = io(API_BASE.replace('/api', '')); 
@@ -177,7 +170,6 @@ export const ProfileSection = ({ currentUser: initialUser }) => {
     };
   }, [myUserId]);
 
-  // Tự động suy ra mã lớp khi sinh viên gõ MSSV (Ví dụ: HTTT2311052 -> HTTT2311)
   const handleStudentCodeChange = (val) => {
     const cleanVal = val.toUpperCase().trim();
     setStudentCodeInput(cleanVal);
@@ -202,7 +194,6 @@ export const ProfileSection = ({ currentUser: initialUser }) => {
     setShowEditModal(true);
   };
 
-  // CẬP NHẬT HỒ SƠ CHUẨN XÁC LÊN SERVER
   const handleSaveProfile = async (e) => {
     e.preventDefault();
     const cleanName = nameInput.trim();
@@ -251,7 +242,6 @@ export const ProfileSection = ({ currentUser: initialUser }) => {
 
       const data = await res.json();
       if (data.success || res.ok) {
-        // LẤY TRỰC TIẾP TRẠNG THÁI TỪ SERVER TRẢ VỀ THAY VÌ GÁN CỨNG
         const serverStatus = data.user?.verification_status || "pending";
         const serverVerified = data.user?.is_verified || false;
 
@@ -349,7 +339,6 @@ export const ProfileSection = ({ currentUser: initialUser }) => {
               <h6 className="font-black text-slate-900 mb-0 text-[15px] truncate break-words">
                 {user?.name || "Sinh viên"}
               </h6>
-              {/* CHỈ HIỂN THỊ TRẠNG THÁI ĐÃ DUYỆT NẾU SERVER TRẢ VỀ APPROVED */}
               <span
                 className={`px-2 py-0.5 text-[9.5px] font-extrabold rounded-full uppercase shrink-0 ${
                   user?.verification_status === "approved"

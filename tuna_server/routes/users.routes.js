@@ -244,7 +244,7 @@ router.delete('/:id', authenticateToken, async (req, res) => {
 });
 
 // =============================================================================
-// 7. ĐỒNG BỘ HỒ SƠ TỪ ZALO MINI APP (FIX LỖI NHÂN ĐÔI & HẠ CẤP PENDING)
+// 7. ĐỒNG BỘ HỒ SƠ TỪ ZALO MINI APP (FIX LỖI NHÂN ĐÔI KHI ĐỔI MSSV)
 // =============================================================================
 router.post(['/student/link', '/sync'], async (req, res) => {
   try {
@@ -255,13 +255,15 @@ router.post(['/student/link', '/sync'], async (req, res) => {
     }
 
     const cleanName = name.trim();
-    const cleanCode = studentCode.trim().toUpperCase();
+    const cleanCode = studentCode.trim().toUpperCase(); // Đây là MSSV mới (VD: 53)
     const cleanClass = className ? className.trim().toUpperCase() : null;
     const cleanFaculty = faculty ? faculty.trim() : 'Hệ Thống Thông Tin';
 
-    // 1. TÌM CHÍNH XÁC USER ĐANG ĐĂNG NHẬP DỰA TRÊN HEADER (Tuyệt đối không tìm bằng cleanCode trước)
-    const currentIdentity = String(req.headers['x-user-id'] || userId || zaloId || email || '').trim();
     let existingUser = null;
+
+    // 1. TÌM TÀI KHOẢN CŨ THÔNG QUA HEADER "x-user-id" MÀ APP GỬI LÊN (VD: 52)
+    // Đây là bước then chốt để không bị mất dấu sinh viên khi họ đổi MSSV
+    const currentIdentity = String(req.headers['x-user-id'] || userId || zaloId || email || '').trim();
 
     if (currentIdentity && currentIdentity !== 'guest_user' && currentIdentity !== 'undefined') {
       let checkQuery = `SELECT * FROM users WHERE student_code = $1 OR zalo_id = $1 OR LOWER(email) = LOWER($1)`;
@@ -272,23 +274,29 @@ router.post(['/student/link', '/sync'], async (req, res) => {
       if (uRes.rows.length > 0) existingUser = uRes.rows[0];
     }
 
-    // Nếu vẫn không thấy, thử tìm theo mã SV mới (đề phòng họ nhập MSSV đã từng tồn tại)
+    // 2. Nếu header không có, thử tìm bằng Zalo ID
+    if (!existingUser && zaloId) {
+      const byZalo = await pool.query(`SELECT * FROM users WHERE zalo_id = $1 LIMIT 1`, [zaloId]);
+      if (byZalo.rows.length > 0) existingUser = byZalo.rows[0];
+    }
+
+    // 3. Nếu vẫn không thấy, lúc này mới thử tìm theo MSSV (Phòng trường hợp tân sinh viên)
     if (!existingUser && cleanCode) {
-      const codeRes = await pool.query(`SELECT * FROM users WHERE student_code = $1 LIMIT 1`, [cleanCode]);
-      if (codeRes.rows.length > 0) existingUser = codeRes.rows[0];
+      const byCode = await pool.query(`SELECT * FROM users WHERE student_code = $1 LIMIT 1`, [cleanCode]);
+      if (byCode.rows.length > 0) existingUser = byCode.rows[0];
     }
 
     let updatedUser;
 
     if (existingUser) {
-      // ĐÃ TÌM THẤY USER -> UPDATE (Không sinh thêm dòng mới)
+      // TÀI KHOẢN ĐÃ TỒN TẠI (VD: Tìm thấy 52) -> CHỈ CẬP NHẬT (Không đẻ thêm dòng mới)
       const oldCode = existingUser.student_code || "";
       const oldClass = existingUser.class_name || "";
       
       let newVerificationStatus = existingUser.verification_status;
       let newIsVerified = existingUser.is_verified;
 
-      // HẠ CẤP VỀ CHỜ DUYỆT (PENDING) NẾU HỌ ĐỔI LỚP HOẶC ĐỔI MSSV
+      // NẾU ĐỔI MSSV HOẶC LỚP SAU KHI ĐÃ ĐƯỢC DUYỆT -> ÉP VỀ CHỜ DUYỆT
       if (cleanCode !== oldCode || cleanClass !== oldClass) {
         newVerificationStatus = 'pending';
         newIsVerified = false;
