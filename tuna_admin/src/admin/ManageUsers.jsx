@@ -1,5 +1,6 @@
 // src/admin/ManageUsers.jsx
 import React, { useState, useEffect, useRef, useCallback, useMemo } from "react";
+import { io } from "socket.io-client";
 
 const API_BASE = import.meta.env.VITE_API_URL || "https://tuna-project.onrender.com/api";
 
@@ -146,6 +147,22 @@ export const ManageUsers = () => {
     setActiveMenuData(null);
   }, [selectedMajor, selectedCohort, selectedClass, fetchUsers, fetchPendingUsers]);
 
+  // LẮNG NGHE SOCKET REALTIME TỪ SERVER
+  useEffect(() => {
+    const socketUrl = API_BASE.replace('/api', '');
+    const socket = io(socketUrl);
+
+    socket.on("student_profile_updated", () => {
+      fetchUsers();
+      fetchPendingUsers();
+    });
+
+    return () => {
+      socket.off("student_profile_updated");
+      socket.disconnect();
+    };
+  }, [fetchUsers, fetchPendingUsers]);
+
   const parsedNL = useMemo(() => {
     const raw = searchTerm.trim();
     if (!raw) return null;
@@ -273,6 +290,27 @@ export const ManageUsers = () => {
     }
   };
 
+  // THAO TÁC RESET / THU HỒI MSSV
+  const handleResetStudentCode = async (user) => {
+    setActiveMenuData(null);
+    const confirmMsg = `Xác nhận thu hồi MSSV [${user.studentCode}] khỏi tài khoản "${user.name}"?\n\nSau khi thu hồi, mã này sẽ được giải phóng hoàn toàn để người dùng chính chủ có thể đăng ký lại.`;
+    if (!window.confirm(confirmMsg)) return;
+
+    try {
+      const d = await safeFetchUsersApi(`/${user.id}/reset-student-code`, {
+        method: "PATCH",
+      });
+      if (d.success) {
+        alert(d.message);
+        await Promise.all([fetchUsers(), fetchPendingUsers()]);
+      } else {
+        alert(d.message || "Không thể thu hồi MSSV!");
+      }
+    } catch (err) {
+      alert("Lỗi kết nối máy chủ khi thu hồi MSSV");
+    }
+  };
+
   const handleToggleStatus = async (user) => {
     setActiveMenuData(null);
     try {
@@ -323,19 +361,18 @@ export const ManageUsers = () => {
     e.preventDefault();
     if (!editingUser) return;
     try {
-      // Nếu Admin sửa MSSV hoặc Lớp, nên tự động đẩy họ về Pending để admin cấp lại
       let finalStatus = editFormData.verificationStatus;
       let finalVerified = editFormData.isVerified;
 
       if (editFormData.studentCode !== editingUser.studentCode || editFormData.className !== editingUser.className) {
-          finalStatus = "pending";
-          finalVerified = false;
+        finalStatus = "pending";
+        finalVerified = false;
       }
 
       const payload = {
-          ...editFormData,
-          verificationStatus: finalStatus,
-          isVerified: finalVerified
+        ...editFormData,
+        verificationStatus: finalStatus,
+        isVerified: finalVerified,
       };
 
       const d = await safeFetchUsersApi(`/${editingUser.id}`, {
@@ -345,7 +382,7 @@ export const ManageUsers = () => {
       if (d.success) {
         setEditingUser(null);
         await Promise.all([fetchUsers(), fetchPendingUsers()]);
-        alert("Đã cập nhật! (Sinh viên sẽ bị chuyển về trạng thái chờ duyệt nếu đổi lớp/MSSV)");
+        alert("Đã cập nhật hồ sơ thành công!");
       } else {
         alert(d.message || "Cập nhật thất bại!");
       }
@@ -362,7 +399,7 @@ export const ManageUsers = () => {
     }
     const rect = e.currentTarget.getBoundingClientRect();
     const spaceBelow = window.innerHeight - rect.bottom;
-    const menuHeight = 175;
+    const menuHeight = 220;
 
     let top = rect.bottom + 6;
     if (spaceBelow < menuHeight) {
@@ -609,7 +646,7 @@ export const ManageUsers = () => {
                             {u.studentCode}
                           </span>
                         ) : (
-                          <span className="text-muted small">Chưa có MSSV</span>
+                          <span className="text-muted small fst-italic">Chưa có MSSV</span>
                         )}
                         <span className="small font-monospace fw-bold text-primary" style={{ fontSize: "11px" }}>
                           {u.className || "Chưa xếp lớp"}
@@ -711,7 +748,7 @@ export const ManageUsers = () => {
           ref={menuDropdownRef}
           className="card border-0 shadow-lg rounded-3 py-1 text-start position-fixed"
           style={{
-            width: "175px",
+            width: "190px",
             backgroundColor: "#ffffff",
             border: "1px solid #e2e8f0",
             fontSize: "12px",
@@ -738,6 +775,19 @@ export const ManageUsers = () => {
             <i className="bi bi-pencil text-primary"></i>
             <span>Chỉnh sửa hồ sơ</span>
           </button>
+
+          {/* NÚT THU HỒI / RESET MSSV */}
+          {activeMenuData.user.studentCode && (
+            <button
+              type="button"
+              onClick={() => handleResetStudentCode(activeMenuData.user)}
+              className="dropdown-item d-flex align-items-center gap-2 px-3 py-1.5 text-warning border-0 bg-transparent fw-semibold cursor-pointer"
+            >
+              <i className="bi bi-person-x-fill text-warning"></i>
+              <span>Thu hồi MSSV</span>
+            </button>
+          )}
+
           <button type="button" onClick={() => handleToggleStatus(activeMenuData.user)} className={`dropdown-item d-flex align-items-center gap-2 px-3 py-1.5 border-0 bg-transparent fw-semibold cursor-pointer ${activeMenuData.user.isActive ? "text-warning" : "text-success"}`}>
             <i className={`bi ${activeMenuData.user.isActive ? "bi-lock-fill" : "bi-unlock-fill"}`}></i>
             <span>{activeMenuData.user.isActive ? "Khóa tài khoản" : "Mở tài khoản"}</span>
