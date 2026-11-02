@@ -248,9 +248,14 @@ export const ProfileSection = ({ currentUser: initialUser }) => {
         });
       }
 
+// Tìm hàm handleSaveProfile trong ProfileSection.jsx và sửa đoạn cập nhật state:
       const data = await res.json();
       if (data.success || res.ok) {
-        showToast("Cập nhật hồ sơ sinh viên thành công!");
+        // LUÔN LẤY TRẠNG THÁI TỪ SERVER TRẢ VỀ (data.user)
+        const serverStatus = data.user?.verification_status || "pending";
+        const serverVerified = data.user?.is_verified || false;
+
+        showToast(serverStatus === "pending" ? "Đã lưu, vui lòng chờ duyệt!" : "Cập nhật hồ sơ thành công!");
         
         const updatedUser = {
           ...user,
@@ -258,8 +263,8 @@ export const ProfileSection = ({ currentUser: initialUser }) => {
           student_code: cleanCode,
           class_name: cleanClass,
           faculty: cleanFaculty,
-          is_verified: data.user?.is_verified ?? user.is_verified,
-          verification_status: data.user?.verification_status ?? user.verification_status ?? "approved",
+          is_verified: serverVerified,
+          verification_status: serverStatus,
         };
 
         setUser(updatedUser);
@@ -270,14 +275,7 @@ export const ProfileSection = ({ currentUser: initialUser }) => {
 
         setShowEditModal(false);
         fetchProfileAndStats();
-      } else {
-        showToast(data.message || "Không thể cập nhật hồ sơ!", "error");
-      }
-    } catch (err) {
-      showToast("Lỗi kết nối máy chủ đào tạo!", "error");
-    } finally {
-      setIsUpdating(false);
-    }
+      
   };
 
   const onLogoutClick = () => {

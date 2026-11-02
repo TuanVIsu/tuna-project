@@ -279,15 +279,15 @@ router.post(['/student/link', '/sync'], async (req, res) => {
 
     let updatedUser;
 
+// Thay thế đoạn code xử lý existingUser trong API /student/link hoặc /sync
     if (existingUser) {
-      // KIỂM TRA ĐỔI MSSV HOẶC LỚP
       const oldCode = existingUser.student_code || "";
       const oldClass = existingUser.class_name || "";
       
       let newVerificationStatus = existingUser.verification_status;
       let newIsVerified = existingUser.is_verified;
 
-      // NẾU SINH VIÊN TỰ Ý ĐỔI MSSV HOẶC ĐỔI LỚP SAU KHI ĐÃ ĐƯỢC DUYỆT -> ĐÁ VỀ CHỜ DUYỆT
+      // NẾU ĐỔI MSSV HOẶC LỚP SAU KHI ĐÃ ĐƯỢC DUYỆT -> BẮT BUỘC HẠ CẤP VỀ CHỜ DUYỆT
       if (cleanCode !== oldCode || cleanClass !== oldClass) {
         newVerificationStatus = 'pending';
         newIsVerified = false;
@@ -297,7 +297,7 @@ router.post(['/student/link', '/sync'], async (req, res) => {
         `UPDATE users 
          SET name = $1, 
              student_code = $2, 
-             class_name = $3, 
+             class_name = COALESCE($3, class_name), 
              faculty = $4,
              is_verified = $5,
              verification_status = $6,
@@ -308,7 +308,7 @@ router.post(['/student/link', '/sync'], async (req, res) => {
       );
       updatedUser = updateRes.rows[0];
     } else {
-      // Sinh viên mới hoàn toàn -> Luôn luôn chờ duyệt
+      // NẾU LÀ TÀI KHOẢN MỚI HOÀN TOÀN (VỪA XÓA ĐĂNG NHẬP LẠI) -> LUÔN CHỜ DUYỆT
       const insertRes = await pool.query(
         `INSERT INTO users 
            (name, student_code, class_name, faculty, zalo_id, email, role, is_verified, verification_status)

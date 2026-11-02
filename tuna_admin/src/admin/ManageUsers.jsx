@@ -323,17 +323,33 @@ export const ManageUsers = () => {
     });
   };
 
-  const handleSaveEdit = async (e) => {
+const handleSaveEdit = async (e) => {
     e.preventDefault();
     if (!editingUser) return;
     try {
+      // Nếu Admin sửa MSSV hoặc Lớp, nên tự động đẩy họ về Pending để admin cấp lại
+      let finalStatus = editFormData.verificationStatus;
+      let finalVerified = editFormData.isVerified;
+
+      if (editFormData.studentCode !== editingUser.studentCode || editFormData.className !== editingUser.className) {
+          finalStatus = "pending";
+          finalVerified = false;
+      }
+
+      const payload = {
+          ...editFormData,
+          verificationStatus: finalStatus,
+          isVerified: finalVerified
+      };
+
       const d = await safeFetchUsersApi(`/${editingUser.id}`, {
         method: "PUT",
-        body: JSON.stringify(editFormData),
+        body: JSON.stringify(payload),
       });
       if (d.success) {
         setEditingUser(null);
         await Promise.all([fetchUsers(), fetchPendingUsers()]);
+        alert("Đã cập nhật! (Sinh viên sẽ bị chuyển về trạng thái chờ duyệt nếu đổi lớp/MSSV)");
       } else {
         alert(d.message || "Cập nhật thất bại!");
       }
