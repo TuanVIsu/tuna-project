@@ -5,28 +5,65 @@ import { fetchTasksFromDB, saveTaskToDB } from "../../services/aiService";
 const API_BASE = "https://tuna-project.onrender.com/api";
 const ITEMS_PER_PAGE = 5;
 
+// Helper: Phân giải an toàn chuỗi văn bản từ option (cho dù là String hay Object)
+const extractOptionText = (opt, index) => {
+  if (opt === null || opt === undefined) return "";
+  if (typeof opt === "string") return opt.trim();
+  if (typeof opt === "object") {
+    // Trường hợp { key: "A", text: "..." } hoặc { label: "A", value: "..." }
+    const val = opt.text || opt.value || opt.content || opt.label;
+    if (val !== undefined) return String(val).trim();
+    // Trường hợp { "A": "Nội dung" }
+    const entries = Object.entries(opt);
+    if (entries.length > 0) {
+      const [k, v] = entries[0];
+      return /^[A-D]$/i.test(k) ? `${k.toUpperCase()}. ${v}` : String(v).trim();
+    }
+  }
+  return String(opt).trim();
+};
+
+const getNormalizedLetter = (opt, index) => {
+  const str = extractOptionText(opt, index);
+  const match = str.match(/^([A-D])[\.\:\s]/i);
+  if (match) return match[1].toUpperCase();
+  return String.fromCharCode(65 + index);
+};
+
+const formatDisplayOption = (opt, index) => {
+  const str = extractOptionText(opt, index);
+  const targetLetter = String.fromCharCode(65 + index);
+  const match = str.match(/^[A-D][\.\:\s]+(.*)/i);
+  if (match) {
+    return `${targetLetter}. ${match[1].trim()}`;
+  }
+  return `${targetLetter}. ${str}`;
+};
+
 const shuffleQuizCompletely = (questions) => {
   if (!Array.isArray(questions)) return [];
   return [...questions]
     .map((q) => {
       const rawCorrectLetter = (q.answer || "").trim().charAt(0).toUpperCase();
-      const currentCorrectOption = (q.options || []).find((opt, idx) => {
-        const letterMatch = (opt || "").trim().match(/^([A-D])[\.\:\s]/i);
-        const letter = letterMatch ? letterMatch[1].toUpperCase() : String.fromCharCode(65 + idx);
-        return letter === rawCorrectLetter;
-      }) || (q.options && q.options[0]);
+      const rawOptions = Array.isArray(q.options) ? q.options : [];
 
-      const correctText = (currentCorrectOption || "").replace(/^[A-D][\.\:\s]+/i, "").trim();
-      const shuffledOptionTexts = [...(q.options || [])]
-        .map((opt) => (opt || "").replace(/^[A-D][\.\:\s]+/i, "").trim())
+      const currentCorrectOption = rawOptions.find((opt, idx) => {
+        const letter = getNormalizedLetter(opt, idx);
+        return letter === rawCorrectLetter;
+      }) || rawOptions[0];
+
+      const correctCleanText = extractOptionText(currentCorrectOption, 0).replace(/^[A-D][\.\:\s]+/i, "").trim();
+
+      const shuffledTexts = [...rawOptions]
+        .map((opt, idx) => extractOptionText(opt, idx).replace(/^[A-D][\.\:\s]+/i, "").trim())
         .sort(() => 0.5 - Math.random());
 
       const labels = ["A", "B", "C", "D"];
       let newAnswerLetter = "A";
 
-      const newOptions = shuffledOptionTexts.map((text, idx) => {
+      const newOptions = shuffledTexts.map((text, idx) => {
         const label = labels[idx] || String.fromCharCode(65 + idx);
-        if (text === correctText) newAnswerLetter = label;
+        if (text === correctCleanText) newAnswerLetter = label;
         return `${label}. ${text}`;
       });
 
@@ -54,15 +91,19 @@ export const TasksSection = ({ onNavigate }) => {
 
   const myUserId = useMemo(() => {
     try {
-      const u = JSON.parse(localStorage.getItem("user") || "{}");
-      return u.student_code || u.id || localStorage.getItem("tuna_user_id") || "B2300001";
-    } catch {
-      return localStorage.getItem("tuna_user_id") || "B2300001";
-    }
+      const uStr = localStorage.getItem("user");
+      if (uStr && uStr !== "undefined") {
+        const u = JSON.parse(uStr);
+        return u.student_code || u.id || localStorage.getItem("tuna_user_id") || "B2300001";
+      }
+    } catch (e) {}
+    const saved = localStorage.getItem("tuna_user_id");
+    return (saved && saved !== "undefined") ? saved : "B2300001";
   }, []);
 
   const [userXp, setUserXp] = useState(() => {
-    return Number(localStorage.getItem("user_study_xp") || 0);
+    const cached = localStorage.getItem("user_study_xp");
+    return (!cached || cached === "undefined") ? 0 : Number(cached);
   });
 
   const [activeTaskView, setActiveTaskView] = useState(null);
@@ -76,14 +117,14 @@ export const TasksSection = ({ onNavigate }) => {
   const [isFlipped, setIsFlipped] = useState(false);
   const [masteredCards, setMasteredCards] = useState(new Set());
 
-  // Lấy danh sách môn học từ Profile
+  // Lấy danh sách môn học từ Profile (Bọc an toàn JSON.parse)
   const userProfile = useMemo(() => {
     try {
       const p = localStorage.getItem("user_academic_profile");
-      if (!p || p === "undefined") return null;
+      if (!p || p === "undefined" || p === "null") return null;
       const parsed = JSON.parse(p);
       if (Array.isArray(parsed.subjects)) {
-        parsed.subjects = parsed.subjects.filter((s) => s && s !== "undefined" && s.trim() !== "");
+        parsed.subjects = parsed.subjects.filter((s) => s && s !== "undefined" && String(s).trim() !== "");
       }
       return parsed;
     } catch {
@@ -111,7 +152,6 @@ export const TasksSection = ({ onNavigate }) => {
 
   const dailyStorageKey = `daily_tasks_${todaySubject}_${todayStr}`;
 
-  // Kiểm tra trạng thái hoàn thành độc lập
   const [completedQuizDate, setCompletedQuizDate] = useState(() => {
     return (
       localStorage.getItem(`daily_quiz_completed_${todaySubject}_${todayStr}`) === "true" ||
@@ -127,7 +167,6 @@ export const TasksSection = ({ onNavigate }) => {
 
   const isAllDailyDone = completedQuizDate && completedFlashDate;
 
-  // Lấy XP người dùng
   useEffect(() => {
     const fetchXp = async () => {
       try {
@@ -137,16 +176,13 @@ export const TasksSection = ({ onNavigate }) => {
           setUserXp(data.xp_points);
           localStorage.setItem("user_study_xp", String(data.xp_points));
         }
-      } catch (err) {
-        console.warn("Lỗi nạp XP:", err);
-      }
+      } catch (err) {}
     };
     fetchXp();
   }, [myUserId]);
 
-  // GỌI API GEMINI & CƠ SỞ DỮ LIỆU TẠO BÀI TẬP ĐỘNG
   const generateDailyQuizAndFlash = useCallback(async (subjectName) => {
-    const targetSubject = (subjectName && subjectName !== "undefined" && subjectName.trim() !== "")
+    const targetSubject = (subjectName && subjectName !== "undefined" && String(subjectName).trim() !== "")
       ? subjectName
       : "Hệ cơ sở dữ liệu đa phương tiện";
 
@@ -185,7 +221,7 @@ export const TasksSection = ({ onNavigate }) => {
       }
 
       if (generatedQuestions.length === 0) {
-        showToast("Máy chủ đang đồng bộ câu hỏi từ CSDL, vui lòng thử lại sau giây lát!", "error");
+        showToast("Máy chủ đang đồng bộ câu hỏi từ CSDL, vui lòng thử lại sau!", "warning");
         return;
       }
 
@@ -231,9 +267,8 @@ export const TasksSection = ({ onNavigate }) => {
         ...newDailyItems,
         ...prev.filter((p) => p.docName !== `[Hôm nay] ${targetSubject}` && p.docName !== `[Thuật ngữ] ${targetSubject}`)
       ]);
-      showToast(`Đã nạp câu hỏi từ CSDL & AI cho môn ${targetSubject}!`, "success");
+      showToast(`Đã nạp bài tập môn ${targetSubject}!`, "success");
     } catch (err) {
-      console.error("Lỗi sinh bài tập:", err);
       showToast("Lỗi kết nối khi tải bài tập từ CSDL!", "error");
     } finally {
       isGeneratingRef.current = false;
@@ -241,12 +276,11 @@ export const TasksSection = ({ onNavigate }) => {
     }
   }, [userProfile, myUserId, todayStr, dailyStorageKey]);
 
-  // ĐỒNG BỘ DỮ LIỆU
   useEffect(() => {
     let localSavedDaily = [];
     try {
       const cached = localStorage.getItem(dailyStorageKey);
-      if (cached) localSavedDaily = JSON.parse(cached);
+      if (cached && cached !== "undefined") localSavedDaily = JSON.parse(cached);
     } catch (e) {}
 
     fetchTasksFromDB()
@@ -364,7 +398,7 @@ export const TasksSection = ({ onNavigate }) => {
 
     try {
       const cached = localStorage.getItem(dailyStorageKey);
-      if (cached) {
+      if (cached && cached !== "undefined") {
         const parsed = JSON.parse(cached);
         const newCached = parsed.map((t) => (t.id === updated.id ? updated : t));
         localStorage.setItem(dailyStorageKey, JSON.stringify(newCached));
@@ -386,7 +420,7 @@ export const TasksSection = ({ onNavigate }) => {
 
     try {
       const cached = localStorage.getItem(dailyStorageKey);
-      if (cached) {
+      if (cached && cached !== "undefined") {
         const parsed = JSON.parse(cached);
         const newCached = parsed.map((t) => (t.id === taskId ? updated : t));
         localStorage.setItem(dailyStorageKey, JSON.stringify(newCached));
@@ -401,13 +435,6 @@ export const TasksSection = ({ onNavigate }) => {
     }
   };
 
-  const getNormalizedLetter = (opt, index) => {
-    const trimmed = (opt || "").trim();
-    const match = trimmed.match(/^([A-D])[\.\:\s]/i);
-    if (match) return match[1].toUpperCase();
-    return String.fromCharCode(65 + index);
-  };
-
   const answeredCount = Object.keys(selectedAnswers).length;
   const isAllAnswered = currentQuestions.length > 0 && answeredCount === currentQuestions.length;
 
@@ -420,7 +447,6 @@ export const TasksSection = ({ onNavigate }) => {
     });
   }
 
-  // NỘP BÀI: ĐỒNG BỘ CẢ 2 KHÓA STORAGE VÀ PHÁT EVENT CHO HOME
   const handleConfirmCompletion = async () => {
     if (!activeTaskView) return;
 
@@ -429,7 +455,6 @@ export const TasksSection = ({ onNavigate }) => {
 
     if (isQuiz) {
       setCompletedQuizDate(true);
-      // Ghi cả 2 khóa để HomeSection đọc theo cách nào cũng trúng
       localStorage.setItem(`daily_quiz_completed_${todaySubject}_${todayStr}`, "true");
       localStorage.setItem(`daily_quiz_completed_${todayStr}`, "true");
       localStorage.setItem(`daily_completed_date_${todaySubject}`, todayStr);
@@ -452,22 +477,15 @@ export const TasksSection = ({ onNavigate }) => {
       const res = await fetch(`${API_BASE}/streak/check-in`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          userId: myUserId,
-          xpBonus: bonusXp,
-        }),
+        body: JSON.stringify({ userId: myUserId, xpBonus: bonusXp }),
       });
       const data = await res.json();
       if (data.success && data.current_streak) {
         localStorage.setItem("user_current_streak", String(data.current_streak));
       }
-    } catch (err) {
-      console.error("Lỗi lưu streak check-in:", err);
-    }
+    } catch (err) {}
 
-    // Phát custom event thông báo toàn hệ thống để HomeSection tự cập nhật UI
     window.dispatchEvent(new Event("tuna_study_task_completed"));
-
     showToast(`Chúc mừng! Bạn nhận được +${bonusXp} XP!`, "success");
     setActiveTaskView(null);
   };
@@ -632,9 +650,9 @@ export const TasksSection = ({ onNavigate }) => {
                             key={oIdx}
                             disabled={hasAnswered}
                             onClick={() => setSelectedAnswers((prev) => ({ ...prev, [idx]: optLetter }))}
-                            className={`w-full text-left p-2.5 rounded-xl text-xs transition border cursor-pointer ${btnClass}`}
+                            className={`w-full text-left p-2.5 rounded-xl text-xs transition border cursor-pointer font-semibold ${btnClass}`}
                           >
-                            {opt}
+                            {formatDisplayOption(opt, oIdx)}
                           </button>
                         );
                       })}
@@ -1019,7 +1037,7 @@ export const TasksSection = ({ onNavigate }) => {
           Tất cả môn
         </button>
         {(userProfile?.subjects || ["Hệ cơ sở dữ liệu đa phương tiện"])
-          .filter((s) => s && s !== "undefined" && s.trim() !== "")
+          .filter((s) => s && s !== "undefined" && String(s).trim() !== "")
           .map((sub, idx) => (
             <button
               key={idx}
