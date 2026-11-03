@@ -186,31 +186,29 @@ export const ScheduleModal = ({ isOpen, onClose }) => {
   }, [isOpen, fetchStudentSchedules]);
 
   // XỬ LÝ QUÉT NHIỀU ẢNH CÙNG LÚC (MULTIPLE IMAGES)
+// XỬ LÝ QUÉT NHIỀU ẢNH TUẦN TỰ KHÔNG LỖI RAM
   const handleScanScheduleImages = async (e) => {
     const files = Array.from(e.target.files || []);
     if (files.length === 0) return;
 
     setIsScanning(true);
-    setScanStatusText(`Đang xử lý ${files.length} ảnh...`);
+    setScanStatusText(`Đang chuẩn bị ${files.length} ảnh...`);
 
     try {
-      // 1. Nén lần lượt tất cả các ảnh
       const base64List = [];
       for (let i = 0; i < files.length; i++) {
-        setScanStatusText(`Đang tối ưu ảnh ${i + 1}/${files.length}...`);
+        setScanStatusText(`Đang xử lý ảnh ${i + 1}/${files.length}...`);
         const b64 = await compressImage(files[i]);
         base64List.push(b64);
       }
 
-      setScanStatusText("Gemini Vision đang phân tích...");
+      setScanStatusText(`AI đang phân tích cả ${base64List.length} ảnh...`);
 
-      // 2. Gửi mảng ảnh lên Backend OCR
       const res = await fetch(`${API_BASE}/schedules/ocr-parse`, {
         method: "POST",
         headers: getScheduleHeaders(),
         body: JSON.stringify({ 
-          imageBase64: base64List[0],       // Giữ tương thích bản cũ
-          images: base64List                 // Hỗ trợ truyền mảng nhiều ảnh
+          images: base64List 
         }),
       });
 
@@ -218,7 +216,7 @@ export const ScheduleModal = ({ isOpen, onClose }) => {
       if (d.success && Array.isArray(d.data) && d.data.length > 0) {
         setPreviewParsedSchedules(d.data);
       } else {
-        alert(d.message || "Không thể nhận diện lịch học. Vui lòng chụp rõ nét bảng thời khóa biểu!");
+        alert(d.message || "Không thể nhận diện lịch học. Vui lòng chụp rõ nét hơn!");
       }
     } catch (err) {
       alert("Lỗi kết nối máy chủ khi phân tích ảnh!");
@@ -783,8 +781,12 @@ export const ScheduleModal = ({ isOpen, onClose }) => {
       </div>
 
       {/* 7. MODAL XEM TRƯỚC KẾT QUẢ QUÉT ẢNH TKB (PREVIEW MODAL) */}
+{/* MODAL XEM TRƯỚC TẤT CẢ CÁC MÔN ĐÃ QUÉT ĐƯỢC */}
       {previewParsedSchedules && (
-        <div className="position-fixed top-0 start-0 w-100 h-100 d-flex align-items-center justify-content-center p-3 z-50 animate-in fade-in" style={{ backgroundColor: "rgba(15, 23, 42, 0.65)", backdropFilter: "blur(4px)" }}>
+        <div 
+          className="position-fixed top-0 start-0 w-100 h-100 d-flex align-items-center justify-content-center p-3 z-50 animate-in fade-in" 
+          style={{ backgroundColor: "rgba(15, 23, 42, 0.65)", backdropFilter: "blur(4px)" }}
+        >
           <div className="bg-white rounded-3xl p-4 w-full shadow-2xl border border-slate-200 flex flex-col gap-3" style={{ maxWidth: "420px", maxHeight: "88vh" }}>
             <div className="flex items-center justify-between border-b pb-2.5">
               <div className="flex items-center gap-2">
@@ -793,15 +795,16 @@ export const ScheduleModal = ({ isOpen, onClose }) => {
                 </span>
                 <div>
                   <h6 className="font-black text-sm m-0 text-slate-900 leading-tight">
-                    Kết Quả Quét TKB ({previewParsedSchedules.length} môn)
+                    Kết Quả Quét TKB ({previewParsedSchedules.length} môn học)
                   </h6>
-                  <span className="text-[10.5px] text-slate-400 font-medium">Bóc tách tự động bởi Gemini Vision</span>
+                  <span className="text-[10.5px] text-slate-400 font-medium">Đã bóc tách thành công từ các ảnh</span>
                 </div>
               </div>
               <button onClick={() => setPreviewParsedSchedules(null)} className="w-7 h-7 rounded-full bg-slate-100 text-slate-500 hover:bg-slate-200 border-0 cursor-pointer text-xs">✕</button>
             </div>
 
-            <div className="overflow-y-auto space-y-2 pr-1" style={{ maxHeight: "320px" }}>
+            {/* DANH SÁCH CUỘN TẤT CẢ CÁC MÔN */}
+            <div className="overflow-y-auto space-y-2 pr-1" style={{ maxHeight: "380px" }}>
               {previewParsedSchedules.map((item, idx) => (
                 <div key={idx} className="p-3 rounded-2xl bg-slate-50 border border-slate-200/90 text-xs flex flex-col gap-1.5 shadow-2xs">
                   <div className="flex items-start justify-between gap-2">
@@ -809,7 +812,7 @@ export const ScheduleModal = ({ isOpen, onClose }) => {
                       {item.title}
                     </h6>
                     <span className="px-2 py-0.5 rounded-md bg-blue-50 text-blue-700 font-bold text-[10px] shrink-0 border border-blue-200">
-                      Thứ {item.dayOfWeek || 2}
+                      Thứ {item.dayOfWeek || 2} ({item.specificDate ? item.specificDate.split("-").reverse().slice(0, 2).join("/") : ""})
                     </span>
                   </div>
 
@@ -819,6 +822,12 @@ export const ScheduleModal = ({ isOpen, onClose }) => {
                     </span>
                     <span className="font-bold text-slate-700">Phòng: {item.room}</span>
                   </div>
+                  
+                  {item.teacherName && (
+                    <div className="text-[10.5px] text-slate-400">
+                      GV: <b className="text-slate-600">{item.teacherName}</b>
+                    </div>
+                  )}
                 </div>
               ))}
             </div>
@@ -837,7 +846,7 @@ export const ScheduleModal = ({ isOpen, onClose }) => {
                 className="flex-1 py-2.5 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-xs font-black border-0 cursor-pointer shadow-md active:scale-95 transition flex items-center justify-center gap-1.5"
               >
                 <i className="bi bi-check2-circle"></i>
-                <span>Lưu toàn bộ vào TKB</span>
+                <span>Lưu toàn bộ ({previewParsedSchedules.length} môn)</span>
               </button>
             </div>
           </div>
