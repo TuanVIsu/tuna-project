@@ -483,7 +483,7 @@ export const ScheduleModal = ({ isOpen, onClose }) => {
             ) : (
               <>
                 <i className="bi bi-camera-fill text-sm"></i>
-                <span>Quét ảnh AI (1 hoặc nhiều ảnh)</span>
+                <span>Quét ảnh </span>
               </>
             )}
           </button>

@@ -689,10 +689,10 @@ router.delete('/admin/:id', authenticateToken, async (req, res) => {
 // =============================================================================
 // 7. THUẬT TOÁN TỐI ƯU WRR & LỊCH TRÌNH THÍCH ỨNG
 // =============================================================================
-// routes/schedules.routes.js (Cập nhật route /ocr-parse)
+// routes/schedules.routes.js - Route OCR hỗ trợ phân tích đa ảnh TKB chuẩn xác
 router.post('/ocr-parse', async (req, res) => {
   const { imageBase64, images } = req.body;
-  const rawList = Array.isArray(images) && images.length > 0 ? images : [imageBase64];
+  const rawList = Array.isArray(images) && images.length > 0 ? images : (imageBase64 ? [imageBase64] : []);
 
   const validImages = rawList.filter(Boolean);
   if (validImages.length === 0) {
@@ -700,63 +700,81 @@ router.post('/ocr-parse', async (req, res) => {
   }
 
   try {
-    const prompt = `Bạn là chuyên gia phân tích dữ liệu học tập của Trường Đại học.
-Dưới đây là một hoặc nhiều hình ảnh thời khóa biểu của sinh viên.
-Nhiệm vụ: Hãy quét toàn bộ các ảnh và trích xuất tất cả các môn học thành một mảng JSON duy nhất (tránh trùng lặp nếu môn xuất hiện ở cả 2 ảnh).
+    const promptText = `Bạn là trợ lý AI chuyên bóc tách dữ liệu học tập từ ảnh chụp màn hình ứng dụng thời khóa biểu sinh viên.
+Dưới đây là ${validImages.length} ảnh chụp màn hình lịch học/lịch thi (có thể thuộc cùng tuần hoặc nhiều tuần khác nhau).
 
-Quy ước mỗi phần tử:
-- title: Tên môn học chính xác.
-- dayOfWeek: Thứ trong tuần (2: Thứ 2, ..., 7: Thứ 7, 8: Chủ nhật).
-- specificDate: Nếu có ngày YYYY-MM-DD thì ghi, nếu không có thì gán ngày gần nhất của tuần hiện tại.
-- startPeriod: Tiết bắt đầu (1 đến 13).
-- endPeriod: Tiết kết thúc (1 đến 13).
-- room: Phòng học (VD: C201, Google Meet).
-- teacherName: Giảng viên nếu có, nếu không ghi "Giảng viên bộ môn".
-- scheduleType: "study" (học), "exam" (thi), hoặc "online" (trực tuyến).
+HƯỚNG DẪN BÓC TÁCH CHI TIẾT:
+1. Quan sát kỹ từng thẻ môn học trong từng ảnh:
+   - Tên môn học: Nằm ngay dưới chữ "Lịch học" hoặc "Lịch thi" (Ví dụ: "Blockchain căn bản", "Phát triển ứng dụng IoT", "Sinh Hoạt Lớp").
+   - Tiết học: Ví dụ "1 - 5", "6 - 10", "6 - 8", "4 - 4". Tách thành startPeriod (tiết bắt đầu) và endPeriod (tiết kết thúc).
+   - Phòng học: Ví dụ "Phòng máy 4", "C401", "Phòng máy 3", "C305", "C202".
+   - Giảng viên: Ví dụ "Võ Thanh Vinh", "Nguyễn Đình Tứ", "Nguyễn Thị Hồng Hạnh".
+2. Xác định ngày học (specificDate & dayOfWeek):
+   - Nhìn vào khối tiêu đề ngày màu xanh ngay phía trên thẻ môn học (Ví dụ: "Th 3, 03/11", "Th 4, 04/11", "Th 5, 05/11", "Th 6, 06/11", "Th 4, 11/11", "Th 5, 12/11").
+   - Kết hợp với Năm hiển thị ở góc trên (Năm 2026) để tạo định dạng YYYY-MM-DD (Ví dụ: "2026-11-03", "2026-11-04", "2026-11-05", "2026-11-06", "2026-11-11", "2026-11-12").
+   - dayOfWeek: Thứ 2 là 2, Thứ 3 là 3, Thứ 4 là 4, Thứ 5 là 5, Thứ 6 là 6, Thứ 7 là 7, Chủ nhật là 8.
+3. QUY TẮC KHÔNG BỎ SÓT:
+   - Nếu cùng một môn học nhưng học ở 2 ngày khác nhau hoặc 2 ca khác nhau trong cùng ngày (Ví dụ: "Blockchain căn bản" học cả sáng và chiều Thứ 4), thì BẮT BUỘC coi là 2 mục học phần riêng biệt trong mảng kết quả, KHÔNG ĐƯỢC BỎ QUA.
+   - Chỉ loại bỏ nếu trùng khớp 100% cả Tên môn, Ngày học VÀ Tiết học.
 
-YÊU CẦU: Trả về DUY NHẤT một chuỗi JSON hợp lệ không dùng markdown:
+YÊU CẦU: Trả về DUY NHẤT một chuỗi JSON hợp lệ không bọc trong markdown code block, theo cấu trúc:
 [
   {
-    "title": "Tên môn",
-    "dayOfWeek": 2,
-    "specificDate": "2026-11-09",
-    "startPeriod": 1,
-    "endPeriod": 3,
-    "room": "C201",
-    "teacherName": "Giảng viên",
+    "title": "Tên môn học",
+    "dayOfWeek": 3,
+    "specificDate": "2026-11-03",
+    "startPeriod": 4,
+    "endPeriod": 4,
+    "room": "C202",
+    "teacherName": "Nguyễn Thị Hồng Hạnh",
     "scheduleType": "study"
   }
 ]`;
 
-    // Chuẩn bị toàn bộ các ảnh đưa vào mảng nội dung gửi Gemini
-    const contents = [prompt];
+    // Chuẩn hóa cấu trúc parts đúng chuẩn Gemini SDK (1 text part + các inlineData image parts)
+    const parts = [{ text: promptText }];
+
     for (const b64 of validImages) {
       const matches = b64.match(/^data:([A-Za-z-+\/]+);base64,(.+)$/);
       const mimeType = matches ? matches[1] : 'image/jpeg';
       const base64Data = matches ? matches[2] : b64;
-      contents.push({
+
+      parts.push({
         inlineData: {
           data: base64Data,
-          mimeType: mimeType
-        }
+          mimeType: mimeType,
+        },
       });
     }
 
-    const textOutput = await generateContentWithFallback(contents, {
+    // Gọi Gemini với toàn bộ parts của tất cả các ảnh
+    const textOutput = await generateContentWithFallback(parts, {
       responseMimeType: 'application/json',
+      temperature: 0.1, // Giảm temperature để trích xuất chuẩn xác tuyệt đối không bị sáng tạo
     });
 
     const cleanJson = textOutput.replace(/```json|```/g, '').trim();
     let schedulesParsed = JSON.parse(cleanJson || '[]');
 
     if (!Array.isArray(schedulesParsed)) {
-      schedulesParsed = schedulesParsed.schedules || [];
+      schedulesParsed = schedulesParsed.schedules || schedulesParsed.data || [];
     }
+
+    // Lọc trùng lặp an toàn tại backend: cùng ngày, cùng tiết, cùng môn
+    const uniqueMap = new Map();
+    for (const item of schedulesParsed) {
+      const key = `${item.title}_${item.specificDate}_${item.startPeriod}_${item.endPeriod}`;
+      if (!uniqueMap.has(key)) {
+        uniqueMap.set(key, item);
+      }
+    }
+    const finalSchedules = Array.from(uniqueMap.values());
 
     res.json({
       success: true,
-      data: schedulesParsed,
-      message: `Đã nhận diện thành công ${schedulesParsed.length} môn học từ ${validImages.length} ảnh!`,
+      totalScanned: finalSchedules.length,
+      data: finalSchedules,
+      message: `Đã bóc tách thành công ${finalSchedules.length} buổi học từ ${validImages.length} ảnh thời khóa biểu!`,
     });
   } catch (error) {
     console.error("Lỗi OCR nhiều ảnh:", error);
