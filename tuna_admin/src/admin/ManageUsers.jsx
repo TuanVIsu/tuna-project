@@ -46,7 +46,6 @@ export const ManageUsers = () => {
     className: "",
     faculty: "",
     totalCredits: 0,
-    isActive: true,
   });
 
   const getHeaders = useCallback(() => {
@@ -113,7 +112,6 @@ export const ManageUsers = () => {
   const fetchUsers = useCallback(async () => {
     setLoading(true);
     try {
-      // Chỉ gửi lọc drop-down lên backend, search tự nhiên thực hiện tại client để tránh mất dấu tiếng Việt
       const q = new URLSearchParams({
         major: selectedMajor,
         cohort: selectedCohort,
@@ -138,7 +136,6 @@ export const ManageUsers = () => {
     }
   }, [safeFetchUsersApi]);
 
-  // Giữ ref để Socket gọi lại luôn là phiên bản mới nhất mà không gây re-connect socket
   const fetchUsersRef = useRef(fetchUsers);
   const fetchPendingUsersRef = useRef(fetchPendingUsers);
   useEffect(() => {
@@ -153,7 +150,7 @@ export const ManageUsers = () => {
     setActiveMenuData(null);
   }, [fetchUsers, fetchPendingUsers]);
 
-  // SOCKET REALTIME: Kết nối 1 lần duy nhất khi component mount
+  // Socket realtime
   useEffect(() => {
     const socketUrl = API_BASE.replace('/api', '');
     const socket = io(socketUrl);
@@ -169,63 +166,91 @@ export const ManageUsers = () => {
     };
   }, []);
 
-  // TÁCH THỰC THỂ TỰ NHIÊN (NL SEARCH)
-  const parsedNL = useMemo(() => {
-    const raw = searchTerm.trim();
-    if (!raw) return null;
+  // Tách thực thể tìm kiếm thông minh
+// Hàm tạo tên viết tắt từ chuỗi tiếng Việt (VD: "Hệ Thống Thông Tin" -> "httt")
+const getInitials = (str) => {
+  if (!str) return "";
+  return removeVietnameseTones(str)
+    .split(/\s+/)
+    .map((word) => word[0])
+    .join("");
+};
 
-    const normalized = removeVietnameseTones(raw);
-    let detectedCohort = null;
-    let detectedMajor = null;
-    let detectedStatus = null;
+// ... trong useMemo parsedNL:
+const parsedNL = useMemo(() => {
+  const raw = searchTerm.trim();
+  if (!raw) return null;
 
-    const cohortMatch = normalized.match(/k\s*(\d{2})|khoa\s*(\d{2})/);
-    if (cohortMatch) {
-      const num = cohortMatch[1] || cohortMatch[2];
-      detectedCohort = `K${num}`;
+  const normalized = removeVietnameseTones(raw);
+  let detectedCohort = null;
+  let detectedMajor = null;
+  let detectedStatus = null;
+
+  // 1. Nhận diện Khóa tuyển sinh
+  const cohortMatch = normalized.match(/k\s*(\d{2})|khoa\s*(\d{2})/);
+  if (cohortMatch) {
+    const num = cohortMatch[1] || cohortMatch[2];
+    detectedCohort = `K${num}`;
+  }
+
+  // 2. Nhận diện Chuyên ngành HOÀN TOÀN TỰ ĐỘNG TỪ CSDL
+  if (Array.isArray(options.majors)) {
+    for (const m of options.majors) {
+      const normMajorName = removeVietnameseTones(m.majorName || "");
+      const normMajorCode = removeVietnameseTones(m.majorCode || "");
+      const initials = getInitials(m.majorName || "");
+
+      // Khớp theo: Tên ngành không dấu, Mã ngành, hoặc Chữ cái viết tắt
+      const isMatch =
+        (normMajorName && normalized.includes(normMajorName)) ||
+        (normMajorCode && normalized.includes(normMajorCode)) ||
+        (initials && new RegExp(`\\b${initials}\\b`).test(normalized));
+
+      if (isMatch) {
+        detectedMajor = m.majorName;
+        break;
+      }
     }
+  }
 
-    if (normalized.includes("he thong thong tin") || normalized.includes("httt")) {
-      detectedMajor = "Hệ Thống Thông Tin";
-    } else if (normalized.includes("cong nghe thong tin") || normalized.includes("cntt")) {
-      detectedMajor = "Công Nghệ Thông Tin";
-    } else if (normalized.includes("ky thuat phan mem") || normalized.includes("ktpm")) {
-      detectedMajor = "Kỹ Thuật Phần Mềm";
-    } else if (normalized.includes("an ninh mang") || normalized.includes("anm")) {
-      detectedMajor = "An Ninh Mạng";
-    }
+  // 3. Nhận diện Trạng thái phê duyệt
+  if (normalized.includes("cho duyet") || normalized.includes("chua duyet") || normalized.includes("pending")) {
+    detectedStatus = "pending";
+  } else if (normalized.includes("da vao lop") || normalized.includes("da duyet") || normalized.includes("approved")) {
+    detectedStatus = "approved";
+  } else if (normalized.includes("tu choi") || normalized.includes("rejected")) {
+    detectedStatus = "rejected";
+  }
 
-    if (normalized.includes("cho duyet") || normalized.includes("chua duyet") || normalized.includes("pending")) {
-      detectedStatus = "pending";
-    } else if (normalized.includes("da vao lop") || normalized.includes("da duyet") || normalized.includes("approved")) {
-      detectedStatus = "approved";
-    } else if (normalized.includes("tu choi") || normalized.includes("rejected")) {
-      detectedStatus = "rejected";
-    } else if (normalized.includes("bi khoa") || normalized.includes("khoa") || normalized.includes("blocked")) {
-      detectedStatus = "blocked";
-    } else if (normalized.includes("hoat dong") || normalized.includes("active")) {
-      detectedStatus = "active";
-    }
+  // 4. Lọc bỏ các từ khóa cấu trúc để lấy ra keyword tên/MSSV thực tế
+  let cleanedKeyword = normalized
+    .replace(/sinh vien|sv|danh sach|tim|ho so|tat ca|cho duyet|chua duyet|da duyet|da vao lop|tu choi/g, "")
+    .replace(/k\s*\d{2}|khoa\s*\d{2}/g, "");
 
-    let cleanedKeyword = normalized
-      .replace(/sinh vien|sv|danh sach|tim|ho so|tat ca|cho duyet|chua duyet|da duyet|da vao lop|bi khoa|hoat dong|tu choi/g, "")
-      .replace(/k\s*\d{2}|khoa\s*\d{2}/g, "")
-      .replace(/he thong thong tin|httt|cong nghe thong tin|cntt|ky thuat phan mem|ktpm|an ninh mang|anm/g, "")
-      .trim();
+  // Tự động xóa tên ngành/mã ngành tìm được ra khỏi keyword
+  if (Array.isArray(options.majors)) {
+    options.majors.forEach((m) => {
+      const normName = removeVietnameseTones(m.majorName || "");
+      const normCode = removeVietnameseTones(m.majorCode || "");
+      const initials = getInitials(m.majorName || "");
+      if (normName) cleanedKeyword = cleanedKeyword.replace(new RegExp(normName, "g"), "");
+      if (normCode) cleanedKeyword = cleanedKeyword.replace(new RegExp(normCode, "g"), "");
+      if (initials) cleanedKeyword = cleanedKeyword.replace(new RegExp(`\\b${initials}\\b`, "g"), "");
+    });
+  }
 
-    return {
-      cohort: detectedCohort,
-      major: detectedMajor,
-      status: detectedStatus,
-      keyword: cleanedKeyword,
-    };
-  }, [searchTerm]);
+  return {
+    cohort: detectedCohort,
+    major: detectedMajor,
+    status: detectedStatus,
+    keyword: cleanedKeyword.trim(),
+  };
+}, [searchTerm, options.majors]); // Bắt buộc phụ thuộc options.majors để cập nhật khi API tải xong
 
   const filteredUsers = useMemo(() => {
     let source = activeTab === "pending" ? pendingUsers : users;
 
     return source.filter((u) => {
-      // 1. Khóa đào tạo (Tránh bắt nhầm đuôi MSSV)
       if (selectedCohort !== "all") {
         const cohortDigits = selectedCohort.replace(/\D/g, "");
         const uClass = String(u.className || "").toUpperCase();
@@ -244,11 +269,9 @@ export const ManageUsers = () => {
         if (!matchCohort) return false;
       }
 
-      // 2. Chuyên ngành
       if (selectedMajor !== "all" && u.faculty !== selectedMajor) return false;
       if (selectedClass !== "all" && !String(u.className || "").toLowerCase().includes(selectedClass.toLowerCase())) return false;
 
-      // 3. Search tự nhiên
       if (parsedNL) {
         if (parsedNL.major) {
           const uFaculty = removeVietnameseTones(u.faculty || "");
@@ -256,8 +279,6 @@ export const ManageUsers = () => {
           if (!uFaculty.includes(targetFac)) return false;
         }
 
-        if (parsedNL.status === "blocked" && u.isActive !== false) return false;
-        if (parsedNL.status === "active" && u.isActive === false) return false;
         if (parsedNL.status === "pending" && (u.verificationStatus !== "pending" && u.isVerified)) return false;
         if (parsedNL.status === "approved" && u.verificationStatus !== "approved" && !u.isVerified) return false;
         if (parsedNL.status === "rejected" && u.verificationStatus !== "rejected") return false;
@@ -297,39 +318,6 @@ export const ManageUsers = () => {
     }
   };
 
-  const handleResetStudentCode = async (user) => {
-    setActiveMenuData(null);
-    const confirmMsg = `Xác nhận thu hồi MSSV [${user.studentCode}] khỏi tài khoản "${user.name}"?\n\nSau khi thu hồi, mã này sẽ được giải phóng hoàn toàn và tài khoản sẽ chuyển về hàng chờ duyệt.`;
-    if (!window.confirm(confirmMsg)) return;
-
-    try {
-      const d = await safeFetchUsersApi(`/${user.id}/reset-student-code`, {
-        method: "PATCH",
-      });
-      if (d.success) {
-        alert(d.message);
-        await Promise.all([fetchUsers(), fetchPendingUsers()]);
-      } else {
-        alert(d.message || "Không thể thu hồi MSSV!");
-      }
-    } catch (err) {
-      alert("Lỗi kết nối máy chủ khi thu hồi MSSV");
-    }
-  };
-
-  const handleToggleStatus = async (user) => {
-    setActiveMenuData(null);
-    try {
-      const d = await safeFetchUsersApi(`/${user.id}/toggle-status`, { method: "PATCH" });
-      if (d.success) {
-        setUsers((prev) => prev.map((u) => (u.id === user.id ? { ...u, isActive: d.isActive } : u)));
-        setPendingUsers((prev) => prev.map((u) => (u.id === user.id ? { ...u, isActive: d.isActive } : u)));
-      }
-    } catch (e) {
-      alert("Lỗi máy chủ khi cập nhật trạng thái");
-    }
-  };
-
   const handleDeleteUser = async (userId, name) => {
     setActiveMenuData(null);
     if (!window.confirm(`Xác nhận xóa vĩnh viễn tài khoản "${name}" khỏi cơ sở dữ liệu?`)) return;
@@ -357,7 +345,6 @@ export const ManageUsers = () => {
       className: user.className || "",
       faculty: user.faculty || options.majors[0]?.majorName || "Hệ Thống Thông Tin",
       totalCredits: user.totalCredits || 0,
-      isActive: user.isActive !== false,
     });
   };
 
@@ -373,8 +360,7 @@ export const ManageUsers = () => {
       if (d.success) {
         setEditingUser(null);
         await Promise.all([fetchUsers(), fetchPendingUsers()]);
-        alert(d.message || "Đã cập nhật hồ sơ thành công! Hồ sơ đã được chuyển về tab Chờ duyệt.");
-        // Chuyển sang tab pending để tiện theo dõi
+        alert(d.message || "Đã cập nhật hồ sơ! Sinh viên đã được chuyển về tab Chờ duyệt.");
         setActiveTab("pending");
       } else {
         alert(d.message || d.error || "Cập nhật thất bại!");
@@ -392,7 +378,7 @@ export const ManageUsers = () => {
     }
     const rect = e.currentTarget.getBoundingClientRect();
     const spaceBelow = window.innerHeight - rect.bottom;
-    const menuHeight = 220;
+    const menuHeight = 150;
 
     let top = rect.bottom + 6;
     if (spaceBelow < menuHeight) {
@@ -411,7 +397,7 @@ export const ManageUsers = () => {
 
   return (
     <div className="d-flex flex-column gap-4 w-100" style={{ color: "#1e293b" }}>
-      {/* 1. KHỐI THẺ CARD ĐIỀU KHIỂN & BỘ LỌC */}
+      {/* 1. KHỐI ĐIỀU KHIỂN & BỘ LỌC */}
       <div 
         className="bg-white rounded-4 p-4 border shadow-sm mb-2"
         style={{ borderColor: "#e2e8f0", boxShadow: "0 2px 8px rgba(0,0,0,0.02)" }}
@@ -481,7 +467,7 @@ export const ManageUsers = () => {
                 type="text"
                 value={searchTerm}
                 onChange={(e) => setSearchTerm(e.target.value)}
-                placeholder="VD: K23 HTTT chờ duyệt, hoặc tên, MSSV..."
+                placeholder="VD: K23 HTTT, hoặc tên, MSSV..."
                 className="form-control form-control-sm rounded-end-3 bg-white border-start-0 shadow-none fw-semibold"
                 style={{ fontSize: "12px", borderColor: "#e2e8f0", height: "32px" }}
               />
@@ -577,25 +563,24 @@ export const ManageUsers = () => {
         </div>
 
         <div className="table-responsive" style={{ minHeight: "260px" }}>
-          <table className="table table-hover align-middle mb-0 text-nowrap" style={{ minWidth: "920px" }}>
+          <table className="table table-hover align-middle mb-0 text-nowrap" style={{ minWidth: "860px" }}>
             <thead className="table-light">
               <tr style={{ fontSize: "11px", color: "#64748b", letterSpacing: "0.5px" }} className="text-uppercase">
-                <th className="ps-3" style={{ width: "260px" }}>Sinh Viên</th>
+                <th className="ps-3" style={{ width: "270px" }}>Sinh Viên</th>
                 <th style={{ width: "160px" }}>MSSV / Lớp</th>
-                <th style={{ width: "170px" }}>Chuyên Ngành</th>
-                <th className="text-center" style={{ width: "90px" }}>Tín Chỉ</th>
+                <th style={{ width: "180px" }}>Chuyên Ngành</th>
+                <th className="text-center" style={{ width: "100px" }}>Tín Chỉ</th>
                 <th className="text-center" style={{ width: "110px" }}>Chuỗi Học</th>
-                <th className="text-center" style={{ width: "120px" }}>Phê Duyệt</th>
-                <th className="text-center" style={{ width: "100px" }}>Trạng Thái</th>
+                <th className="text-center" style={{ width: "130px" }}>Phê Duyệt</th>
                 <th className="text-end pe-3" style={{ width: "70px" }}>Thao Tác</th>
               </tr>
             </thead>
             <tbody style={{ fontSize: "13px" }}>
               {loading ? (
-                <tr><td colSpan={8} className="text-center py-5 text-muted">Đang nạp dữ liệu...</td></tr>
+                <tr><td colSpan={7} className="text-center py-5 text-muted">Đang nạp dữ liệu...</td></tr>
               ) : paginatedData.length === 0 ? (
                 <tr>
-                  <td colSpan={8} className="text-center py-5 text-muted">
+                  <td colSpan={7} className="text-center py-5 text-muted">
                     {activeTab === "pending" ? "Không có sinh viên nào đang chờ duyệt vào lớp." : "Không tìm thấy sinh viên nào phù hợp."}
                   </td>
                 </tr>
@@ -611,10 +596,10 @@ export const ManageUsers = () => {
                           style={{ width: "36px", height: "36px", objectFit: "cover" }}
                         />
                         <div>
-                          <span className="fw-bold text-dark d-block text-truncate" style={{ maxWidth: "180px" }}>
+                          <span className="fw-bold text-dark d-block text-truncate" style={{ maxWidth: "190px" }}>
                             {u.name}
                           </span>
-                          <span className="text-muted d-block text-truncate font-mono" style={{ fontSize: "10.5px", maxWidth: "180px" }}>
+                          <span className="text-muted d-block text-truncate font-mono" style={{ fontSize: "10.5px", maxWidth: "190px" }}>
                             {u.email || u.zaloId || "Chưa có email"}
                           </span>
                         </div>
@@ -670,11 +655,6 @@ export const ManageUsers = () => {
                           ⏳ Chờ duyệt
                         </span>
                       )}
-                    </td>
-                    <td className="text-center">
-                      <span className={`badge rounded-pill px-2 py-0.5 fw-bold ${u.isActive !== false ? "bg-success-subtle text-success border border-success-subtle" : "bg-danger-subtle text-danger border border-danger-subtle"}`} style={{ fontSize: "10.5px" }}>
-                        {u.isActive !== false ? "Hoạt động" : "Bị khóa"}
-                      </span>
                     </td>
                     <td className="text-end pe-3">
                       <button
@@ -733,13 +713,13 @@ export const ManageUsers = () => {
         )}
       </div>
 
-      {/* Floating Menu */}
+      {/* Floating Menu rút gọn (Chỉ giữ Duyệt, Sửa hồ sơ và Xóa) */}
       {activeMenuData && (
         <div
           ref={menuDropdownRef}
           className="card border-0 shadow-lg rounded-3 py-1 text-start position-fixed"
           style={{
-            width: "190px",
+            width: "180px",
             backgroundColor: "#ffffff",
             border: "1px solid #e2e8f0",
             fontSize: "12px",
@@ -759,7 +739,11 @@ export const ManageUsers = () => {
                 <i className="bi bi-check-circle-fill"></i>
                 <span>Duyệt vào lớp</span>
               </button>
-              <button type="button" onClick={() => handleVerify(activeMenuData.user.id, "reject")} className="dropdown-item d-flex align-items-center gap-2 px-3 py-1.5 text-danger border-0 bg-transparent fw-bold cursor-pointer">
+              <button 
+                type="button" 
+                onClick={() => handleVerify(activeMenuData.user.id, "reject")} 
+                className="dropdown-item d-flex align-items-center gap-2 px-3 py-1.5 text-danger border-0 bg-transparent fw-bold cursor-pointer"
+              >
                 <i className="bi bi-x-circle-fill"></i>
                 <span>Từ chối</span>
               </button>
@@ -767,28 +751,22 @@ export const ManageUsers = () => {
             </>
           )}
 
-          <button type="button" onClick={() => handleOpenEdit(activeMenuData.user)} className="dropdown-item d-flex align-items-center gap-2 px-3 py-1.5 text-dark border-0 bg-transparent cursor-pointer">
+          <button 
+            type="button" 
+            onClick={() => handleOpenEdit(activeMenuData.user)} 
+            className="dropdown-item d-flex align-items-center gap-2 px-3 py-1.5 text-dark border-0 bg-transparent cursor-pointer fw-semibold"
+          >
             <i className="bi bi-pencil text-primary"></i>
             <span>Chỉnh sửa hồ sơ</span>
           </button>
 
-          {activeMenuData.user.studentCode && (
-            <button
-              type="button"
-              onClick={() => handleResetStudentCode(activeMenuData.user)}
-              className="dropdown-item d-flex align-items-center gap-2 px-3 py-1.5 text-warning border-0 bg-transparent fw-semibold cursor-pointer"
-            >
-              <i className="bi bi-person-x-fill text-warning"></i>
-              <span>Thu hồi MSSV</span>
-            </button>
-          )}
-
-          <button type="button" onClick={() => handleToggleStatus(activeMenuData.user)} className={`dropdown-item d-flex align-items-center gap-2 px-3 py-1.5 border-0 bg-transparent fw-semibold cursor-pointer ${activeMenuData.user.isActive ? "text-warning" : "text-success"}`}>
-            <i className={`bi ${activeMenuData.user.isActive ? "bi-lock-fill" : "bi-unlock-fill"}`}></i>
-            <span>{activeMenuData.user.isActive ? "Khóa tài khoản" : "Mở tài khoản"}</span>
-          </button>
           <div className="dropdown-divider my-1 border-top" style={{ borderColor: "#f1f5f9" }}></div>
-          <button type="button" onClick={() => handleDeleteUser(activeMenuData.user.id, activeMenuData.user.name)} className="dropdown-item d-flex align-items-center gap-2 px-3 py-1.5 text-danger border-0 bg-transparent cursor-pointer">
+
+          <button 
+            type="button" 
+            onClick={() => handleDeleteUser(activeMenuData.user.id, activeMenuData.user.name)} 
+            className="dropdown-item d-flex align-items-center gap-2 px-3 py-1.5 text-danger border-0 bg-transparent cursor-pointer fw-semibold"
+          >
             <i className="bi bi-trash3"></i>
             <span>Xóa sinh viên</span>
           </button>
@@ -811,7 +789,7 @@ export const ManageUsers = () => {
                 <div className="modal-body px-4 py-3 d-flex flex-column gap-2.5">
                   <div className="alert alert-warning py-1.5 px-2.5 small mb-1 border-warning-subtle text-dark" style={{ fontSize: "11px" }}>
                     <i className="bi bi-info-circle-fill me-1 text-warning"></i>
-                    Lưu ý: Mọi chỉnh sửa hồ sơ sẽ đưa sinh viên về hàng <b>Chờ duyệt (Pending)</b> để xác thực lại.
+                    Lưu ý: Mọi chỉnh sửa sẽ đưa sinh viên về hàng <b>Chờ duyệt (Pending)</b> để xác thực lại.
                   </div>
 
                   <div>
