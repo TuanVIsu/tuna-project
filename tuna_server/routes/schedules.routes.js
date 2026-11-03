@@ -10,7 +10,7 @@ const xlsx = require('xlsx');
 const upload = multer({ storage: multer.memoryStorage() });
 const WRR_SERVICE_URL = process.env.WRR_SERVICE_URL || 'https://tuna-wrr-service.onrender.com';
 
-// Helper trích xuất user_id nguyên số từ request (hỗ trợ cả JWT token lẫn x-user-id header)
+// Helper: Phân giải user_id (INTEGER) từ request (hỗ trợ JWT token, x-user-id header, email hoặc MSSV)
 const resolveUserId = async (req) => {
   if (req.user?.id) return req.user.id;
   const rawId = String(
@@ -34,7 +34,7 @@ const resolveUserId = async (req) => {
   return userRes.rows[0]?.id || null;
 };
 
-// Helper chuẩn hóa ngày tháng theo múi giờ địa phương YYYY-MM-DD
+// Helper: Chuẩn hóa ngày tháng địa phương YYYY-MM-DD (chống lỗi timezone UTC trên server)
 const formatLocalDate = (d = new Date()) => {
   const year = d.getFullYear();
   const month = String(d.getMonth() + 1).padStart(2, '0');
@@ -42,7 +42,7 @@ const formatLocalDate = (d = new Date()) => {
   return `${year}-${month}-${day}`;
 };
 
-// Helper chuẩn hóa ngày từ Excel
+// Helper: Chuẩn hóa ngày từ Excel
 const parseExcelDate = (val) => {
   if (!val) return null;
   if (val instanceof Date && !isNaN(val.getTime())) {
@@ -68,7 +68,7 @@ const parseExcelDate = (val) => {
   return null;
 };
 
-// Helper chuẩn hóa schedule_type tương thích với CHECK constraint của DB
+// Helper: Chuẩn hóa schedule_type tương thích với CHECK constraint của DB
 const normalizeScheduleType = (type) => {
   const t = String(type || '').toLowerCase();
   if (t.includes('exam') || t.includes('thi')) return 'exam';
@@ -120,77 +120,107 @@ const validateMajorAndCohort = async (majorName, cohort) => {
 };
 
 // =============================================================================
-// 1. QUÉT ẢNH THỜI KHÓA BIỂU BẰNG GEMINI VISION (OCR)
+// 1. QUÉT ẢNH THỜI KHÓA BIỂU BẰNG GEMINI VISION (HỖ TRỢ ĐA ẢNH ĐỘC LẬP - BÓC TÁCH TOÀN BỘ CÁC MÔN)
 // =============================================================================
 router.post('/ocr-parse', async (req, res) => {
-  const { imageBase64 } = req.body;
+  const { imageBase64, images } = req.body;
+  const rawList = Array.isArray(images) && images.length > 0 ? images : (imageBase64 ? [imageBase64] : []);
 
-  if (!imageBase64) {
-    return res.status(400).json({ success: false, message: 'Vui lòng cung cấp hình ảnh thời khóa biểu!' });
+  const validImages = rawList.filter(Boolean);
+  if (validImages.length === 0) {
+    return res.status(400).json({ success: false, message: 'Vui lòng cung cấp ít nhất một hình ảnh thời khóa biểu!' });
   }
 
   try {
-    const matches = imageBase64.match(/^data:([A-Za-z-+\/]+);base64,(.+)$/);
-    const mimeType = matches ? matches[1] : 'image/jpeg';
-    const base64Data = matches ? matches[2] : imageBase64;
+    const promptSingleImage = `Bạn là chuyên gia phân tích dữ liệu học tập từ ảnh chụp màn hình thời khóa biểu trường đại học.
+Nhiệm vụ: Hãy quan sát kỹ toàn bộ ảnh và trích xuất TẤT CẢ các tiết học/môn học có trong ảnh thành một mảng JSON.
 
-    const prompt = `Bạn là trợ lý AI học tập thông minh của Trường Đại học.
-Nhiệm vụ: Phân tích hình ảnh Thời khóa biểu (ảnh chụp màn hình cổng đào tạo hoặc ảnh chụp TKB) và trích xuất tất cả các tiết học thành mảng JSON.
-Quy tắc:
-- title: Tên môn học chính xác (bỏ mã môn dài dòng nếu có).
-- dayOfWeek: Thứ trong tuần (2: Thứ 2, 3: Thứ 3, ..., 7: Thứ 7, 8: Chủ nhật).
-- specificDate: Nếu trên ảnh có ngày cụ thể hãy điền dạng YYYY-MM-DD. Nếu chỉ có Thứ, tính theo tuần hiện tại hoặc để ngày gần nhất.
-- startPeriod: Tiết bắt đầu (số nguyên 1 đến 13).
-- endPeriod: Tiết kết thúc (số nguyên 1 đến 13).
-- room: Phòng học (VD: C201, Hội trường A, hoặc "Trực tuyến").
-- teacherName: Tên giảng viên nếu có, nếu không ghi "Giảng viên bộ môn".
-- scheduleType: "study" (học lý thuyết/thực hành), "exam" (nếu là lịch thi), hoặc "online" (nếu ghi học Google Meet/Zoom).
+HƯỚNG DẪN BÓC TÁCH:
+- title: Tên môn học chính xác (Nằm ngay dưới dòng "Lịch học" hoặc "Lịch thi").
+- startPeriod: Tiết bắt đầu (số nguyên từ 1 đến 13).
+- endPeriod: Tiết kết thúc (số nguyên từ 1 đến 13).
+- room: Phòng học (VD: "Phòng máy 4", "C401", "Phòng máy 3", "C305", "C202").
+- teacherName: Tên giảng viên nếu có (VD: "Võ Thanh Vinh", "Nguyễn Đình Tứ", "Nguyễn Thị Hồng Hạnh"). Nếu không có thì ghi "Giảng viên bộ môn".
+- specificDate: Đọc khối tiêu đề ngày màu xanh phía trên thẻ môn (VD: "Th 3, 03/11", "Th 4, 04/11", "Th 5, 05/11", "Th 6, 06/11", "Th 4, 11/11", "Th 5, 12/11") kết hợp với Năm (2026) hiển thị ở góc trên cùng bên trái để chuyển thành định dạng YYYY-MM-DD (Ví dụ: "2026-11-03", "2026-11-04", "2026-11-05", "2026-11-06", "2026-11-11", "2026-11-12").
+- dayOfWeek: Thứ 2 là 2, Thứ 3 là 3, ..., Thứ 7 là 7, Chủ nhật là 8.
+- scheduleType: "study" (học lý thuyết/thực hành), "exam" (nếu là lịch thi), hoặc "online" (nếu ghi học trực tuyến).
 
-YÊU CẦU: Trả về DUY NHẤT một chuỗi JSON hợp lệ không dùng markdown code block:
+QUY TẮC BẮT BUỘC:
+- Nếu cùng một môn học nhưng diễn ra vào 2 ngày khác nhau, hoặc 2 ca khác nhau trong cùng một ngày (ví dụ ca sáng và ca chiều), thì BẮT BUỘC ghi nhận là các phần tử riêng biệt trong mảng kết quả, KHÔNG ĐƯỢC BỎ QUA.
+
+YÊU CẦU: Trả về DUY NHẤT một chuỗi JSON hợp lệ không bọc trong markdown code block:
 [
   {
     "title": "Tên môn",
-    "dayOfWeek": 2,
-    "specificDate": "2026-11-09",
-    "startPeriod": 1,
-    "endPeriod": 3,
-    "room": "C201",
-    "teacherName": "ThS. Nguyễn Văn A",
+    "dayOfWeek": 3,
+    "specificDate": "2026-11-03",
+    "startPeriod": 4,
+    "endPeriod": 4,
+    "room": "C202",
+    "teacherName": "Giảng viên",
     "scheduleType": "study"
   }
 ]`;
 
-    const imagePart = {
-      inlineData: {
-        data: base64Data,
-        mimeType: mimeType,
-      },
-    };
+    let allExtracted = [];
 
-    const textOutput = await generateContentWithFallback([prompt, imagePart], {
-      responseMimeType: 'application/json',
-    });
+    // Quét độc lập từng bức ảnh qua Gemini Vision để đảm bảo không bị quá tải payload hoặc sót môn
+    for (let i = 0; i < validImages.length; i++) {
+      const b64 = validImages[i];
+      const matches = b64.match(/^data:([A-Za-z-+\/]+);base64,(.+)$/);
+      const mimeType = matches ? matches[1] : 'image/jpeg';
+      const base64Data = matches ? matches[2] : b64;
 
-    const cleanJson = textOutput.replace(/```json|```/g, '').trim();
-    let schedulesParsed = JSON.parse(cleanJson || '[]');
+      const imagePart = {
+        inlineData: {
+          data: base64Data,
+          mimeType: mimeType,
+        },
+      };
 
-    if (!Array.isArray(schedulesParsed)) {
-      schedulesParsed = schedulesParsed.schedules || [];
+      try {
+        const textOutput = await generateContentWithFallback([promptSingleImage, imagePart], {
+          responseMimeType: 'application/json',
+          temperature: 0.1,
+        });
+
+        const cleanJson = textOutput.replace(/```json|```/g, '').trim();
+        const parsed = JSON.parse(cleanJson || '[]');
+        if (Array.isArray(parsed)) {
+          allExtracted.push(...parsed);
+        } else if (parsed && Array.isArray(parsed.schedules)) {
+          allExtracted.push(...parsed.schedules);
+        }
+      } catch (subErr) {
+        console.warn(`Lỗi bóc tách ảnh thứ ${i + 1}:`, subErr.message);
+      }
     }
+
+    // Lọc trùng lặp an toàn: Chỉ loại trừ nếu trùng cả môn, ngày học VÀ tiết học
+    const uniqueMap = new Map();
+    for (const item of allExtracted) {
+      if (!item.title) continue;
+      const key = `${item.title.trim()}_${item.specificDate}_${item.startPeriod}_${item.endPeriod}`;
+      if (!uniqueMap.has(key)) {
+        uniqueMap.set(key, item);
+      }
+    }
+    const finalSchedules = Array.from(uniqueMap.values());
 
     res.json({
       success: true,
-      data: schedulesParsed,
-      message: `Đã nhận diện thành công ${schedulesParsed.length} môn học từ ảnh!`,
+      totalScanned: finalSchedules.length,
+      data: finalSchedules,
+      message: `Đã bóc tách thành công ${finalSchedules.length} buổi học từ ${validImages.length} ảnh thời khóa biểu!`,
     });
   } catch (error) {
-    console.error("Lỗi OCR Thời khóa biểu:", error);
+    console.error("Lỗi OCR nhiều ảnh:", error);
     res.status(500).json({ success: false, message: "Không thể phân tích ảnh: " + error.message });
   }
 });
 
 // =============================================================================
-// 2. LƯU HÀNG LOẠT TIẾT HỌC SAU KHI QUÉT ẢNH OCR
+// 2. LƯU HÀNG LOẠT TIẾT HỌC VÀO CSDL SAU KHI QUÉT ẢNH OCR
 // =============================================================================
 router.post('/bulk-import', async (req, res) => {
   const userId = await resolveUserId(req);
@@ -360,7 +390,6 @@ router.get('/student-schedule', async (req, res) => {
     const cohort = cohortMatch ? `K${cohortMatch[1]}` : 'K23';
     const cleanCohort = cohort.replace(/\D/g, '');
 
-    // Truy vấn kết hợp: Lịch chính khóa của lớp/khóa VÀ Lịch do sinh viên tự thêm (schedule_scope = 'personal')
     let scheduleQuery = `
       SELECT 
         sch.id,
@@ -421,7 +450,7 @@ router.get('/student-schedule', async (req, res) => {
 });
 
 // =============================================================================
-// 5. THÊM / XÓA LỊCH CÁ NHÂN (Tương thích trực tiếp với ScheduleModal.jsx)
+// 5. THÊM / XÓA LỊCH CÁ NHÂN (HỖ TRỢ LINH HOẠT CẢ JWT TOKEN & X-USER-ID)
 // =============================================================================
 router.post(['/', '/schedules'], async (req, res) => {
   const userId = await resolveUserId(req);
@@ -497,7 +526,6 @@ router.delete(['/:id', '/schedules/:id'], async (req, res) => {
   const { id } = req.params;
 
   try {
-    // Cho phép xóa nếu đúng là lịch do user đó tạo, hoặc nếu là admin
     let delRes;
     if (userId) {
       delRes = await pool.query(
@@ -518,7 +546,7 @@ router.delete(['/:id', '/schedules/:id'], async (req, res) => {
 });
 
 // =============================================================================
-// 6. CÁC API ADMIN XẾP LỊCH CHÍNH KHÓA & NẠP EXCEL (GIỮ NGUYÊN)
+// 6. APIS ADMIN QUẢN LÝ THỜI KHÓA BIỂU CHÍNH KHÓA
 // =============================================================================
 router.get('/admin/list', authenticateToken, async (req, res) => {
   const { major, cohort, year, semester, type, className } = req.query;
@@ -687,101 +715,279 @@ router.delete('/admin/:id', authenticateToken, async (req, res) => {
 });
 
 // =============================================================================
-// 7. THUẬT TOÁN TỐI ƯU WRR & LỊCH TRÌNH THÍCH ỨNG
+// 7. THUẬT TOÁN TỐI ƯU WRR (100% DỮ LIỆU ĐỘNG TỪ CSDL, KHÔNG FIX CỨNG)
 // =============================================================================
-// routes/schedules.routes.js (Route OCR quét đa ảnh độc lập - Chống sót môn)
-router.post('/ocr-parse', async (req, res) => {
-  const { imageBase64, images } = req.body;
-  const rawList = Array.isArray(images) && images.length > 0 ? images : (imageBase64 ? [imageBase64] : []);
-
-  const validImages = rawList.filter(Boolean);
-  if (validImages.length === 0) {
-    return res.status(400).json({ success: false, message: 'Vui lòng cung cấp ít nhất một hình ảnh thời khóa biểu!' });
+router.post(['/generate-wrr-plan', '/timelines/generate-wrr-plan'], async (req, res) => {
+  const userId = await resolveUserId(req);
+  if (!userId) {
+    return res.status(401).json({ success: false, message: 'Cần đăng nhập để tạo lịch trình!' });
   }
 
   try {
-    const promptSingleImage = `Bạn là trợ lý AI số hóa thời khóa biểu sinh viên.
-Hãy đọc ảnh chụp màn hình lịch học này và trích xuất TẤT CẢ các tiết học hiển thị trong ảnh thành mảng JSON.
+    // 1. LẤY HỒ SƠ SINH VIÊN TỪ BẢNG users
+    const userRes = await pool.query(
+      `SELECT id, student_code, faculty, class_name 
+       FROM users 
+       WHERE id = $1 LIMIT 1`,
+      [userId]
+    );
 
-HƯỚNG DẪN BÓC TÁCH:
-- title: Tên môn học (Nằm ngay dưới chữ "Lịch học" hoặc "Lịch thi").
-- Tiết học: Ví dụ "1 - 5", "6 - 10", "6 - 8", "4 - 4". Tách thành startPeriod (bắt đầu) và endPeriod (kết thúc).
-- Phòng học: Cột Phòng (Ví dụ: "Phòng máy 4", "C401", "Phòng máy 3", "C305", "C202").
-- Giảng viên: Cột Giảng viên (Ví dụ: "Võ Thanh Vinh", "Nguyễn Đình Tứ", "Nguyễn Thị Hồng Hạnh").
-- specificDate: Đọc khối ngày màu xanh phía trên thẻ (VD: "Th 3, 03/11", "Th 4, 04/11", "Th 5, 05/11", "Th 6, 06/11", "Th 4, 11/11", "Th 5, 12/11") kết hợp với Năm (2026) ở góc trên để tạo dạng YYYY-MM-DD (Ví dụ: "2026-11-03", "2026-11-04", "2026-11-05", "2026-11-06", "2026-11-11", "2026-11-12").
-- dayOfWeek: Thứ 2 là 2, Thứ 3 là 3, ..., Thứ 7 là 7, CN là 8.
-- scheduleType: "study" (học), "exam" (thi), hoặc "online" (trực tuyến).
+    if (userRes.rows.length === 0) {
+      return res.status(404).json({ success: false, message: 'Không tìm thấy hồ sơ người dùng trong CSDL!' });
+    }
 
-YÊU CẦU: Trả về DUY NHẤT một chuỗi JSON hợp lệ không bọc trong markdown:
-[
-  {
-    "title": "Tên môn",
-    "dayOfWeek": 3,
-    "specificDate": "2026-11-03",
-    "startPeriod": 4,
-    "endPeriod": 4,
-    "room": "C202",
-    "teacherName": "Giảng viên",
-    "scheduleType": "study"
-  }
-]`;
+    const user = userRes.rows[0];
+    const userFaculty = user.faculty || req.body.facultyMajor;
+    if (!userFaculty) {
+      return res.status(400).json({ success: false, message: 'Sinh viên chưa cập nhật chuyên ngành trong hồ sơ!' });
+    }
 
-    let allExtracted = [];
+    const cohortMatch = (user.class_name || '').match(/K?(\d{2})/i) || (user.student_code || '').match(/(\d{2})/);
+    const userCohort = cohortMatch ? `K${cohortMatch[1]}` : 'K23';
+    const cohortDigits = userCohort.replace(/\D/g, '');
 
-    // Quét độc lập từng bức ảnh để tránh lỗi quá tải payload của SDK
-    for (let i = 0; i < validImages.length; i++) {
-      const b64 = validImages[i];
-      const matches = b64.match(/^data:([A-Za-z-+\/]+);base64,(.+)$/);
-      const mimeType = matches ? matches[1] : 'image/jpeg';
-      const base64Data = matches ? matches[2] : b64;
+    // 2. TÍNH GPA TÍCH LŨY THỰC TẾ TỪ BẢNG student_course_grades
+    const gpaRes = await pool.query(
+      `SELECT 
+         COALESCE(
+           ROUND(SUM(grade_number * credits) / NULLIF(SUM(credits), 0), 2), 
+           3.0
+         ) AS current_gpa,
+         COALESCE(MAX(semester_learned), 1) AS max_semester
+       FROM student_course_grades 
+       WHERE user_id = $1`,
+      [userId]
+    );
 
-      const imagePart = {
-        inlineData: {
-          data: base64Data,
-          mimeType: mimeType,
-        },
+    const calculatedGpa = Number(gpaRes.rows[0]?.current_gpa || 3.0);
+    const nextSemester = Number(gpaRes.rows[0]?.max_semester || 1);
+
+    let autoGoalLevel = 'KhaGioi';
+    if (calculatedGpa >= 3.6) autoGoalLevel = 'HocBong';
+    else if (calculatedGpa < 2.5) autoGoalLevel = 'QuaMon';
+    
+    const goalLevel = req.body.goalLevel || autoGoalLevel;
+    const currentGpa = req.body.currentGpa !== undefined ? Number(req.body.currentGpa) : calculatedGpa;
+    const dailyPace = Number(req.body.dailyPace) || 15;
+
+    // 3. TỰ ĐỘNG LẤY DANH SÁCH MÔN HỌC TỪ curriculum_plans THEO NGÀNH & HỌC KỲ
+    let targetSubjects = Array.isArray(req.body.subjects) && req.body.subjects.length > 0 
+      ? req.body.subjects 
+      : [];
+
+    if (targetSubjects.length === 0) {
+      const curRes = await pool.query(
+        `SELECT DISTINCT cp.subject_name, cp.credits 
+         FROM curriculum_plans cp
+         WHERE cp.major_name ILIKE $1 
+           AND (cp.cohort ILIKE $2 OR cp.cohort ILIKE '%' || $3 || '%')
+           AND cp.semester_index = $4
+         ORDER BY cp.subject_name ASC`,
+        [`%${userFaculty.trim()}%`, userCohort, cohortDigits, nextSemester]
+      );
+
+      if (curRes.rows.length > 0) {
+        targetSubjects = curRes.rows.map(r => r.subject_name);
+      } else {
+        const fallbackRes = await pool.query(
+          `SELECT DISTINCT subject_name FROM curriculum_plans 
+           WHERE major_name ILIKE $1 
+           ORDER BY id ASC LIMIT 4`,
+          [`%${userFaculty.trim()}%`]
+        );
+        targetSubjects = fallbackRes.rows.map(r => r.subject_name);
+      }
+    }
+
+    if (targetSubjects.length === 0) {
+      return res.status(400).json({ 
+        success: false, 
+        message: `Không tìm thấy môn học nào thuộc khung đào tạo ngành "${userFaculty}" trong CSDL!` 
+      });
+    }
+
+    // 4. BÓC TÁCH DỮ LIỆU ĐỘNG CHO TỪNG MÔN HỌC
+    const payloadSubjects = [];
+
+    for (const sub of targetSubjects) {
+      const subInfo = await pool.query(
+        `SELECT credits FROM curriculum_plans WHERE subject_name ILIKE $1 LIMIT 1`,
+        [`%${sub.trim()}%`]
+      ).catch(() => ({ rows: [] }));
+      const credits = subInfo.rows[0]?.credits || 3;
+
+      const quizRes = await pool.query(
+        `SELECT COUNT(*) as total, COUNT(*) FILTER (WHERE is_correct = true) as correct
+         FROM quiz_answer_attempts 
+         WHERE user_id = $1 AND subject ILIKE $2`,
+        [userId, `%${sub.trim()}%`]
+      ).catch(() => ({ rows: [{ total: 0, correct: 0 }] }));
+
+      const totalQuiz = Number(quizRes.rows[0]?.total || 0);
+      const correctQuiz = Number(quizRes.rows[0]?.correct || 0);
+
+      const examRes = await pool.query(
+        `SELECT 1 FROM schedules 
+         WHERE schedule_scope = 'academic' 
+           AND schedule_type = 'exam'
+           AND title ILIKE $1 
+           AND specific_date BETWEEN CURRENT_DATE AND CURRENT_DATE + INTERVAL '14 days'
+         LIMIT 1`,
+        [`%${sub.trim()}%`]
+      ).catch(() => ({ rows: [] }));
+
+      let autoLevel = 'medium';
+      if (totalQuiz >= 5) {
+        const accuracy = correctQuiz / totalQuiz;
+        if (accuracy >= 0.8) autoLevel = 'hard';
+        else if (accuracy < 0.5) autoLevel = 'easy';
+      }
+
+      payloadSubjects.push({
+        subject_name: sub,
+        credits: credits,
+        quiz_total: totalQuiz,
+        quiz_correct: correctQuiz,
+        is_near_exam: examRes.rows.length > 0,
+        user_level: req.body.subjectLevels?.[sub] || autoLevel,
+      });
+    }
+
+    // 5. GỬI TỚI DỊCH VỤ THUẬT TOÁN WRR
+    let pyData;
+    try {
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 6000);
+
+      const pyResponse = await fetch(`${WRR_SERVICE_URL}/api/schedule/wrr`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          subjects: payloadSubjects,
+          total_days: 28,
+          goal_level: goalLevel,
+          current_gpa: currentGpa,
+        }),
+        signal: controller.signal
+      });
+      clearTimeout(timeoutId);
+
+      if (pyResponse.ok) {
+        pyData = await pyResponse.json();
+      }
+    } catch (e) {
+      pyData = {
+        success: true,
+        weights: payloadSubjects.map((s) => ({ subject: s.subject_name, weight: 1.0 })),
+        slots_per_day: 2,
+        schedule_plan: Array(28).fill(null).map((_, dIdx) => [
+          { 
+            subject: payloadSubjects[dIdx % payloadSubjects.length]?.subject_name, 
+            task_type: 'doc_study', 
+            title: `Nghiên cứu giáo trình: ${payloadSubjects[dIdx % payloadSubjects.length]?.subject_name}` 
+          },
+          { 
+            subject: payloadSubjects[(dIdx + 1) % payloadSubjects.length]?.subject_name, 
+            task_type: 'quiz', 
+            title: `Luyện đề trắc nghiệm: ${payloadSubjects[(dIdx + 1) % payloadSubjects.length]?.subject_name}` 
+          },
+        ]),
       };
+    }
 
-      try {
-        const textOutput = await generateContentWithFallback([promptSingleImage, imagePart], {
-          responseMimeType: 'application/json',
-          temperature: 0.1,
-        });
+    // 6. CẬP NHẬT TRỌNG SỐ VÀO BẢNG subject_learning_weights
+    for (const w of (pyData?.weights || [])) {
+      await pool.query(
+        `INSERT INTO subject_learning_weights 
+         (user_id, subject_name, calculated_weight, updated_at)
+         VALUES ($1, $2, $3, CURRENT_TIMESTAMP)
+         ON CONFLICT (user_id, subject_name)
+         DO UPDATE SET calculated_weight = EXCLUDED.calculated_weight, updated_at = CURRENT_TIMESTAMP`,
+        [userId, w.subject, w.weight]
+      ).catch(() => {});
+    }
 
-        const cleanJson = textOutput.replace(/```json|```/g, '').trim();
-        const parsed = JSON.parse(cleanJson || '[]');
-        if (Array.isArray(parsed)) {
-          allExtracted.push(...parsed);
-        } else if (parsed && Array.isArray(parsed.schedules)) {
-          allExtracted.push(...parsed.schedules);
+    // 7. LƯU LỊCH TỰ HỌC VÀO BẢNG learning_timelines
+    await pool.query(`DELETE FROM learning_timelines WHERE user_id = $1`, [userId]).catch(() => {});
+    const insertedRows = [];
+
+    let startYear, startMonth, startDay;
+    if (req.body.startDate && /^\d{4}-\d{2}-\d{2}$/.test(req.body.startDate)) {
+      const parts = req.body.startDate.split('-').map(Number);
+      startYear = parts[0];
+      startMonth = parts[1] - 1;
+      startDay = parts[2];
+    } else {
+      const now = new Date();
+      startYear = now.getFullYear();
+      startMonth = now.getMonth();
+      startDay = now.getDate();
+    }
+
+    for (let dayIdx = 0; dayIdx < (pyData?.schedule_plan?.length || 0); dayIdx++) {
+      const curDate = new Date(startYear, startMonth, startDay + dayIdx);
+      const dateStr = formatLocalDate(curDate);
+
+      const dayTasks = pyData.schedule_plan[dayIdx] || [];
+      const availableTimeSlots = ['07:45 - 08:30', '12:00 - 12:45', '18:30 - 19:15', '20:00 - 20:45'];
+
+      for (let taskIdx = 0; taskIdx < dayTasks.length; taskIdx++) {
+        const task = dayTasks[taskIdx];
+        const assignedTimeSlot = availableTimeSlots[taskIdx % availableTimeSlots.length];
+        const matchedWeight = pyData.weights?.find((w) => w.subject === task.subject)?.weight || 1.0;
+
+        const description =
+          task.task_type === 'doc_study'
+            ? `Đọc hiểu kiến thức nền tảng & slide lý thuyết (Ưu tiên: ${matchedWeight})`
+            : task.task_type === 'quiz'
+            ? `Thực hành làm đề trắc nghiệm vận dụng kiến thức (Ưu tiên: ${matchedWeight})`
+            : `Ghi nhớ nhanh các định nghĩa & thuật ngữ cốt lõi (Ưu tiên: ${matchedWeight})`;
+
+        const actionTarget = task.task_type === 'doc_study' ? 'docs' : 'tasks';
+
+        const insertRes = await pool.query(
+          `INSERT INTO learning_timelines 
+           (user_id, subject, goal_level, timeline_date, time_slot, task_type, title, description, duration_minutes, is_completed, action_target)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, false, $10)
+           RETURNING id, subject, goal_level AS "goalLevel", TO_CHAR(timeline_date, 'YYYY-MM-DD') AS "timelineDate",
+                     time_slot AS "timeSlot", task_type AS "taskType", title, description,
+                     duration_minutes AS "durationMinutes", is_completed AS "isCompleted", action_target AS "actionTarget"`,
+          [
+            userId,
+            task.subject,
+            goalLevel,
+            dateStr,
+            assignedTimeSlot,
+            task.task_type,
+            task.title,
+            description,
+            dailyPace,
+            actionTarget,
+          ]
+        ).catch(() => ({ rows: [] }));
+
+        if (insertRes.rows && insertRes.rows[0]) {
+          insertedRows.push(insertRes.rows[0]);
         }
-      } catch (subErr) {
-        console.warn(`Lỗi bóc tách ảnh ${i + 1}:`, subErr.message);
       }
     }
-
-    // Lọc trùng lặp thông minh: Chỉ bỏ qua nếu trùng cả Tên môn, Ngày học VÀ Tiết học
-    const uniqueMap = new Map();
-    for (const item of allExtracted) {
-      if (!item.title) continue;
-      const key = `${item.title.trim()}_${item.specificDate}_${item.startPeriod}_${item.endPeriod}`;
-      if (!uniqueMap.has(key)) {
-        uniqueMap.set(key, item);
-      }
-    }
-    const finalSchedules = Array.from(uniqueMap.values());
 
     res.json({
       success: true,
-      totalScanned: finalSchedules.length,
-      data: finalSchedules,
-      message: `Đã bóc tách thành công ${finalSchedules.length} buổi học từ ${validImages.length} ảnh thời khóa biểu!`,
+      algorithm: 'Smooth Weighted Round Robin (SWRR)',
+      facultyMajor: userFaculty,
+      currentGpa,
+      goalLevel,
+      dailyPace,
+      totalInserted: insertedRows.length,
+      data: insertedRows,
     });
-  } catch (error) {
-    console.error("Lỗi OCR nhiều ảnh:", error);
-    res.status(500).json({ success: false, message: "Không thể phân tích ảnh: " + error.message });
+  } catch (err) {
+    console.error('Lỗi tạo lịch WRR:', err.message);
+    res.status(500).json({ success: false, message: 'Lỗi máy chủ: ' + err.message });
   }
 });
+
 // =============================================================================
 // 8. ĐIỂM DANH STREAK & LEADERBOARD
 // =============================================================================
