@@ -25,7 +25,7 @@ const getScheduleHeaders = () => {
   return headers;
 };
 
-// Chuyển đổi tiết học chuẩn sang khung giờ thực tế tại trường
+// Chuyển đổi tiết học sang khung giờ
 const periodToTimeSlot = (pStr) => {
   if (!pStr) return "07:30 - 09:50";
   const clean = String(pStr).replace(/\D+/g, " ").trim().split(" ");
@@ -49,6 +49,33 @@ const periodToTimeSlot = (pStr) => {
   return "Theo tiết học";
 };
 
+// Helper nén ảnh bằng canvas
+const compressImage = (file) => {
+  return new Promise((resolve) => {
+    const reader = new FileReader();
+    reader.onload = (ev) => {
+      const img = new Image();
+      img.onload = () => {
+        const canvas = document.createElement("canvas");
+        const MAX_WIDTH = 1200;
+        let width = img.width;
+        let height = img.height;
+        if (width > MAX_WIDTH) {
+          height = Math.round((height * MAX_WIDTH) / width);
+          width = MAX_WIDTH;
+        }
+        canvas.width = width;
+        canvas.height = height;
+        const ctx = canvas.getContext("2d");
+        ctx.drawImage(img, 0, 0, width, height);
+        resolve(canvas.toDataURL("image/jpeg", 0.8));
+      };
+      img.src = ev.target.result;
+    };
+    reader.readAsDataURL(file);
+  });
+};
+
 export const ScheduleModal = ({ isOpen, onClose }) => {
   const [viewMode, setViewMode] = useState("all");
   const [categoryFilter, setCategoryFilter] = useState("all");
@@ -67,7 +94,7 @@ export const ScheduleModal = ({ isOpen, onClose }) => {
   const [selectedDayKey, setSelectedDayKey] = useState(getLocalDateString());
   const [showAddForm, setShowAddForm] = useState(false);
 
-  // Form states thêm thủ công
+  // Form states thủ công
   const [title, setTitle] = useState("");
   const [formDate, setFormDate] = useState(getLocalDateString());
   const [period, setPeriod] = useState("1 - 3");
@@ -75,9 +102,10 @@ export const ScheduleModal = ({ isOpen, onClose }) => {
   const [teacher, setTeacher] = useState("");
   const [category, setCategory] = useState("study");
 
-  // States tính năng quét ảnh TKB bằng AI (OCR)
+  // States quét AI hỗ trợ nhiều ảnh
   const fileInputRef = useRef(null);
   const [isScanning, setIsScanning] = useState(false);
+  const [scanStatusText, setScanStatusText] = useState("");
   const [previewParsedSchedules, setPreviewParsedSchedules] = useState(null);
 
   const syncToLocalAndApp = (items) => {
@@ -157,61 +185,50 @@ export const ScheduleModal = ({ isOpen, onClose }) => {
     }
   }, [isOpen, fetchStudentSchedules]);
 
-  // Xử lý nén ảnh phía Client và gửi lên Gemini Vision OCR
-  const handleScanScheduleImage = async (e) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-
-    if (file.size > 8 * 1024 * 1024) {
-      alert("Dung lượng ảnh tối đa là 8MB!");
-      e.target.value = "";
-      return;
-    }
+  // XỬ LÝ QUÉT NHIỀU ẢNH CÙNG LÚC (MULTIPLE IMAGES)
+  const handleScanScheduleImages = async (e) => {
+    const files = Array.from(e.target.files || []);
+    if (files.length === 0) return;
 
     setIsScanning(true);
-    const reader = new FileReader();
-    reader.onload = async (ev) => {
-      const img = new Image();
-      img.onload = async () => {
-        const canvas = document.createElement("canvas");
-        const MAX_WIDTH = 1200;
-        let width = img.width;
-        let height = img.height;
-        if (width > MAX_WIDTH) {
-          height *= MAX_WIDTH / width;
-          width = MAX_WIDTH;
-        }
-        canvas.width = width;
-        canvas.height = height;
-        const ctx = canvas.getContext("2d");
-        ctx.drawImage(img, 0, 0, width, height);
-        const compressedBase64 = canvas.toDataURL("image/jpeg", 0.82);
+    setScanStatusText(`Đang xử lý ${files.length} ảnh...`);
 
-        try {
-          const res = await fetch(`${API_BASE}/schedules/ocr-parse`, {
-            method: "POST",
-            headers: getScheduleHeaders(),
-            body: JSON.stringify({ imageBase64: compressedBase64 }),
-          });
-          const d = await res.json();
-          if (d.success && Array.isArray(d.data) && d.data.length > 0) {
-            setPreviewParsedSchedules(d.data);
-          } else {
-            alert(d.message || "Không thể nhận diện lịch học từ ảnh. Vui lòng chụp rõ nét hơn!");
-          }
-        } catch (err) {
-          alert("Lỗi kết nối máy chủ khi phân tích ảnh thời khóa biểu!");
-        } finally {
-          setIsScanning(false);
-        }
-      };
-      img.src = ev.target.result;
-    };
-    reader.readAsDataURL(file);
-    e.target.value = "";
+    try {
+      // 1. Nén lần lượt tất cả các ảnh
+      const base64List = [];
+      for (let i = 0; i < files.length; i++) {
+        setScanStatusText(`Đang tối ưu ảnh ${i + 1}/${files.length}...`);
+        const b64 = await compressImage(files[i]);
+        base64List.push(b64);
+      }
+
+      setScanStatusText("Gemini Vision đang phân tích...");
+
+      // 2. Gửi mảng ảnh lên Backend OCR
+      const res = await fetch(`${API_BASE}/schedules/ocr-parse`, {
+        method: "POST",
+        headers: getScheduleHeaders(),
+        body: JSON.stringify({ 
+          imageBase64: base64List[0],       // Giữ tương thích bản cũ
+          images: base64List                 // Hỗ trợ truyền mảng nhiều ảnh
+        }),
+      });
+
+      const d = await res.json();
+      if (d.success && Array.isArray(d.data) && d.data.length > 0) {
+        setPreviewParsedSchedules(d.data);
+      } else {
+        alert(d.message || "Không thể nhận diện lịch học. Vui lòng chụp rõ nét bảng thời khóa biểu!");
+      }
+    } catch (err) {
+      alert("Lỗi kết nối máy chủ khi phân tích ảnh!");
+    } finally {
+      setIsScanning(false);
+      setScanStatusText("");
+      e.target.value = "";
+    }
   };
 
-  // Xác nhận lưu hàng loạt kết quả quét ảnh vào CSDL
   const handleConfirmBulkSave = async () => {
     if (!previewParsedSchedules) return;
     try {
@@ -343,10 +360,6 @@ export const ScheduleModal = ({ isOpen, onClose }) => {
         const nextList = schedules.filter((s) => s.id !== id);
         setSchedules(nextList);
         syncToLocalAndApp(nextList);
-      } else {
-        const nextList = schedules.filter((s) => s.id !== id);
-        setSchedules(nextList);
-        syncToLocalAndApp(nextList);
       }
     } catch (err) {
       const nextList = schedules.filter((s) => s.id !== id);
@@ -382,13 +395,14 @@ export const ScheduleModal = ({ isOpen, onClose }) => {
       className="position-fixed top-0 start-0 w-100 h-100 bg-[#F8FAFC] d-flex flex-column z-50 animate-in fade-in duration-200"
       style={{ overflowY: "auto", overflowX: "hidden" }}
     >
-      {/* Ẩn input file chọn ảnh */}
+      {/* Input hỗ trợ chọn NHIỀU ẢNH cùng lúc */}
       <input
         type="file"
         accept="image/*"
+        multiple
         ref={fileInputRef}
         className="d-none"
-        onChange={handleScanScheduleImage}
+        onChange={handleScanScheduleImages}
       />
 
       {/* 1. Header Bar chuẩn Zalo */}
@@ -419,9 +433,10 @@ export const ScheduleModal = ({ isOpen, onClose }) => {
         </div>
       </div>
 
-      {/* 2. Thanh điều khiển: Lọc Mốc thời gian & Nút Quét AI */}
-      <div className="bg-white px-3.5 py-2.5 border-b border-slate-200/80 flex items-center justify-between gap-2 shadow-2xs">
-        <div className="bg-slate-100 p-1 rounded-2xl flex flex-1 items-center border border-slate-200/60">
+      {/* 2. KHU VỰC ĐIỀU KHIỂN ĐÃ TỐI ƯU GIAO DIỆN KHÔNG BỊ ÉP CHỮ */}
+      <div className="bg-white px-3.5 py-2.5 border-b border-slate-200/80 flex flex-col gap-2.5 shadow-2xs">
+        {/* HÀNG 1: TABS MỐC THỜI GIAN (Trải rộng 100%, không bao giờ bị rớt dòng chữ "Hôm nay") */}
+        <div className="bg-slate-100 p-1 rounded-2xl flex items-center border border-slate-200/60 w-full">
           {[
             { id: "all", label: "Tất cả" },
             { id: "day", label: "Hôm nay" },
@@ -439,10 +454,10 @@ export const ScheduleModal = ({ isOpen, onClose }) => {
                     setCurrentViewDate(new Date());
                   }
                 }}
-                className={`flex-1 py-1.5 rounded-xl text-[11px] font-extrabold transition border-0 text-center cursor-pointer ${
+                className={`flex-1 py-1.5 rounded-xl text-[11.5px] font-extrabold transition border-0 text-center cursor-pointer whitespace-nowrap ${
                   isActive
                     ? "bg-blue-600 text-white shadow-xs"
-                    : "bg-transparent text-slate-500 hover:text-slate-800"
+                    : "bg-transparent text-slate-600 hover:text-slate-900"
                 }`}
               >
                 {tab.label}
@@ -451,38 +466,38 @@ export const ScheduleModal = ({ isOpen, onClose }) => {
           })}
         </div>
 
-        <div className="flex items-center gap-1.5 shrink-0">
-          {/* NÚT QUÉT ẢNH THỜI KHÓA BIỂU GEMINI AI */}
+        {/* HÀNG 2: BỘ ĐÔI NÚT HÀNH ĐỘNG (Quét nhiều ảnh AI + Thêm thủ công) */}
+        <div className="flex items-center gap-2">
           <button
             type="button"
             disabled={isScanning}
             onClick={() => fileInputRef.current?.click()}
-            className="px-2.5 py-1.5 rounded-xl font-black text-xs flex items-center gap-1.5 border-0 bg-amber-400 hover:bg-amber-500 text-slate-950 active:scale-95 transition cursor-pointer shadow-xs"
-            title="Chụp hoặc tải ảnh thời khóa biểu"
+            className="flex-1 py-2 px-3 rounded-xl font-black text-xs flex items-center justify-center gap-2 border-0 bg-amber-400 hover:bg-amber-500 text-slate-950 active:scale-95 transition cursor-pointer shadow-xs"
+            title="Chọn một hoặc nhiều ảnh thời khóa biểu để AI quét"
           >
             {isScanning ? (
               <>
-                <span className="spinner-border spinner-border-sm" style={{ width: 12, height: 12 }}></span>
-                <span>Đang quét...</span>
+                <span className="spinner-border spinner-border-sm text-dark" style={{ width: 13, height: 13 }}></span>
+                <span className="truncate">{scanStatusText || "Đang quét..."}</span>
               </>
             ) : (
               <>
-                <i className="bi bi-camera-fill text-xs"></i>
-                <span>Quét ảnh AI</span>
+                <i className="bi bi-camera-fill text-sm"></i>
+                <span>Quét ảnh AI (1 hoặc nhiều ảnh)</span>
               </>
             )}
           </button>
 
           <button
             onClick={() => setShowAddForm(!showAddForm)}
-            className={`px-3 py-1.5 rounded-xl font-black text-xs flex items-center gap-1.5 border-0 shadow-xs active:scale-95 transition cursor-pointer ${
+            className={`py-2 px-3.5 rounded-xl font-black text-xs flex items-center justify-center gap-1.5 border-0 shadow-xs active:scale-95 transition cursor-pointer shrink-0 ${
               showAddForm
-                ? "bg-slate-100 text-slate-700"
+                ? "bg-slate-200 text-slate-700"
                 : "bg-blue-600 text-white shadow-blue-500/25"
             }`}
           >
-            <i className={`bi ${showAddForm ? "bi-x-lg" : "bi-plus-lg"} text-[11px]`}></i>
-            <span>{showAddForm ? "Đóng" : "Thêm"}</span>
+            <i className={`bi ${showAddForm ? "bi-x-lg" : "bi-plus-lg"} text-xs`}></i>
+            <span>{showAddForm ? "Đóng" : "Thêm môn"}</span>
           </button>
         </div>
       </div>
@@ -490,7 +505,7 @@ export const ScheduleModal = ({ isOpen, onClose }) => {
       {/* 3. Bộ lọc phân loại môn học */}
       <div className="bg-slate-50 px-3.5 py-2 border-b border-slate-200/60 flex items-center gap-1.5 overflow-x-auto no-scrollbar">
         {[
-          { id: "all", label: "Tất cả lịch", icon: "bi-grid-fill" },
+          { id: "all", label: "Tất cả", icon: "bi-grid-fill" },
           { id: "study", label: "Chính khóa", icon: "bi-mortarboard-fill" },
           { id: "exam", label: "Lịch thi", icon: "bi-calendar-check-fill" },
           { id: "online", label: "Trực tuyến", icon: "bi-camera-video-fill" },
@@ -661,7 +676,7 @@ export const ScheduleModal = ({ isOpen, onClose }) => {
         {loading ? (
           <div className="text-center py-12 text-slate-400 text-xs font-bold">
             <div className="spinner-border spinner-border-sm text-primary mb-2" role="status"></div>
-            <div>Đang tải dữ liệu thời khóa biểu chính thức...</div>
+            <div>Đang tải dữ liệu thời khóa biểu...</div>
           </div>
         ) : pendingNotice ? (
           <div className="bg-white rounded-3xl p-6 text-center border border-amber-200 shadow-2xs mx-1 my-3">
