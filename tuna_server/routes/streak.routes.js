@@ -3,9 +3,9 @@ const express = require('express');
 const router = express.Router();
 const pool = require('../config/db');
 
-// Helper: Phân giải user_id (INTEGER) trong CSDL
+// Helper: Phân giải chính xác id nguyên số của user
 const resolveDbUserId = async (rawId) => {
-  if (!rawId || rawId === 'undefined') return null;
+  if (!rawId || rawId === 'undefined' || rawId === 'null') return null;
   const cleanId = String(rawId).trim();
   if (/^\d+$/.test(cleanId)) return parseInt(cleanId, 10);
   try {
@@ -22,11 +22,10 @@ const resolveDbUserId = async (rawId) => {
   return null;
 };
 
-// 1. GET /api/streak/:userId - LẤY DỮ LIỆU STREAK VÀ NHẬT KÝ TỪ USERS
+// 1. GET /api/streak/:userId - LẤY THÔNG TIN STREAK VÀ LỊCH SỬ HỌC 14 NGÀY
 router.get('/:userId', async (req, res) => {
   try {
-    const rawUserId = req.params.userId;
-    const finalUserId = await resolveDbUserId(rawUserId);
+    const finalUserId = await resolveDbUserId(req.params.userId);
 
     if (!finalUserId) {
       return res.json({
@@ -39,21 +38,33 @@ router.get('/:userId', async (req, res) => {
       });
     }
 
-    const userRes = await pool.query(
-      `SELECT current_streak, longest_streak, xp_points, streak_freeze_count, last_active_date
-       FROM users 
-       WHERE id = $1`,
+    // Tự động kiểm tra nếu bỏ lỡ quá 1 ngày thì reset streak về 0 trong DB
+    await pool.query(
+      `UPDATE users 
+       SET current_streak = 0 
+       WHERE id = $1 
+         AND last_active_date IS NOT NULL 
+         AND (CURRENT_DATE - last_active_date) > 1`,
       [finalUserId]
-    );
+    ).catch(() => {});
 
-    const logsRes = await pool.query(
-      `SELECT TO_CHAR(activity_date, 'YYYY-MM-DD') AS act_date 
-       FROM streak_logs 
-       WHERE user_id = $1 
-         AND activity_date >= CURRENT_DATE - INTERVAL '14 days'
-       ORDER BY activity_date ASC`,
-      [finalUserId]
-    ).catch(() => ({ rows: [] }));
+    const [userRes, logsRes] = await Promise.all([
+      pool.query(
+        `SELECT id, current_streak, longest_streak, xp_points, streak_freeze_count, 
+                TO_CHAR(last_active_date, 'YYYY-MM-DD') AS last_active_date
+         FROM users 
+         WHERE id = $1`,
+        [finalUserId]
+      ),
+      pool.query(
+        `SELECT TO_CHAR(activity_date, 'YYYY-MM-DD') AS act_date 
+         FROM streak_logs 
+         WHERE user_id = $1 
+           AND activity_date >= CURRENT_DATE - INTERVAL '14 days'
+         ORDER BY activity_date ASC`,
+        [finalUserId]
+      ).catch(() => ({ rows: [] }))
+    ]);
 
     const s = userRes.rows[0] || {
       current_streak: 0,
@@ -80,7 +91,7 @@ router.get('/:userId', async (req, res) => {
   }
 });
 
-// 2. POST /api/streak/check-in - ĐIỂM DANH, CỘNG ĐIỂM XP VÀ GHI LOG
+// 2. POST /api/streak/check-in - ĐIỂM DANH, CỘNG XP VÀ TÍNH CHUỖI STREAK CHUẨN XÁC
 router.post('/check-in', async (req, res) => {
   const { userId, xpBonus = 10 } = req.body;
 
@@ -105,51 +116,50 @@ router.post('/check-in', async (req, res) => {
       [finalUserId, addedXp]
     ).catch(() => {});
 
-    // Tính toán lại chuỗi streak trực tiếp trong bảng users
+    // Tính toán chuỗi streak chính xác bằng phép trừ ngày trong SQL (chống lệch Timezone)
     const currentRes = await pool.query(
-      `SELECT current_streak, longest_streak, xp_points, last_active_date 
+      `SELECT current_streak, longest_streak, xp_points,
+              CASE 
+                WHEN last_active_date IS NULL THEN -1
+                ELSE (CURRENT_DATE - last_active_date)
+              END AS days_diff
        FROM users 
        WHERE id = $1`,
       [finalUserId]
     );
 
-    let nextStreak = 1;
-    let nextLongest = 1;
-    let nextXp = addedXp;
-
-    if (currentRes.rows.length > 0) {
-      const row = currentRes.rows[0];
-      const lastDate = row.last_active_date ? new Date(row.last_active_date) : null;
-      const today = new Date();
-      today.setHours(0, 0, 0, 0);
-
-      let diffDays = -1;
-      if (lastDate) {
-        lastDate.setHours(0, 0, 0, 0);
-        diffDays = Math.round((today - lastDate) / (1000 * 60 * 60 * 24));
-      }
-
-      if (diffDays === 0) {
-        nextStreak = Number(row.current_streak) || 1;
-      } else if (diffDays === 1) {
-        nextStreak = (Number(row.current_streak) || 0) + 1;
-      } else {
-        nextStreak = 1;
-      }
-
-      nextLongest = Math.max(Number(row.longest_streak) || 0, nextStreak);
-      nextXp = (Number(row.xp_points) || 0) + addedXp;
-
-      await pool.query(
-        `UPDATE users 
-         SET current_streak = $1, 
-             longest_streak = $2, 
-             xp_points = $3, 
-             last_active_date = CURRENT_DATE
-         WHERE id = $4`,
-        [nextStreak, nextLongest, nextXp, finalUserId]
-      );
+    if (currentRes.rows.length === 0) {
+      return res.status(404).json({ success: false, message: 'Người dùng không tồn tại' });
     }
+
+    const row = currentRes.rows[0];
+    const daysDiff = parseInt(row.days_diff, 10);
+    let curStreak = Number(row.current_streak) || 0;
+    let nextStreak = curStreak;
+
+    if (daysDiff === 0) {
+      // Đã học hôm nay rồi -> Giữ nguyên chuỗi, nếu trước đó là 0 thì lên 1
+      nextStreak = Math.max(curStreak, 1);
+    } else if (daysDiff === 1) {
+      // Học ngày liền kề -> Tăng chuỗi thêm 1
+      nextStreak = curStreak + 1;
+    } else {
+      // Bỏ lỡ từ 2 ngày trở lên hoặc mới bắt đầu -> Bắt đầu lại chuỗi 1 ngày
+      nextStreak = 1;
+    }
+
+    const nextLongest = Math.max(Number(row.longest_streak) || 0, nextStreak);
+    const nextXp = (Number(row.xp_points) || 0) + addedXp;
+
+    await pool.query(
+      `UPDATE users 
+       SET current_streak = $1, 
+           longest_streak = $2, 
+           xp_points = $3, 
+           last_active_date = CURRENT_DATE
+       WHERE id = $4`,
+      [nextStreak, nextLongest, nextXp, finalUserId]
+    );
 
     res.json({
       success: true,
@@ -164,20 +174,25 @@ router.post('/check-in', async (req, res) => {
   }
 });
 
-// 3. GET /api/leaderboard - BẢNG XẾP HẠNG THÀNH TÍCH TỪ BẢNG USERS
+// 3. GET /api/leaderboard - BẢNG XẾP HẠNG TOP SINH VIÊN (LỌC CHUẨN, ĐẦY ĐỦ THÔNG TIN)
 router.get(['/leaderboard', '/top/ranks'], async (req, res) => {
   try {
     const query = `
       SELECT 
-        id AS user_id,
-        COALESCE(name, 'Sinh viên TUNA') AS user_name,
-        COALESCE(xp_points, 0) AS xp,
-        COALESCE(current_streak, 0) AS streak,
-        COALESCE(longest_streak, 0) AS longest_streak
-      FROM users
-      WHERE role = 'student' AND (COALESCE(xp_points, 0) > 0 OR COALESCE(current_streak, 0) > 0)
-      ORDER BY COALESCE(xp_points, 0) DESC, COALESCE(current_streak, 0) DESC
-      LIMIT 30
+        u.id AS user_id,
+        COALESCE(u.name, 'Sinh viên TUNA') AS user_name,
+        COALESCE(u.student_code, '') AS student_code,
+        u.avatar,
+        COALESCE(u.class_name, 'Chưa xếp lớp') AS class_name,
+        COALESCE(u.xp_points, 0) AS xp,
+        COALESCE(u.current_streak, 0) AS streak,
+        COALESCE(u.longest_streak, 0) AS longest_streak
+      FROM users u
+      WHERE u.role = 'student' 
+        AND COALESCE(u.is_active, true) = TRUE
+        AND (COALESCE(u.xp_points, 0) > 0 OR COALESCE(u.current_streak, 0) > 0)
+      ORDER BY COALESCE(u.xp_points, 0) DESC, COALESCE(u.current_streak, 0) DESC, u.id ASC
+      LIMIT 50
     `;
     const { rows } = await pool.query(query);
 
