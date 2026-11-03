@@ -308,6 +308,7 @@ router.delete('/:id', authenticateToken, async (req, res) => {
 // =============================================================================
 // 8. ĐỒNG BỘ HỒ SƠ TỪ ZALO MINI APP (LUÔN CHUYỂN PENDING KHI CẬP NHẬT)
 // =============================================================================
+// routes/users.routes.js
 router.post(['/student/link', '/sync'], async (req, res) => {
   try {
     const { userId, zaloId, email, name, studentCode, className, faculty } = req.body;
@@ -323,27 +324,31 @@ router.post(['/student/link', '/sync'], async (req, res) => {
 
     let existingUser = null;
 
+    // 1. Tìm theo ID
     const rawId = userId || req.headers['x-user-id'];
-    if (rawId && /^\d+$/.test(String(rawId).trim())) {
-      const byId = await pool.query(`SELECT * FROM users WHERE id = $1 LIMIT 1`, [parseInt(rawId, 10)]);
+    if (rawId && !isNaN(Number(rawId))) {
+      const byId = await pool.query(`SELECT * FROM users WHERE id = $1 LIMIT 1`, [Number(rawId)]);
       if (byId.rows.length > 0) existingUser = byId.rows[0];
     }
 
+    // 2. Tìm theo ZaloId
     if (!existingUser && zaloId) {
       const byZalo = await pool.query(`SELECT * FROM users WHERE zalo_id = $1 LIMIT 1`, [String(zaloId).trim()]);
       if (byZalo.rows.length > 0) existingUser = byZalo.rows[0];
     }
 
+    // 3. Tìm theo Email
     if (!existingUser && email) {
       const byEmail = await pool.query(`SELECT * FROM users WHERE LOWER(email) = LOWER($1) LIMIT 1`, [String(email).trim()]);
       if (byEmail.rows.length > 0) existingUser = byEmail.rows[0];
     }
 
-    const curUserId = existingUser ? existingUser.id : null;
+    // 4. Kiểm tra trùng MSSV an toàn (không dùng ::INT trực tiếp tránh lỗi ép kiểu)
+    const curUserId = existingUser ? existingUser.id : -1;
     const conflict = await pool.query(
       `SELECT id, name, is_verified, verification_status 
        FROM users 
-       WHERE UPPER(TRIM(student_code)) = $1 AND ($2::INT IS NULL OR id != $2) 
+       WHERE UPPER(TRIM(student_code)) = $1 AND id != $2 
        LIMIT 1`,
       [cleanCode, curUserId]
     );
@@ -352,8 +357,8 @@ router.post(['/student/link', '/sync'], async (req, res) => {
       const cUser = conflict.rows[0];
       return res.status(409).json({
         success: false,
-        message: cUser.is_verified || cUser.verification_status === 'approved'
-          ? `MSSV ${cleanCode} đã được xác thực bởi tài khoản khác (${cUser.name}). Vui lòng liên hệ Admin!`
+        message: (cUser.is_verified || cUser.verification_status === 'approved')
+          ? `MSSV ${cleanCode} đã được xác thực bởi tài khoản (${cUser.name}). Vui lòng liên hệ Admin!`
           : `MSSV ${cleanCode} đang có hồ sơ chờ duyệt trên hệ thống!`
       });
     }
@@ -361,6 +366,7 @@ router.post(['/student/link', '/sync'], async (req, res) => {
     let updatedUser;
 
     if (existingUser) {
+      // Đã bỏ updated_at để tránh lỗi thiếu cột trong DB
       const updateRes = await pool.query(
         `UPDATE users 
          SET name = $1, 
@@ -368,8 +374,7 @@ router.post(['/student/link', '/sync'], async (req, res) => {
              class_name = $3, 
              faculty = $4,
              is_verified = FALSE,
-             verification_status = 'pending',
-             updated_at = CURRENT_TIMESTAMP
+             verification_status = 'pending'
          WHERE id = $5 
          RETURNING id, name, email, student_code AS "studentCode", class_name AS "className", faculty, 
                    avatar, role, is_verified AS "isVerified", verification_status AS "verificationStatus", is_active AS "isActive"`,
@@ -398,13 +403,14 @@ router.post(['/student/link', '/sync'], async (req, res) => {
       io.emit(`user_verify_status_${updatedUser.id}`, { status: 'pending', isVerified: false });
     }
 
-    res.json({
+    return res.json({
       success: true,
       message: 'Hồ sơ đã được lưu, vui lòng chờ Admin duyệt vào lớp!',
       user: updatedUser
     });
   } catch (err) {
-    res.status(500).json({ success: false, message: 'Lỗi máy chủ: ' + err.message });
+    console.error(">>> LỖI TẠI /api/users/sync:", err); // In chi tiết lỗi ra console render
+    return res.status(500).json({ success: false, message: 'Lỗi máy chủ: ' + err.message });
   }
 });
 

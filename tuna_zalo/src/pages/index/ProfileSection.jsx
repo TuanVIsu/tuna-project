@@ -225,78 +225,84 @@ export const ProfileSection = ({ currentUser: initialUser }) => {
     setShowEditModal(true);
   };
 
-  const handleSaveProfile = async (e) => {
-    e.preventDefault();
-    const cleanName = nameInput.trim();
-    const cleanCode = studentCodeInput.trim().toUpperCase();
-    const cleanClass = classNameInput.trim().toUpperCase();
-    const cleanFaculty = facultyInput.trim();
+// src/pages/index/ProfileSection.jsx
+const handleSaveProfile = async (e) => {
+  e.preventDefault();
+  const cleanName = nameInput.trim();
+  const cleanCode = studentCodeInput.trim().toUpperCase();
+  const cleanClass = classNameInput.trim().toUpperCase();
+  const cleanFaculty = facultyInput.trim();
 
-    if (!cleanName || !cleanCode || !cleanClass) {
-      showToast("Vui lòng nhập đầy đủ thông tin!", "error");
-      return;
+  if (!cleanName || !cleanCode || !cleanClass) {
+    showToast("Vui lòng nhập đầy đủ thông tin!", "error");
+    return;
+  }
+
+  setIsUpdating(true);
+  try {
+    const payload = {
+      userId: user?.id || (myUserId && !isNaN(Number(myUserId)) ? Number(myUserId) : null),
+      zaloId: user?.zalo_id || null,
+      email: user?.email || null,
+      name: cleanName,
+      studentCode: cleanCode,
+      className: cleanClass,
+      faculty: cleanFaculty,
+    };
+
+    const res = await fetch(`${API_BASE}/users/sync`, {
+      method: "POST",
+      headers: getAuthHeaders(),
+      body: JSON.stringify(payload),
+    });
+
+    // Kiểm tra định dạng trước khi parse json để tránh văng lỗi SyntaxError
+    const text = await res.text();
+    let data;
+    try {
+      data = JSON.parse(text);
+    } catch (parseErr) {
+      throw new Error("Phản hồi từ server không hợp lệ");
     }
 
-    setIsUpdating(true);
-    try {
-      const payload = {
-        userId: user?.id || (myUserId && /^\d+$/.test(myUserId) ? parseInt(myUserId, 10) : null),
-        zaloId: user?.zalo_id || null,
-        email: user?.email || null,
+    if (res.ok && data.success) {
+      showToast("Đã gửi hồ sơ, vui lòng chờ Admin duyệt vào lớp!", "warning");
+      
+      const serverUser = data.user;
+      const updatedUser = {
+        ...user,
+        ...serverUser,
         name: cleanName,
+        student_code: cleanCode,
         studentCode: cleanCode,
+        class_name: cleanClass,
         className: cleanClass,
         faculty: cleanFaculty,
+        is_verified: false,
+        isVerified: false,
+        verification_status: "pending",
+        verificationStatus: "pending",
       };
 
-      // Gửi trực tiếp đến route users/sync để tránh lỗi 404
-      const res = await fetch(`${API_BASE}/users/sync`, {
-        method: "POST",
-        headers: getAuthHeaders(),
-        body: JSON.stringify(payload),
-      });
-
-      const data = await res.json();
-      if (res.ok && data.success) {
-        const serverUser = data.user;
-
-        showToast("Đã lưu hồ sơ, vui lòng chờ Admin duyệt vào lớp!", "warning");
-        
-        const updatedUser = {
-          ...user,
-          ...serverUser,
-          name: cleanName,
-          student_code: cleanCode,
-          studentCode: cleanCode,
-          class_name: cleanClass,
-          className: cleanClass,
-          faculty: cleanFaculty,
-          // Bắt buộc set pending
-          is_verified: false,
-          isVerified: false,
-          verification_status: "pending",
-          verificationStatus: "pending",
-        };
-
-        setUser(updatedUser);
-        localStorage.setItem("user", JSON.stringify(updatedUser));
-        localStorage.setItem("user_info", JSON.stringify(updatedUser));
-        localStorage.setItem("tuna_current_user", JSON.stringify(updatedUser));
-        
-        if (serverUser?.id) {
-          localStorage.setItem("tuna_user_id", String(serverUser.id));
-        }
-
-        setShowEditModal(false);
-      } else {
-        showToast(data.message || "Không thể cập nhật hồ sơ!", "error");
+      setUser(updatedUser);
+      localStorage.setItem("user", JSON.stringify(updatedUser));
+      localStorage.setItem("user_info", JSON.stringify(updatedUser));
+      localStorage.setItem("tuna_current_user", JSON.stringify(updatedUser));
+      
+      if (serverUser?.id) {
+        localStorage.setItem("tuna_user_id", String(serverUser.id));
       }
-    } catch (err) {
-      showToast("Lỗi kết nối máy chủ đào tạo!", "error");
-    } finally {
-      setIsUpdating(false);
+
+      setShowEditModal(false);
+    } else {
+      showToast(data.message || "Không thể cập nhật hồ sơ!", "error");
     }
-  };
+  } catch (err) {
+    showToast(err.message || "Lỗi kết nối máy chủ đào tạo!", "error");
+  } finally {
+    setIsUpdating(false);
+  }
+};
 
   const isApproved = user?.verification_status === "approved" || user?.verificationStatus === "approved" || 
     (Boolean(user?.is_verified ?? user?.isVerified) && (user?.verification_status !== "pending" && user?.verificationStatus !== "pending"));
