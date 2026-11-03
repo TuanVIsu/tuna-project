@@ -47,8 +47,6 @@ export const ManageUsers = () => {
     faculty: "",
     totalCredits: 0,
     isActive: true,
-    isVerified: true,
-    verificationStatus: "approved",
   });
 
   const getHeaders = useCallback(() => {
@@ -115,8 +113,8 @@ export const ManageUsers = () => {
   const fetchUsers = useCallback(async () => {
     setLoading(true);
     try {
+      // Chỉ gửi lọc drop-down lên backend, search tự nhiên thực hiện tại client để tránh mất dấu tiếng Việt
       const q = new URLSearchParams({
-        search: searchTerm,
         major: selectedMajor,
         cohort: selectedCohort,
         className: selectedClass,
@@ -129,7 +127,7 @@ export const ManageUsers = () => {
     } finally {
       setLoading(false);
     }
-  }, [searchTerm, selectedMajor, selectedCohort, selectedClass, safeFetchUsersApi]);
+  }, [selectedMajor, selectedCohort, selectedClass, safeFetchUsersApi]);
 
   const fetchPendingUsers = useCallback(async () => {
     try {
@@ -140,29 +138,38 @@ export const ManageUsers = () => {
     }
   }, [safeFetchUsersApi]);
 
+  // Giữ ref để Socket gọi lại luôn là phiên bản mới nhất mà không gây re-connect socket
+  const fetchUsersRef = useRef(fetchUsers);
+  const fetchPendingUsersRef = useRef(fetchPendingUsers);
+  useEffect(() => {
+    fetchUsersRef.current = fetchUsers;
+    fetchPendingUsersRef.current = fetchPendingUsers;
+  });
+
   useEffect(() => {
     fetchUsers();
     fetchPendingUsers();
     setCurrentPage(1);
     setActiveMenuData(null);
-  }, [selectedMajor, selectedCohort, selectedClass, fetchUsers, fetchPendingUsers]);
+  }, [fetchUsers, fetchPendingUsers]);
 
-  // LẮNG NGHE SOCKET REALTIME TỪ SERVER
+  // SOCKET REALTIME: Kết nối 1 lần duy nhất khi component mount
   useEffect(() => {
     const socketUrl = API_BASE.replace('/api', '');
     const socket = io(socketUrl);
 
     socket.on("student_profile_updated", () => {
-      fetchUsers();
-      fetchPendingUsers();
+      fetchUsersRef.current();
+      fetchPendingUsersRef.current();
     });
 
     return () => {
       socket.off("student_profile_updated");
       socket.disconnect();
     };
-  }, [fetchUsers, fetchPendingUsers]);
+  }, []);
 
+  // TÁCH THỰC THỂ TỰ NHIÊN (NL SEARCH)
   const parsedNL = useMemo(() => {
     const raw = searchTerm.trim();
     if (!raw) return null;
@@ -182,9 +189,9 @@ export const ManageUsers = () => {
       detectedMajor = "Hệ Thống Thông Tin";
     } else if (normalized.includes("cong nghe thong tin") || normalized.includes("cntt")) {
       detectedMajor = "Công Nghệ Thông Tin";
-    } else if (normalized.includes("ky thuat phan mem") || normalized.includes("phan mem") || normalized.includes("ktpm")) {
+    } else if (normalized.includes("ky thuat phan mem") || normalized.includes("ktpm")) {
       detectedMajor = "Kỹ Thuật Phần Mềm";
-    } else if (normalized.includes("an ninh mang") || normalized.includes("an ninh") || normalized.includes("anm")) {
+    } else if (normalized.includes("an ninh mang") || normalized.includes("anm")) {
       detectedMajor = "An Ninh Mạng";
     }
 
@@ -194,7 +201,7 @@ export const ManageUsers = () => {
       detectedStatus = "approved";
     } else if (normalized.includes("tu choi") || normalized.includes("rejected")) {
       detectedStatus = "rejected";
-    } else if (normalized.includes("bi khoa") || normalized.includes("khoa tai khoan") || normalized.includes("blocked")) {
+    } else if (normalized.includes("bi khoa") || normalized.includes("khoa") || normalized.includes("blocked")) {
       detectedStatus = "blocked";
     } else if (normalized.includes("hoat dong") || normalized.includes("active")) {
       detectedStatus = "active";
@@ -211,7 +218,6 @@ export const ManageUsers = () => {
       major: detectedMajor,
       status: detectedStatus,
       keyword: cleanedKeyword,
-      hasEntities: !!(detectedCohort || detectedMajor || detectedStatus || cleanedKeyword),
     };
   }, [searchTerm]);
 
@@ -219,13 +225,13 @@ export const ManageUsers = () => {
     let source = activeTab === "pending" ? pendingUsers : users;
 
     return source.filter((u) => {
+      // 1. Khóa đào tạo (Tránh bắt nhầm đuôi MSSV)
       if (selectedCohort !== "all") {
         const cohortDigits = selectedCohort.replace(/\D/g, "");
         const uClass = String(u.className || "").toUpperCase();
         const uCode = String(u.studentCode || "").toUpperCase();
-        const matchCohort =
-          uClass.includes(selectedCohort.toUpperCase()) ||
-          (cohortDigits && (uClass.includes(cohortDigits) || uCode.includes(cohortDigits)));
+        const matchCohort = uClass.includes(selectedCohort.toUpperCase()) || 
+          (cohortDigits && (uClass.includes(cohortDigits) || uCode.startsWith(cohortDigits)));
         if (!matchCohort) return false;
       }
 
@@ -233,15 +239,16 @@ export const ManageUsers = () => {
         const cohortDigits = parsedNL.cohort.replace(/\D/g, "");
         const uClass = String(u.className || "").toUpperCase();
         const uCode = String(u.studentCode || "").toUpperCase();
-        const matchCohort =
-          uClass.includes(parsedNL.cohort.toUpperCase()) ||
-          (cohortDigits && (uClass.includes(cohortDigits) || uCode.includes(cohortDigits)));
+        const matchCohort = uClass.includes(parsedNL.cohort.toUpperCase()) ||
+          (cohortDigits && (uClass.includes(cohortDigits) || uCode.startsWith(cohortDigits)));
         if (!matchCohort) return false;
       }
 
+      // 2. Chuyên ngành
       if (selectedMajor !== "all" && u.faculty !== selectedMajor) return false;
       if (selectedClass !== "all" && !String(u.className || "").toLowerCase().includes(selectedClass.toLowerCase())) return false;
 
+      // 3. Search tự nhiên
       if (parsedNL) {
         if (parsedNL.major) {
           const uFaculty = removeVietnameseTones(u.faculty || "");
@@ -290,10 +297,9 @@ export const ManageUsers = () => {
     }
   };
 
-  // THAO TÁC RESET / THU HỒI MSSV
   const handleResetStudentCode = async (user) => {
     setActiveMenuData(null);
-    const confirmMsg = `Xác nhận thu hồi MSSV [${user.studentCode}] khỏi tài khoản "${user.name}"?\n\nSau khi thu hồi, mã này sẽ được giải phóng hoàn toàn để người dùng chính chủ có thể đăng ký lại.`;
+    const confirmMsg = `Xác nhận thu hồi MSSV [${user.studentCode}] khỏi tài khoản "${user.name}"?\n\nSau khi thu hồi, mã này sẽ được giải phóng hoàn toàn và tài khoản sẽ chuyển về hàng chờ duyệt.`;
     if (!window.confirm(confirmMsg)) return;
 
     try {
@@ -352,8 +358,6 @@ export const ManageUsers = () => {
       faculty: user.faculty || options.majors[0]?.majorName || "Hệ Thống Thông Tin",
       totalCredits: user.totalCredits || 0,
       isActive: user.isActive !== false,
-      isVerified: user.isVerified === true,
-      verificationStatus: user.verificationStatus || "approved",
     });
   };
 
@@ -361,30 +365,19 @@ export const ManageUsers = () => {
     e.preventDefault();
     if (!editingUser) return;
     try {
-      let finalStatus = editFormData.verificationStatus;
-      let finalVerified = editFormData.isVerified;
-
-      if (editFormData.studentCode !== editingUser.studentCode || editFormData.className !== editingUser.className) {
-        finalStatus = "pending";
-        finalVerified = false;
-      }
-
-      const payload = {
-        ...editFormData,
-        verificationStatus: finalStatus,
-        isVerified: finalVerified,
-      };
-
       const d = await safeFetchUsersApi(`/${editingUser.id}`, {
         method: "PUT",
-        body: JSON.stringify(payload),
+        body: JSON.stringify(editFormData),
       });
+
       if (d.success) {
         setEditingUser(null);
         await Promise.all([fetchUsers(), fetchPendingUsers()]);
-        alert("Đã cập nhật hồ sơ thành công!");
+        alert(d.message || "Đã cập nhật hồ sơ thành công! Hồ sơ đã được chuyển về tab Chờ duyệt.");
+        // Chuyển sang tab pending để tiện theo dõi
+        setActiveTab("pending");
       } else {
-        alert(d.message || "Cập nhật thất bại!");
+        alert(d.message || d.error || "Cập nhật thất bại!");
       }
     } catch (err) {
       alert("Lỗi kết nối máy chủ");
@@ -488,7 +481,7 @@ export const ManageUsers = () => {
                 type="text"
                 value={searchTerm}
                 onChange={(e) => setSearchTerm(e.target.value)}
-                placeholder="Nhấn vào đây để tìm kiếm..."
+                placeholder="VD: K23 HTTT chờ duyệt, hoặc tên, MSSV..."
                 className="form-control form-control-sm rounded-end-3 bg-white border-start-0 shadow-none fw-semibold"
                 style={{ fontSize: "12px", borderColor: "#e2e8f0", height: "32px" }}
               />
@@ -547,7 +540,7 @@ export const ManageUsers = () => {
               type="text"
               value={selectedClass === "all" ? "" : selectedClass}
               onChange={(e) => setSelectedClass(e.target.value.trim() || "all")}
-              placeholder="VD: HTTT0000"
+              placeholder="VD: HTTT2311"
               className="form-control form-control-sm rounded-3 bg-white shadow-none fw-semibold font-monospace text-primary"
               style={{ fontSize: "12.5px", borderColor: "#e2e8f0", height: "32px" }}
             />
@@ -561,8 +554,6 @@ export const ManageUsers = () => {
                 setSelectedMajor("all");
                 setSelectedCohort("all");
                 setSelectedClass("all");
-                fetchUsers();
-                fetchPendingUsers();
               }}
               className="btn btn-outline-secondary btn-sm w-100 fw-bold rounded-3 shadow-none d-flex align-items-center justify-content-center cursor-pointer bg-white"
               style={{ height: "32px", fontSize: "12px", borderColor: "#e2e8f0" }}
@@ -646,7 +637,7 @@ export const ManageUsers = () => {
                             {u.studentCode}
                           </span>
                         ) : (
-                          <span className="text-muted small fst-italic">Chưa có MSSV</span>
+                          <span className="text-danger small fst-italic">Thiếu MSSV</span>
                         )}
                         <span className="small font-monospace fw-bold text-primary" style={{ fontSize: "11px" }}>
                           {u.className || "Chưa xếp lớp"}
@@ -759,7 +750,12 @@ export const ManageUsers = () => {
         >
           {(!activeMenuData.user.isVerified || activeMenuData.user.verificationStatus === "pending") && (
             <>
-              <button type="button" onClick={() => handleVerify(activeMenuData.user.id, "approve")} className="dropdown-item d-flex align-items-center gap-2 px-3 py-1.5 text-success border-0 bg-transparent fw-bold cursor-pointer">
+              <button 
+                type="button" 
+                onClick={() => handleVerify(activeMenuData.user.id, "approve")} 
+                disabled={!activeMenuData.user.studentCode}
+                className="dropdown-item d-flex align-items-center gap-2 px-3 py-1.5 text-success border-0 bg-transparent fw-bold cursor-pointer"
+              >
                 <i className="bi bi-check-circle-fill"></i>
                 <span>Duyệt vào lớp</span>
               </button>
@@ -776,7 +772,6 @@ export const ManageUsers = () => {
             <span>Chỉnh sửa hồ sơ</span>
           </button>
 
-          {/* NÚT THU HỒI / RESET MSSV */}
           {activeMenuData.user.studentCode && (
             <button
               type="button"
@@ -814,6 +809,11 @@ export const ManageUsers = () => {
 
               <form onSubmit={handleSaveEdit}>
                 <div className="modal-body px-4 py-3 d-flex flex-column gap-2.5">
+                  <div className="alert alert-warning py-1.5 px-2.5 small mb-1 border-warning-subtle text-dark" style={{ fontSize: "11px" }}>
+                    <i className="bi bi-info-circle-fill me-1 text-warning"></i>
+                    Lưu ý: Mọi chỉnh sửa hồ sơ sẽ đưa sinh viên về hàng <b>Chờ duyệt (Pending)</b> để xác thực lại.
+                  </div>
+
                   <div>
                     <label className="form-label text-uppercase text-secondary fw-bold mb-1" style={{ fontSize: "10px" }}>Họ và tên *</label>
                     <input type="text" required value={editFormData.name} onChange={(e) => setEditFormData({ ...editFormData, name: e.target.value })} className="form-control form-control-sm rounded-3 shadow-none fw-bold" />
@@ -825,11 +825,11 @@ export const ManageUsers = () => {
                   <div className="row g-2">
                     <div className="col-6">
                       <label className="form-label text-uppercase text-secondary fw-bold mb-1" style={{ fontSize: "10px" }}>MSSV</label>
-                      <input type="text" value={editFormData.studentCode} onChange={(e) => setEditFormData({ ...editFormData, studentCode: e.target.value })} className="form-control form-control-sm rounded-3 shadow-none font-monospace fw-bold text-primary" />
+                      <input type="text" value={editFormData.studentCode} onChange={(e) => setEditFormData({ ...editFormData, studentCode: e.target.value.toUpperCase() })} className="form-control form-control-sm rounded-3 shadow-none font-monospace fw-bold text-primary" />
                     </div>
                     <div className="col-6">
                       <label className="form-label text-uppercase text-secondary fw-bold mb-1" style={{ fontSize: "10px" }}>Lớp Sinh Hoạt</label>
-                      <input type="text" value={editFormData.className} onChange={(e) => setEditFormData({ ...editFormData, className: e.target.value })} className="form-control form-control-sm rounded-3 shadow-none fw-bold" />
+                      <input type="text" value={editFormData.className} onChange={(e) => setEditFormData({ ...editFormData, className: e.target.value.toUpperCase() })} className="form-control form-control-sm rounded-3 shadow-none fw-bold" />
                     </div>
                   </div>
                   <div className="row g-2">
@@ -850,7 +850,7 @@ export const ManageUsers = () => {
 
                 <div className="modal-footer border-0 px-4 pt-1 pb-4 d-flex justify-content-end gap-2">
                   <button type="button" onClick={() => setEditingUser(null)} className="btn btn-light rounded-pill px-3.5 py-1.5 small border cursor-pointer">Hủy</button>
-                  <button type="submit" className="btn btn-primary rounded-pill px-4 py-1.5 small border-0 text-white cursor-pointer" style={{ background: "#185bf0" }}>Lưu thay đổi</button>
+                  <button type="submit" className="btn btn-primary rounded-pill px-4 py-1.5 small border-0 text-white cursor-pointer" style={{ background: "#185bf0" }}>Lưu & Đưa về chờ duyệt</button>
                 </div>
               </form>
             </div>

@@ -1,5 +1,5 @@
 // src/pages/index/ProfileSection.jsx
-import React, { useState, useEffect, useMemo, useCallback } from "react";
+import React, { useState, useEffect, useMemo, useCallback, useRef } from "react";
 import { io } from "socket.io-client";
 import { getCurrentUser } from "../../services/authService";
 
@@ -30,7 +30,6 @@ export const ProfileSection = ({ currentUser: initialUser }) => {
   const [facultyInput, setFacultyInput] = useState("");
   const [isUpdating, setIsUpdating] = useState(false);
 
-  // ĐỊNH DANH USER: Chỉ dùng ID số hoặc Zalo ID / Email, KHÔNG dùng student_code
   const myUserId = useMemo(() => {
     if (user?.id) return String(user.id);
     const saved = localStorage.getItem("tuna_user_id");
@@ -74,7 +73,15 @@ export const ProfileSection = ({ currentUser: initialUser }) => {
         const serverUser = json.data?.user || json.user;
         if (serverUser) {
           setUser((prev) => {
-            const merged = { ...prev, ...serverUser };
+            const merged = { 
+              ...prev, 
+              ...serverUser,
+              // Đồng bộ song song key camelCase và snake_case
+              is_verified: serverUser.is_verified ?? serverUser.isVerified ?? false,
+              isVerified: serverUser.is_verified ?? serverUser.isVerified ?? false,
+              verification_status: serverUser.verification_status || serverUser.verificationStatus || "pending",
+              verificationStatus: serverUser.verification_status || serverUser.verificationStatus || "pending"
+            };
             localStorage.setItem("user", JSON.stringify(merged));
             localStorage.setItem("user_info", JSON.stringify(merged));
             localStorage.setItem("tuna_current_user", JSON.stringify(merged));
@@ -126,7 +133,24 @@ export const ProfileSection = ({ currentUser: initialUser }) => {
     };
   }, [fetchFaculties, fetchProfileAndStats]);
 
-  // SOCKET REALTIME: NHẬN THÔNG BÁO DUYỆT / TỪ CHỐI / THU HỒI MSSV
+  const onLogoutClick = useCallback(() => {
+    localStorage.removeItem("user_token");
+    localStorage.removeItem("token");
+    localStorage.removeItem("user_role");
+    localStorage.removeItem("user_info");
+    localStorage.removeItem("user");
+    localStorage.removeItem("tuna_current_user");
+    localStorage.removeItem("tuna_user_id");
+    setUser(null);
+    window.location.reload();
+  }, []);
+
+  // SOCKET REALTIME: Bắt sự kiện duyệt/từ chối/thu hồi
+  const onLogoutClickRef = useRef(onLogoutClick);
+  useEffect(() => {
+    onLogoutClickRef.current = onLogoutClick;
+  });
+
   useEffect(() => {
     const listenId = user?.id || myUserId;
     if (!listenId) return;
@@ -136,7 +160,7 @@ export const ProfileSection = ({ currentUser: initialUser }) => {
 
     socket.on(`force_logout_${listenId}`, (data) => {
       alert(data.reason || "Tài khoản của bạn đã bị vô hiệu hóa bởi Quản trị viên!");
-      onLogoutClick(); 
+      onLogoutClickRef.current(); 
     });
 
     socket.on(`user_verify_status_${listenId}`, (data) => {
@@ -144,10 +168,14 @@ export const ProfileSection = ({ currentUser: initialUser }) => {
         const isApproved = data.status === 'approved';
         const updated = { 
           ...prev, 
-          verification_status: data.status, 
+          verification_status: data.status,
+          verificationStatus: data.status,
           is_verified: isApproved,
-          // Nếu Admin thu hồi MSSV (studentCode === null)
-          ...(data.studentCode !== undefined && { student_code: data.studentCode })
+          isVerified: isApproved,
+          ...(data.studentCode !== undefined && { 
+            student_code: data.studentCode,
+            studentCode: data.studentCode
+          })
         };
         localStorage.setItem("user", JSON.stringify(updated));
         localStorage.setItem("user_info", JSON.stringify(updated));
@@ -159,8 +187,13 @@ export const ProfileSection = ({ currentUser: initialUser }) => {
         showToast("Hồ sơ của bạn đã được Admin duyệt vào lớp thành công!", "success");
       } else if (data.status === "rejected") {
         showToast("Yêu cầu vào lớp của bạn đã bị từ chối!", "error");
-      } else if (data.studentCode === null) {
-        showToast("MSSV của bạn đã được Admin thu hồi. Vui lòng cập nhật lại!", "error");
+      } else if (data.status === "pending") {
+        showToast(
+          data.studentCode === null 
+            ? "MSSV của bạn đã được Admin thu hồi. Vui lòng cập nhật lại!" 
+            : "Hồ sơ của bạn đã chuyển về trạng thái chờ Admin duyệt!", 
+          "warning"
+        );
       }
     });
 
@@ -186,8 +219,8 @@ export const ProfileSection = ({ currentUser: initialUser }) => {
       return;
     }
     setNameInput(user.name || "");
-    setStudentCodeInput(user.student_code || "");
-    setClassNameInput(user.class_name || "");
+    setStudentCodeInput(user.student_code || user.studentCode || "");
+    setClassNameInput(user.class_name || user.className || "");
     setFacultyInput(user.faculty || (availableFaculties[0] || "Hệ Thống Thông Tin"));
     setShowEditModal(true);
   };
@@ -216,42 +249,33 @@ export const ProfileSection = ({ currentUser: initialUser }) => {
         faculty: cleanFaculty,
       };
 
-      let res = await fetch(`${API_BASE}/student/link`, {
+      // Gửi trực tiếp đến route users/sync để tránh lỗi 404
+      const res = await fetch(`${API_BASE}/users/sync`, {
         method: "POST",
         headers: getAuthHeaders(),
         body: JSON.stringify(payload),
       });
 
-      if (!res.ok && res.status === 404) {
-        res = await fetch(`${API_BASE}/users/sync`, {
-          method: "POST",
-          headers: getAuthHeaders(),
-          body: JSON.stringify(payload),
-        });
-      }
-
       const data = await res.json();
       if (res.ok && data.success) {
         const serverUser = data.user;
-        const serverStatus = serverUser?.verification_status || serverUser?.verificationStatus || "pending";
-        const serverVerified = Boolean(serverUser?.is_verified ?? serverUser?.isVerified ?? false);
 
-        showToast(
-          serverStatus === "pending"
-            ? "Đã gửi hồ sơ, vui lòng chờ Admin duyệt vào lớp!"
-            : "Cập nhật hồ sơ thành công!",
-          serverStatus === "pending" ? "warning" : "success"
-        );
+        showToast("Đã lưu hồ sơ, vui lòng chờ Admin duyệt vào lớp!", "warning");
         
         const updatedUser = {
           ...user,
           ...serverUser,
           name: cleanName,
           student_code: cleanCode,
+          studentCode: cleanCode,
           class_name: cleanClass,
+          className: cleanClass,
           faculty: cleanFaculty,
-          is_verified: serverVerified,
-          verification_status: serverStatus,
+          // Bắt buộc set pending
+          is_verified: false,
+          isVerified: false,
+          verification_status: "pending",
+          verificationStatus: "pending",
         };
 
         setUser(updatedUser);
@@ -259,13 +283,11 @@ export const ProfileSection = ({ currentUser: initialUser }) => {
         localStorage.setItem("user_info", JSON.stringify(updatedUser));
         localStorage.setItem("tuna_current_user", JSON.stringify(updatedUser));
         
-        // Chỉ lưu ID số nguyên vào tuna_user_id
         if (serverUser?.id) {
           localStorage.setItem("tuna_user_id", String(serverUser.id));
         }
 
         setShowEditModal(false);
-        fetchProfileAndStats();
       } else {
         showToast(data.message || "Không thể cập nhật hồ sơ!", "error");
       }
@@ -276,18 +298,9 @@ export const ProfileSection = ({ currentUser: initialUser }) => {
     }
   };
 
-  const onLogoutClick = () => {
-    localStorage.removeItem("user_token");
-    localStorage.removeItem("token");
-    localStorage.removeItem("user_role");
-    localStorage.removeItem("user_info");
-    localStorage.removeItem("user");
-    localStorage.removeItem("tuna_current_user");
-    localStorage.removeItem("tuna_user_id");
-    setUser(null);
-    showToast("Đã đăng xuất tài khoản!");
-    window.location.reload();
-  };
+  const isApproved = user?.verification_status === "approved" || user?.verificationStatus === "approved" || 
+    (Boolean(user?.is_verified ?? user?.isVerified) && (user?.verification_status !== "pending" && user?.verificationStatus !== "pending"));
+  const isRejected = user?.verification_status === "rejected" || user?.verificationStatus === "rejected";
 
   return (
     <div className="flex flex-col gap-3.5 pb-8 px-1 w-full relative">
@@ -329,22 +342,18 @@ export const ProfileSection = ({ currentUser: initialUser }) => {
             <div className="flex items-center gap-2">
               <h6 className="font-black text-slate-900 mb-0 text-[15px] truncate break-words">{user?.name || "Sinh viên"}</h6>
               <span className={`px-2 py-0.5 text-[9.5px] font-extrabold rounded-full uppercase shrink-0 ${
-                user?.verification_status === "approved" || (user?.is_verified && user?.verification_status !== "pending")
+                isApproved
                   ? "bg-emerald-50 text-emerald-700 border border-emerald-200" 
-                  : user?.verification_status === "rejected" 
+                  : isRejected 
                   ? "bg-rose-50 text-rose-700 border border-rose-200" 
                   : "bg-amber-50 text-amber-700 border border-amber-200"
               }`}>
-                {user?.verification_status === "approved" || (user?.is_verified && user?.verification_status !== "pending")
-                  ? "Đã duyệt" 
-                  : user?.verification_status === "rejected" 
-                  ? "Bị từ chối" 
-                  : "Chờ duyệt"}
+                {isApproved ? "Đã duyệt" : isRejected ? "Bị từ chối" : "Chờ duyệt"}
               </span>
             </div>
             <p className="text-[11.5px] text-slate-500 mb-0 mt-0.5 truncate font-medium">
-              MSSV: <b className="text-[#0045ce] font-mono">{user?.student_code || "Chưa cập nhật"}</b> 
-              {user?.class_name && <span> • Lớp: <b className="text-slate-800">{user.class_name}</b></span>}
+              MSSV: <b className="text-[#0045ce] font-mono">{user?.student_code || user?.studentCode || "Chưa cập nhật"}</b> 
+              {(user?.class_name || user?.className) && <span> • Lớp: <b className="text-slate-800">{user?.class_name || user?.className}</b></span>}
             </p>
             <p className="text-[11px] text-slate-400 mb-0 truncate font-semibold">Ngành: {user?.faculty || "Hệ Thống Thông Tin"}</p>
           </div>
@@ -367,7 +376,9 @@ export const ProfileSection = ({ currentUser: initialUser }) => {
             <div className="truncate min-w-0 flex-1">
               <p className="text-xs font-black text-slate-800 m-0 leading-tight">Chỉnh sửa hồ sơ</p>
               <p className="text-[11px] text-slate-500 m-0 mt-0.5 truncate font-medium">
-                {user?.student_code ? `${user.name} • ${user.student_code} • ${user.class_name || "Chưa có lớp"}` : "Cập nhật MSSV, lớp và chuyên ngành"}
+                {(user?.student_code || user?.studentCode) 
+                  ? `${user.name} • ${user.student_code || user.studentCode} • ${user.class_name || user.className || "Chưa có lớp"}` 
+                  : "Cập nhật MSSV, lớp và chuyên ngành"}
               </p>
             </div>
           </div>

@@ -7,33 +7,34 @@ const { authenticateToken } = require('../middlewares/auth');
 // =============================================================================
 // 1. LẤY DANH SÁCH SINH VIÊN ĐÃ ĐƯỢC DUYỆT / HOẠT ĐỘNG
 // =============================================================================
-router.get('/', async (req, res) => {
-  const { search, major, cohort, year, class: classNameFilter } = req.query;
+router.get('/', authenticateToken, async (req, res) => {
+  const { search, major, cohort, year, class: classQuery, className } = req.query;
+  const classNameFilter = className || classQuery;
+
   try {
-// routes/users.routes.js (Tại route GET '/')
-let query = `
-  SELECT 
-    u.id, 
-    u.zalo_id AS "zaloId", 
-    u.name, 
-    COALESCE(u.email, '') AS "email",
-    u.avatar, 
-    u.role, 
-    u.student_code AS "studentCode", 
-    u.class_name AS "className", 
-    COALESCE(u.total_credits, 0) AS "totalCredits", 
-    u.faculty,
-    COALESCE(u.is_active, true) AS "isActive",
-    COALESCE(u.is_verified, false) AS "isVerified",
-    COALESCE(u.verification_status, 'pending') AS "verificationStatus",
-    TO_CHAR(u.created_at, 'DD/MM/YYYY') AS "createdAt",
-    COALESCE(u.current_streak, 0) AS "currentStreak",
-    COALESCE(u.longest_streak, 0) AS "longestStreak"
-  FROM users u
-  WHERE u.role = 'student' 
-    AND u.is_verified = TRUE 
-    AND u.verification_status = 'approved'
-`;
+    let query = `
+      SELECT 
+        u.id, 
+        u.zalo_id AS "zaloId", 
+        u.name, 
+        COALESCE(u.email, '') AS "email",
+        u.avatar, 
+        u.role, 
+        u.student_code AS "studentCode", 
+        u.class_name AS "className", 
+        COALESCE(u.total_credits, 0) AS "totalCredits", 
+        u.faculty,
+        COALESCE(u.is_active, true) AS "isActive",
+        COALESCE(u.is_verified, false) AS "isVerified",
+        COALESCE(u.verification_status, 'pending') AS "verificationStatus",
+        TO_CHAR(u.created_at, 'DD/MM/YYYY') AS "createdAt",
+        COALESCE(u.current_streak, 0) AS "currentStreak",
+        COALESCE(u.longest_streak, 0) AS "longestStreak"
+      FROM users u
+      WHERE u.role = 'student' 
+        AND u.is_verified = TRUE 
+        AND u.verification_status = 'approved'
+    `;
     const params = [];
 
     if (search && search.trim()) {
@@ -84,7 +85,7 @@ let query = `
 // =============================================================================
 // 2. LẤY DANH SÁCH CHỜ DUYỆT (PENDING) HOẶC BỊ TỪ CHỐI
 // =============================================================================
-router.get('/pending', async (req, res) => {
+router.get('/pending', authenticateToken, async (req, res) => {
   try {
     const { rows } = await pool.query(
       `SELECT 
@@ -123,6 +124,16 @@ router.post('/verify', authenticateToken, async (req, res) => {
     const isApprove = action === 'approve';
     const newStatus = isApprove ? 'approved' : 'rejected';
 
+    if (isApprove) {
+      const chk = await pool.query(`SELECT student_code FROM users WHERE id = $1`, [userId]);
+      if (chk.rows.length === 0) {
+        return res.status(404).json({ success: false, message: 'Không tìm thấy sinh viên!' });
+      }
+      if (!chk.rows[0].student_code) {
+        return res.status(400).json({ success: false, message: 'Sinh viên chưa có MSSV, không thể phê duyệt vào lớp!' });
+      }
+    }
+
     const result = await pool.query(
       `UPDATE users 
        SET is_verified = $1, 
@@ -138,7 +149,7 @@ router.post('/verify', authenticateToken, async (req, res) => {
 
     const io = req.app.get('io');
     if (io) {
-      io.emit(`user_verify_status_${userId}`, { status: newStatus });
+      io.emit(`user_verify_status_${userId}`, { status: newStatus, isVerified: isApprove });
       io.emit('student_profile_updated');
     }
 
@@ -153,16 +164,12 @@ router.post('/verify', authenticateToken, async (req, res) => {
 });
 
 // =============================================================================
-// 4. ADMIN THU HỒI / RESET MSSV KHI BỊ TRÙNG HOẶC KHAI SAI
+// 4. ADMIN THU HỒI / RESET MSSV
 // =============================================================================
 router.patch('/:id/reset-student-code', authenticateToken, async (req, res) => {
   const { id } = req.params;
   try {
-    const userCheck = await pool.query(
-      `SELECT id, name, student_code FROM users WHERE id = $1`,
-      [id]
-    );
-
+    const userCheck = await pool.query(`SELECT id, name, student_code FROM users WHERE id = $1`, [id]);
     if (userCheck.rows.length === 0) {
       return res.status(404).json({ success: false, message: 'Không tìm thấy người dùng!' });
     }
@@ -170,7 +177,6 @@ router.patch('/:id/reset-student-code', authenticateToken, async (req, res) => {
     const current = userCheck.rows[0];
     const oldCode = current.student_code;
 
-    // Reset student_code về NULL, đưa về trạng thái chờ duyệt
     const result = await pool.query(
       `UPDATE users 
        SET student_code = NULL, 
@@ -184,9 +190,7 @@ router.patch('/:id/reset-student-code', authenticateToken, async (req, res) => {
 
     const io = req.app.get('io');
     if (io) {
-      // Thông báo cho chính user đó cập nhật lại app
-      io.emit(`user_verify_status_${id}`, { status: 'pending', studentCode: null });
-      // Báo Web Admin load lại danh sách
+      io.emit(`user_verify_status_${id}`, { status: 'pending', studentCode: null, isVerified: false });
       io.emit('student_profile_updated');
     }
 
@@ -201,12 +205,31 @@ router.patch('/:id/reset-student-code', authenticateToken, async (req, res) => {
 });
 
 // =============================================================================
-// 5. CHỈNH SỬA HỒ SƠ SINH VIÊN (Admin)
+// 5. CHỈNH SỬA HỒ SƠ SINH VIÊN (Admin) - TỰ ĐỘNG CHUYỂN VỀ PENDING
 // =============================================================================
 router.put('/:id', authenticateToken, async (req, res) => {
   const { id } = req.params;
-  const { name, studentCode, className, totalCredits, faculty, isActive, isVerified, verificationStatus } = req.body;
+  const { name, studentCode, className, totalCredits, faculty, isActive } = req.body;
+
   try {
+    const cleanCode = studentCode ? studentCode.trim().toUpperCase() : null;
+    const cleanClass = className ? className.trim().toUpperCase() : null;
+    const cleanName = name ? name.trim() : null;
+
+    if (cleanCode) {
+      const conflict = await pool.query(
+        `SELECT id, name FROM users WHERE UPPER(TRIM(student_code)) = $1 AND id != $2 LIMIT 1`,
+        [cleanCode, id]
+      );
+      if (conflict.rows.length > 0) {
+        return res.status(409).json({
+          success: false,
+          message: `MSSV ${cleanCode} đã được đăng ký bởi tài khoản khác (${conflict.rows[0].name})!`
+        });
+      }
+    }
+
+    // ÉP CỨNG: Mọi thay đổi hồ sơ đều reset về chờ duyệt (pending)
     const result = await pool.query(
       `UPDATE users 
        SET name = $1, 
@@ -215,16 +238,32 @@ router.put('/:id', authenticateToken, async (req, res) => {
            total_credits = $4, 
            faculty = $5, 
            is_active = $6, 
-           is_verified = $7, 
-           verification_status = $8
-       WHERE id = $9 RETURNING *`,
-      [name, studentCode || null, className || null, Number(totalCredits) || 0, faculty || null, Boolean(isActive), Boolean(isVerified), verificationStatus || (isVerified ? 'approved' : 'pending'), id]
+           is_verified = FALSE,
+           verification_status = 'pending',
+           updated_at = CURRENT_TIMESTAMP
+       WHERE id = $7 
+       RETURNING id, name, student_code AS "studentCode", class_name AS "className", faculty, 
+                 is_active AS "isActive", is_verified AS "isVerified", verification_status AS "verificationStatus"`,
+      [cleanName, cleanCode, cleanClass, Number(totalCredits) || 0, faculty || null, isActive !== false, id]
     );
 
-    if (result.rows.length === 0) return res.status(404).json({ success: false, message: 'Không tìm thấy người dùng' });
-    res.json({ success: true, message: 'Cập nhật tài khoản sinh viên thành công!', data: result.rows[0] });
+    if (result.rows.length === 0) {
+      return res.status(404).json({ success: false, message: 'Không tìm thấy người dùng' });
+    }
+
+    const io = req.app.get('io');
+    if (io) {
+      io.emit(`user_verify_status_${id}`, { status: 'pending', isVerified: false, studentCode: cleanCode });
+      io.emit('student_profile_updated');
+    }
+
+    res.json({ 
+      success: true, 
+      message: 'Đã cập nhật hồ sơ sinh viên! Hồ sơ đã được chuyển về trạng thái Chờ duyệt.', 
+      data: result.rows[0] 
+    });
   } catch (error) {
-    res.status(500).json({ success: false, error: error.message });
+    res.status(500).json({ success: false, message: 'Lỗi máy chủ: ' + error.message });
   }
 });
 
@@ -245,9 +284,9 @@ router.patch('/:id/toggle-status', authenticateToken, async (req, res) => {
       io.emit(`force_logout_${id}`, { reason: 'Tài khoản của bạn đã bị vô hiệu hóa bởi Quản trị viên!' });
     }
 
-    res.json({ success: true, isActive: newStatus, message: newStatus ? 'Đã kích hoạt lại tài khoản' : 'Đã vô hiệu hóa (khóa) tài khoản' });
+    res.json({ success: true, isActive: newStatus, message: newStatus ? 'Đã kích hoạt lại tài khoản' : 'Đã vô hiệu hóa tài khoản' });
   } catch (error) {
-    res.status(500).json({ success: false, error: error.message });
+    res.status(500).json({ success: false, message: error.message });
   }
 });
 
@@ -284,26 +323,22 @@ router.post(['/student/link', '/sync'], async (req, res) => {
 
     let existingUser = null;
 
-    // 1. Tìm chính xác qua ID số nguyên
     const rawId = userId || req.headers['x-user-id'];
     if (rawId && /^\d+$/.test(String(rawId).trim())) {
       const byId = await pool.query(`SELECT * FROM users WHERE id = $1 LIMIT 1`, [parseInt(rawId, 10)]);
       if (byId.rows.length > 0) existingUser = byId.rows[0];
     }
 
-    // 2. Tìm qua ZaloId
     if (!existingUser && zaloId) {
       const byZalo = await pool.query(`SELECT * FROM users WHERE zalo_id = $1 LIMIT 1`, [String(zaloId).trim()]);
       if (byZalo.rows.length > 0) existingUser = byZalo.rows[0];
     }
 
-    // 3. Tìm qua Email
     if (!existingUser && email) {
       const byEmail = await pool.query(`SELECT * FROM users WHERE LOWER(email) = LOWER($1) LIMIT 1`, [String(email).trim()]);
       if (byEmail.rows.length > 0) existingUser = byEmail.rows[0];
     }
 
-    // 4. Chặn trùng MSSV với tài khoản khác
     const curUserId = existingUser ? existingUser.id : null;
     const conflict = await pool.query(
       `SELECT id, name, is_verified, verification_status 
@@ -318,37 +353,36 @@ router.post(['/student/link', '/sync'], async (req, res) => {
       return res.status(409).json({
         success: false,
         message: cUser.is_verified || cUser.verification_status === 'approved'
-          ? `MSSV ${cleanCode} đã được xác thực bởi một tài khoản khác. Vui lòng liên hệ Admin để thu hồi!`
+          ? `MSSV ${cleanCode} đã được xác thực bởi tài khoản khác (${cUser.name}). Vui lòng liên hệ Admin!`
           : `MSSV ${cleanCode} đang có hồ sơ chờ duyệt trên hệ thống!`
       });
     }
 
     let updatedUser;
 
-// routes/users.routes.js (Trong router.post(['/student/link', '/sync'], ...))
-
-if (existingUser) {
-  // BẮT BUỘC ÉP VỀ CHỜ DUYỆT (PENDING) MỖI KHI SINH VIÊN BẤM CẬP NHẬT TỪ APP
-  const updateRes = await pool.query(
-    `UPDATE users 
-     SET name = $1, 
-         student_code = $2, 
-         class_name = $3, 
-         faculty = $4,
-         is_verified = FALSE,            -- <--- QUAN TRỌNG: Ngắt trạng thái đã duyệt
-         verification_status = 'pending', -- <--- QUAN TRỌNG: Đưa về pending
-         updated_at = CURRENT_TIMESTAMP
-     WHERE id = $5 
-     RETURNING id, name, email, student_code AS "studentCode", class_name AS "className", faculty, avatar, role, is_verified AS "isVerified", verification_status AS "verificationStatus", is_active AS "isActive"`,
-    [cleanName, cleanCode, cleanClass, cleanFaculty, existingUser.id]
-  );
-  updatedUser = updateRes.rows[0];
-} else {
+    if (existingUser) {
+      const updateRes = await pool.query(
+        `UPDATE users 
+         SET name = $1, 
+             student_code = $2, 
+             class_name = $3, 
+             faculty = $4,
+             is_verified = FALSE,
+             verification_status = 'pending',
+             updated_at = CURRENT_TIMESTAMP
+         WHERE id = $5 
+         RETURNING id, name, email, student_code AS "studentCode", class_name AS "className", faculty, 
+                   avatar, role, is_verified AS "isVerified", verification_status AS "verificationStatus", is_active AS "isActive"`,
+        [cleanName, cleanCode, cleanClass, cleanFaculty, existingUser.id]
+      );
+      updatedUser = updateRes.rows[0];
+    } else {
       const insertRes = await pool.query(
         `INSERT INTO users 
            (name, student_code, class_name, faculty, zalo_id, email, role, is_verified, verification_status)
          VALUES ($1, $2, $3, $4, $5, $6, 'student', FALSE, 'pending')
-         RETURNING id, name, email, student_code AS "studentCode", class_name AS "className", faculty, avatar, role, is_verified AS "isVerified", verification_status AS "verificationStatus", is_active AS "isActive"`,
+         RETURNING id, name, email, student_code AS "studentCode", class_name AS "className", faculty, 
+                   avatar, role, is_verified AS "isVerified", verification_status AS "verificationStatus", is_active AS "isActive"`,
         [cleanName, cleanCode, cleanClass, cleanFaculty, zaloId || `zalo_${Date.now()}`, email || null]
       );
       updatedUser = insertRes.rows[0];
@@ -358,11 +392,10 @@ if (existingUser) {
       return res.status(403).json({ success: false, message: 'Tài khoản của bạn đã bị vô hiệu hóa!' });
     }
 
-    // Bắn socket báo Realtime
     const io = req.app.get('io');
     if (io) {
       io.emit('student_profile_updated', { userId: updatedUser.id, status: 'pending' });
-      io.emit(`user_verify_status_${updatedUser.id}`, { status: 'pending' });
+      io.emit(`user_verify_status_${updatedUser.id}`, { status: 'pending', isVerified: false });
     }
 
     res.json({
@@ -371,7 +404,6 @@ if (existingUser) {
       user: updatedUser
     });
   } catch (err) {
-    console.error("Lỗi POST /student/link:", err);
     res.status(500).json({ success: false, message: 'Lỗi máy chủ: ' + err.message });
   }
 });
