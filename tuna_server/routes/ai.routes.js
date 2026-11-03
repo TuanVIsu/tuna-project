@@ -5,7 +5,7 @@ const crypto = require('crypto');
 const pool = require('../config/db');
 const { generateContentWithFallback } = require('../utils/gemini');
 
-// Helper: Phân giải user_id (INTEGER) từ request, giữ nguyên fallback linh hoạt
+// Helper: Phân giải user_id (INTEGER) từ request
 const resolveUserId = async (req) => {
   if (req.user?.id) return req.user.id;
   const rawId = String(
@@ -97,6 +97,23 @@ const checkUserTokenLimit = async (userId) => {
     console.error("Lỗi kiểm tra hạn mức AI:", err.message);
     return { allowed: true, settings: { cache_ttl_hours: 24, max_questions_per_gen: 5 } };
   }
+};
+
+// Helper: Chuẩn hóa options thành dạng mảng chuỗi ["A. ...", "B. ...", "C. ...", "D. ..."]
+const normalizeOptions = (rawOptions) => {
+  if (!Array.isArray(rawOptions)) return [];
+  return rawOptions.map((opt, idx) => {
+    const letter = String.fromCharCode(65 + idx);
+    if (typeof opt === 'string') {
+      const match = opt.trim().match(/^[A-D][\.\:\s]+(.*)/i);
+      return match ? `${letter}. ${match[1].trim()}` : `${letter}. ${opt.trim()}`;
+    }
+    if (typeof opt === 'object' && opt !== null) {
+      const text = opt.text || opt.value || opt.label || Object.values(opt)[0] || '';
+      return `${letter}. ${String(text).trim()}`;
+    }
+    return `${letter}. ${String(opt).trim()}`;
+  });
 };
 
 // =============================================================================
@@ -263,7 +280,6 @@ router.post('/generate', async (req, res) => {
     const ttlHours = limitCheck.settings?.cache_ttl_hours || 24;
     const contentHash = crypto.createHash('sha256').update((prompt || '').trim()).digest('hex');
 
-    // Kiểm tra cache từ bảng ai_tasks
     const cacheRes = await pool.query(
       `SELECT result_data AS payload 
        FROM ai_tasks 
@@ -333,7 +349,58 @@ router.post('/generate', async (req, res) => {
   }
 });
 
-// POST /daily-quiz/generate - Sinh bài tập động theo môn học kết hợp CSDL & Gemini
+// =============================================================================
+// 3. APIS NGÂN HÀNG CÂU HỎI CHUNG (QUICK RETRIEVAL CHO CẢ A VÀ B)
+// =============================================================================
+
+// GET /api/ai/bank-questions - Rút trực tiếp câu hỏi trắc nghiệm của môn từ CSDL
+router.get('/bank-questions', async (req, res) => {
+  const { subject, count = 5, difficulty } = req.query;
+  const num = Math.max(1, parseInt(count, 10) || 5);
+
+  if (!subject || !subject.trim()) {
+    return res.status(400).json({ success: false, message: 'Vui lòng cung cấp tên môn học!' });
+  }
+
+  try {
+    let query = `
+      SELECT id, subject, question, options, answer, explain, flashcard_data AS "flashcardData"
+      FROM questions 
+      WHERE LOWER(TRIM(subject)) ILIKE LOWER(TRIM($1))
+    `;
+    const params = [`%${subject.trim()}%`];
+
+    if (difficulty && difficulty !== 'all') {
+      params.push(difficulty);
+      query += ` AND difficulty = $${params.length}`;
+    }
+
+    query += ` ORDER BY RANDOM() LIMIT $${params.length + 1}`;
+    params.push(num);
+
+    const { rows } = await pool.query(query, params);
+
+    const formattedQuestions = rows.map((q) => ({
+      id: q.id,
+      question: q.question,
+      options: typeof q.options === 'string' ? JSON.parse(q.options) : q.options,
+      answer: q.answer,
+      explain: q.explain,
+    }));
+
+    res.json({
+      success: true,
+      totalFound: rows.length,
+      fromBank: true,
+      questions: formattedQuestions,
+    });
+  } catch (err) {
+    console.error("Lỗi lấy câu hỏi từ ngân hàng CSDL:", err);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// POST /daily-quiz/generate - Rút từ bảng questions (CSDL), nếu thiếu mới gọi Gemini
 router.post(['/daily-quiz/generate', '/ai/daily-quiz/generate'], async (req, res) => {
   let { subject, targetGoal = 'KhaGioi', dailyPace = 15 } = req.body;
   const userId = await resolveUserId(req);
@@ -341,6 +408,7 @@ router.post(['/daily-quiz/generate', '/ai/daily-quiz/generate'], async (req, res
   if (!subject || subject === 'undefined' || subject.trim() === '') {
     subject = 'Hệ cơ sở dữ liệu đa phương tiện';
   }
+  const cleanSubject = subject.trim();
 
   try {
     const limitCheck = await checkUserTokenLimit(userId);
@@ -352,7 +420,7 @@ router.post(['/daily-quiz/generate', '/ai/daily-quiz/generate'], async (req, res
     let flashcards = [];
 
     // TẦNG 1: ƯU TIÊN KIỂM TRA BỘ NHỚ CACHE 24H TRONG AI_TASKS
-    const cacheKey = `daily_${subject}_${difficulty}_${numQuestions}`;
+    const cacheKey = `daily_${cleanSubject}_${difficulty}_${numQuestions}`;
     const contentHash = crypto.createHash('sha256').update(cacheKey).digest('hex');
     const ttlHours = limitCheck.settings?.cache_ttl_hours || 24;
 
@@ -374,71 +442,83 @@ router.post(['/daily-quiz/generate', '/ai/daily-quiz/generate'], async (req, res
       return res.json({
         success: true,
         source: 'cache_24h',
-        subject,
+        subject: cleanSubject,
         questions: data.questions || [],
         flashcards: data.flashcards || [],
       });
     }
 
     // TẦNG 2: KIỂM TRA NGÂN HÀNG CÂU HỎI TẬP TRUNG (bảng questions)
+    // Người A tạo câu hỏi trước đó thì người B sẽ lấy thẳng tại đây
     const dbQuiz = await pool.query(
-      `SELECT question, options, answer, explain 
+      `SELECT id, question, options, answer, explain 
        FROM questions 
-       WHERE LOWER(subject) ILIKE LOWER($1) 
+       WHERE LOWER(TRIM(subject)) ILIKE LOWER(TRIM($1)) 
        ORDER BY RANDOM() LIMIT $2`,
-      [`%${subject}%`, numQuestions]
+      [`%${cleanSubject}%`, numQuestions]
     ).catch(() => ({ rows: [] }));
 
     if (dbQuiz.rows && dbQuiz.rows.length >= numQuestions) {
       questions = dbQuiz.rows.map(q => ({
+        id: q.id,
         question: q.question,
-        options: typeof q.options === 'string' ? JSON.parse(q.options) : q.options,
+        options: normalizeOptions(typeof q.options === 'string' ? JSON.parse(q.options) : q.options),
         answer: q.answer,
         explain: q.explain
       }));
+
+      // Cập nhật số lần dùng câu hỏi
+      const questionIds = dbQuiz.rows.map(r => r.id);
+      pool.query(
+        `UPDATE questions SET usage_count = usage_count + 1 WHERE id = ANY($1::int[])`,
+        [questionIds]
+      ).catch(() => {});
     }
 
+    // Lấy thẻ flashcard có sẵn từ CSDL
     const dbFlash = await pool.query(
       `SELECT flashcard_data->>'front' AS front, flashcard_data->>'back' AS back 
        FROM questions
-       WHERE LOWER(subject) ILIKE LOWER($1) 
+       WHERE LOWER(TRIM(subject)) ILIKE LOWER(TRIM($1)) 
          AND flashcard_data IS NOT NULL
        ORDER BY RANDOM() LIMIT 4`,
-      [`%${subject}%`]
+      [`%${cleanSubject}%`]
     ).catch(() => ({ rows: [] }));
 
     if (dbFlash.rows && dbFlash.rows.length >= 2) {
-      flashcards = dbFlash.rows;
+      flashcards = dbFlash.rows.filter(f => f.front && f.back);
     }
 
+    // Nếu CSDL đã có đủ câu hỏi và thẻ nhớ do người A/người trước tạo
     if (questions.length >= numQuestions && flashcards.length >= 2) {
       return res.json({
         success: true,
         source: 'database_bank',
-        subject,
+        subject: cleanSubject,
         questions,
         flashcards,
       });
     }
 
-    // TẦNG 3: GỌI GEMINI NẾU CSDL THIẾU
+    // TẦNG 3: GỌI GEMINI NẾU CSDL THIẾU HOẶC CHƯA CÓ
     if (limitCheck.allowed && process.env.GEMINI_API_KEY) {
       try {
-        const prompt = `Bạn là giảng viên đại học. Hãy tạo đúng ${numQuestions} câu hỏi trắc nghiệm 4 lựa chọn (A, B, C, D) và 4 thẻ ghi nhớ (flashcards) cho môn học "${subject}" ở mức độ [${difficulty}].
-YÊU CẦU: Trả về duy nhất một chuỗi JSON hợp lệ không dùng markdown code block:
+        const neededQuizCount = Math.max(1, numQuestions - questions.length);
+        const prompt = `Bạn là giảng viên đại học. Hãy tạo đúng ${neededQuizCount} câu hỏi trắc nghiệm 4 lựa chọn và 4 thẻ ghi nhớ (flashcards) cho môn học "${cleanSubject}" ở mức độ [${difficulty}].
+YÊU CẦU: Trả về duy nhất một chuỗi JSON hợp lệ không bọc trong markdown:
 {
   "questions": [
     {
       "question": "Nội dung câu hỏi?",
-      "options": [{"key": "A", "text": "Lựa chọn A"}, {"key": "B", "text": "Lựa chọn B"}, {"key": "C", "text": "Lựa chọn C"}, {"key": "D", "text": "Lựa chọn D"}],
+      "options": ["A. Lựa chọn A", "B. Lựa chọn B", "C. Lựa chọn C", "D. Lựa chọn D"],
       "answer": "A",
-      "explain": "Giải thích chi tiết"
+      "explain": "Giải thích ngắn gọn lý do chọn A"
     }
   ],
   "flashcards": [
     {
       "front": "Thuật ngữ chính",
-      "back": "Định nghĩa hoặc giải thích chi tiết"
+      "back": "Định nghĩa chi tiết"
     }
   ]
 }`;
@@ -448,17 +528,39 @@ YÊU CẦU: Trả về duy nhất một chuỗi JSON hợp lệ không dùng mar
         const parsed = JSON.parse(cleanJson || '{}');
 
         if (Array.isArray(parsed.questions) && parsed.questions.length > 0) {
-          questions = parsed.questions;
-          flashcards = parsed.flashcards || [];
+          const newQuizNormalized = parsed.questions.map((q) => ({
+            question: q.question,
+            options: normalizeOptions(q.options),
+            answer: (q.answer || 'A').trim().charAt(0).toUpperCase(),
+            explain: q.explain || ''
+          }));
 
-          // Nạp vào bảng questions dùng chung
-          for (const q of questions) {
+          const newFlashcards = Array.isArray(parsed.flashcards) ? parsed.flashcards : [];
+
+          // Nạp đồng thời câu hỏi và flashcard vào bảng questions dùng chung
+          for (let i = 0; i < newQuizNormalized.length; i++) {
+            const q = newQuizNormalized[i];
+            const matchingFlash = newFlashcards[i] || null;
+
             pool.query(
-              `INSERT INTO questions (subject, difficulty, question, options, answer, explain, is_verified, usage_count)
-               VALUES ($1, $2, $3, $4, $5, $6, TRUE, 1)`,
-              [subject, difficulty, q.question, JSON.stringify(q.options), (q.answer || 'A').charAt(0).toUpperCase(), q.explain || '']
+              `INSERT INTO questions (subject, difficulty, question, options, answer, explain, flashcard_data, is_verified, usage_count)
+               VALUES ($1, $2, $3, $4, $5, $6, $7, TRUE, 1)
+               ON CONFLICT (subject, question) DO NOTHING`,
+              [
+                cleanSubject, 
+                difficulty, 
+                q.question, 
+                JSON.stringify(q.options), 
+                q.answer, 
+                q.explain,
+                matchingFlash ? JSON.stringify(matchingFlash) : null
+              ]
             ).catch(() => {});
           }
+
+          // Ghép phần có sẵn và phần mới tạo
+          questions = [...questions, ...newQuizNormalized].slice(0, numQuestions);
+          flashcards = [...flashcards, ...newFlashcards].slice(0, 4);
 
           // Lưu cache vào ai_tasks
           pool.query(
@@ -468,7 +570,7 @@ YÊU CẦU: Trả về duy nhất một chuỗi JSON hợp lệ không dùng mar
               `quiz_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
               userId,
               contentHash,
-              subject,
+              cleanSubject,
               JSON.stringify({ questions, flashcards })
             ]
           ).catch(() => {});
@@ -486,7 +588,7 @@ YÊU CẦU: Trả về duy nhất một chuỗi JSON hợp lệ không dùng mar
           return res.json({
             success: true,
             source: 'gemini_ai',
-            subject,
+            subject: cleanSubject,
             questions,
             flashcards,
           });
@@ -496,7 +598,7 @@ YÊU CẦU: Trả về duy nhất một chuỗi JSON hợp lệ không dùng mar
       }
     }
 
-    // TẦNG 4: NẾU GEMINI THẤT BẠI, LẤY TỪ QUESTIONS HIỆN CÓ
+    // TẦNG 4: NẾU GEMINI THẤT BẠI, LẤY BẤT KỲ CÂU NÀO CÓ TRONG QUESTIONS
     const fallbackDb = await pool.query(
       `SELECT question, options, answer, explain 
        FROM questions 
@@ -507,20 +609,20 @@ YÊU CẦU: Trả về duy nhất một chuỗi JSON hợp lệ không dùng mar
     if (fallbackDb.rows.length > 0) {
       questions = fallbackDb.rows.map(q => ({
         question: q.question,
-        options: typeof q.options === 'string' ? JSON.parse(q.options) : q.options,
+        options: normalizeOptions(typeof q.options === 'string' ? JSON.parse(q.options) : q.options),
         answer: q.answer,
         explain: q.explain
       }));
 
       flashcards = [
-        { front: `Thuật ngữ ${subject}`, back: `Nguyên lý và cấu trúc dữ liệu cơ bản của môn ${subject}.` },
-        { front: `Chỉ mục trong ${subject}`, back: `Phương pháp tối ưu hóa truy vấn dữ liệu hiệu năng cao.` }
+        { front: `Thuật ngữ ${cleanSubject}`, back: `Nguyên lý và cấu trúc dữ liệu cốt lõi của môn ${cleanSubject}.` },
+        { front: `Khái niệm trọng tâm ${cleanSubject}`, back: `Phương pháp tư duy và áp dụng thực tế trong học phần ${cleanSubject}.` }
       ];
 
       return res.json({
         success: true,
         source: 'database_fallback',
-        subject,
+        subject: cleanSubject,
         questions,
         flashcards,
       });
