@@ -102,12 +102,47 @@ export const DocsSection = ({ onNavigateToAIHub }) => {
     syncData();
   }, []);
 
+  // ĐÃ SỬA LỖI: Thuật toán gợi ý Video thông minh (Fuzzy Matching)
   const relevantVideos = useMemo(() => {
-    if (!adminVideos.length) return [];
-    if (!documents.length) return adminVideos.slice(0, 6);
+    if (!adminVideos || !adminVideos.length) return [];
+    if (!documents || !documents.length) return adminVideos.slice(0, 6);
 
-    const activeSubjects = new Set(documents.map((d) => d.subject).filter(Boolean));
-    const matched = adminVideos.filter((v) => activeSubjects.has(v.subject));
+    // 1. Thu thập TẤT CẢ các từ khóa liên quan đến tài liệu của sinh viên
+    const documentKeywords = [];
+    documents.forEach((d) => {
+      if (d.subject) documentKeywords.push(d.subject.toLowerCase().trim());
+      if (d.name) {
+        // Cắt đuôi mở rộng (.pdf, .docx,...) và các ký tự đặc biệt
+        const cleanName = d.name.replace(/\.[^/.]+$/, "").replace(/[-_]/g, " ").toLowerCase().trim();
+        if (cleanName) documentKeywords.push(cleanName);
+      }
+    });
+
+    // 2. Chấm điểm mức độ liên quan của từng video
+    const scoredVideos = adminVideos.map(video => {
+      let score = 0;
+      const videoSubject = (video.subject || "").toLowerCase().trim();
+      const videoTitle = (video.title || "").toLowerCase().trim();
+
+      if (videoSubject || videoTitle) {
+        for (const kw of documentKeywords) {
+          // Tránh các từ khóa quá ngắn (dưới 3 ký tự) gây nhiễu
+          if (kw.length > 2) {
+             if (videoSubject.includes(kw) || kw.includes(videoSubject)) score += 3;
+             if (videoTitle.includes(kw) || kw.includes(videoTitle)) score += 1;
+          }
+        }
+      }
+      return { ...video, score };
+    });
+
+    // 3. Sắp xếp video theo điểm liên quan giảm dần
+    scoredVideos.sort((a, b) => b.score - a.score);
+
+    // 4. Lọc ra các video có liên quan (score > 0)
+    const matched = scoredVideos.filter(v => v.score > 0);
+
+    // 5. Trả về tối đa 8 video liên quan. Nếu không có video liên quan nào, fallback trả về 6 video phổ biến nhất.
     return matched.length > 0 ? matched.slice(0, 8) : adminVideos.slice(0, 6);
   }, [documents, adminVideos]);
 
@@ -375,18 +410,14 @@ export const DocsSection = ({ onNavigateToAIHub }) => {
     }
   };
 
-  // MÀN HÌNH ĐỌC TÀI LIỆU TOÀN MÀN HÌNH (HEADER 2 TẦNG CHUẨN HÌNH 2)
   if (viewingDoc) {
     const isAiDoc = viewingDoc.name?.startsWith("[Tóm tắt]") || viewingDoc.name?.startsWith("[Bản dịch]");
     const ext = (viewingDoc.name?.split(".").pop() || viewingDoc.type || (isAiDoc ? "VĂN BẢN AI" : "DOC")).toUpperCase();
 
     return (
       <div className="position-fixed top-0 start-0 w-100 h-100 bg-[#F8FAFC] d-flex flex-column z-50 overflow-hidden">
-        {/* HEADER 2 TẦNG BẢO ĐẢM NÉ NÚT CAPSULE ZALO */}
         <div className="bg-white border-b border-slate-200/80 shadow-xs shrink-0 z-20 select-none">
           <div style={{ height: "max(var(--sat, 0px), 38px)", width: "100%" }} />
-
-          {/* TẦNG 1: Nút Back + Tiêu đề đầy đủ + Khoảng trống 105px né Capsule Zalo */}
           <div className="px-3.5 pt-1.5 pb-2 flex items-center justify-between gap-3">
             <div className="flex items-center gap-2.5 min-w-0 flex-1">
               <button
@@ -400,11 +431,8 @@ export const DocsSection = ({ onNavigateToAIHub }) => {
                 {viewingDoc.name}
               </h6>
             </div>
-            {/* Vùng đệm né hoàn toàn Capsule Zalo (...) (X) */}
             <div className="w-[105px] shrink-0 pointer-events-none" />
           </div>
-
-          {/* TẦNG 2: Thông tin định dạng/dung lượng + Các nút hành động */}
           <div className="px-3.5 pb-2.5 flex items-center justify-between gap-2 border-t border-slate-50 pt-2">
             <div className="flex items-center gap-2 min-w-0 flex-1">
               <span className="text-[11px] font-bold text-slate-500 bg-slate-50 px-2 py-0.5 rounded-md border border-slate-200 truncate">
@@ -425,7 +453,6 @@ export const DocsSection = ({ onNavigateToAIHub }) => {
                   <span>Tạo Quiz</span>
                 </button>
               )}
-
               <button
                 onClick={() => handleDownloadFile(viewingDoc)}
                 className="px-3 py-1.5 rounded-xl text-[11px] font-black border-0 cursor-pointer shadow-xs active:scale-95 transition flex items-center gap-1.5 bg-[#0045ce] text-white hover:bg-blue-700"
@@ -437,7 +464,6 @@ export const DocsSection = ({ onNavigateToAIHub }) => {
           </div>
         </div>
 
-        {/* NỘI DUNG HIỂN THỊ TRỰC TIẾP TRONG ỨNG DỤNG */}
         <div className="flex-1 w-100 bg-slate-100 d-flex flex-column overflow-hidden position-relative">
           {isAiDoc ? (
             <div 
@@ -524,7 +550,6 @@ export const DocsSection = ({ onNavigateToAIHub }) => {
 
   return (
     <div className="flex flex-col gap-3 pb-24 px-1 w-full max-w-full">
-      {/* Banner */}
       <div className="bg-gradient-to-br from-[#0045ce] via-blue-700 to-indigo-900 text-white rounded-3xl p-4 shadow-md flex items-center justify-between">
         <div>
           <span className="px-2.5 py-0.5 rounded-full bg-white/20 text-blue-100 text-[10px] font-black uppercase tracking-wide border border-white/20">
@@ -550,7 +575,6 @@ export const DocsSection = ({ onNavigateToAIHub }) => {
         </label>
       </div>
 
-      {/* Bộ lọc */}
       <div className="bg-white p-1 rounded-2xl border border-slate-200 flex items-center gap-1 shadow-2xs">
         {[
           { id: "all", label: "Tất cả", icon: "bi-collection" },
@@ -571,7 +595,6 @@ export const DocsSection = ({ onNavigateToAIHub }) => {
         ))}
       </div>
 
-      {/* Danh sách tài liệu */}
       <div className="bg-white rounded-3xl p-3.5 border border-slate-200 shadow-xs space-y-2.5">
         <div className="flex items-center justify-between px-1">
           <h4 className="text-xs font-black text-slate-900 m-0 flex items-center gap-1.5">
@@ -642,7 +665,6 @@ export const DocsSection = ({ onNavigateToAIHub }) => {
         )}
       </div>
 
-      {/* Video bài giảng */}
       <div className="bg-white rounded-3xl p-3.5 border border-slate-200 shadow-xs space-y-2.5">
         <div className="flex items-center justify-between px-1">
           <h4 className="text-xs font-black text-slate-900 m-0 flex items-center gap-1.5">
@@ -694,7 +716,6 @@ export const DocsSection = ({ onNavigateToAIHub }) => {
         )}
       </div>
 
-      {/* Modal Video */}
       {activeVideoModal && (
         <div
           className="position-fixed top-0 start-0 w-100 h-100 bg-dark/70 d-flex align-items-center justify-content-center p-3 z-50"

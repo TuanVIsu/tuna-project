@@ -1,9 +1,8 @@
 // src/components/AcademicSurveyModal.jsx
-import React, { useState, useEffect, useCallback, useMemo } from "react";
+import React, { useState, useEffect, useCallback, useMemo, useRef } from "react";
 
 const API_BASE = "https://tuna-project.onrender.com/api";
 
-// Danh sách ngành mặc định chuẩn (Tránh lỗi ReferenceError: majors is not defined)
 const DEFAULT_MAJORS = [
   { major_name: "Hệ Thống Thông Tin", icon: "bi-hdd-network", semesters_per_year: 3, total_years: 4 },
   { major_name: "Công Nghệ Thông Tin", icon: "bi-cpu", semesters_per_year: 3, total_years: 4 },
@@ -11,7 +10,6 @@ const DEFAULT_MAJORS = [
   { major_name: "An Ninh Mạng", icon: "bi-shield-lock", semesters_per_year: 3, total_years: 4 },
 ];
 
-// Hàm đọc JSON an toàn từ localStorage (Chống lỗi SyntaxError: "undefined" is not valid JSON)
 const safeParseJSON = (raw, fallback = {}) => {
   if (!raw || raw === "undefined" || raw === "null") return fallback;
   try {
@@ -23,7 +21,6 @@ const safeParseJSON = (raw, fallback = {}) => {
 };
 
 export const AcademicSurveyModal = ({ isOpen, onSave, onDismiss }) => {
-  // 1. Tự động tính toán Khóa và Năm học theo MSSV / Email
   const { detectedYear, detectedCohort, detectedMajor, detectedGpa } = useMemo(() => {
     let studentCode = "";
     let faculty = "Hệ Thống Thông Tin";
@@ -53,10 +50,10 @@ export const AcademicSurveyModal = ({ isOpen, onSave, onDismiss }) => {
       String(studentCode).match(/(?:20)?(2[0-6])\d{5}/) ||
       String(studentCode).match(/K?(2[0-6])/i);
     const admissionYearShort = match ? parseInt(match[1], 10) : 23;
-    const admissionYearFull = 2000 + admissionYearShort; // 2023
+    const admissionYearFull = 2000 + admissionYearShort;
 
-    const currentYear = new Date().getFullYear(); // 2026
-    let calcYear = currentYear - admissionYearFull + 1; // 2026 - 2023 + 1 = 4
+    const currentYear = new Date().getFullYear();
+    let calcYear = currentYear - admissionYearFull + 1;
     if (calcYear < 1) calcYear = 1;
     if (calcYear > 4) calcYear = 4;
 
@@ -71,12 +68,9 @@ export const AcademicSurveyModal = ({ isOpen, onSave, onDismiss }) => {
   const [major, setMajor] = useState(detectedMajor);
   const [year, setYear] = useState(detectedYear);
   const [semester, setSemester] = useState(1);
-
-  // Số học kỳ mỗi năm & tổng số năm học đồng bộ từ bảng public.faculty_majors
   const [semestersPerYear, setSemestersPerYear] = useState(3);
   const [totalYears, setTotalYears] = useState(4);
   const [availableMajors, setAvailableMajors] = useState(DEFAULT_MAJORS);
-
   const [dbSubjects, setDbSubjects] = useState([]);
   const [isLoadingSubjects, setIsLoadingSubjects] = useState(false);
   const [subjectLevels, setSubjectLevels] = useState({});
@@ -85,14 +79,27 @@ export const AcademicSurveyModal = ({ isOpen, onSave, onDismiss }) => {
   const [targetGoal, setTargetGoal] = useState("KhaGioi");
   const [dailyPace, setDailyPace] = useState(15);
   const [reminderTime, setReminderTime] = useState("20:00");
-
   const [toastMessage, setToastMessage] = useState(null);
+
+  // State điều khiển Custom Dropdowns 
+  const [openDropdown, setOpenDropdown] = useState(null); // 'major'
+  const dropdownRef = useRef(null);
+
+  useEffect(() => {
+    const handleClickOutside = (e) => {
+      if (dropdownRef.current && !dropdownRef.current.contains(e.target)) {
+        setOpenDropdown(null);
+      }
+    };
+    document.addEventListener("mousedown", handleClickOutside);
+    return () => document.removeEventListener("mousedown", handleClickOutside);
+  }, []);
+
   const showToast = (message, type = "success") => {
     setToastMessage({ message, type });
     setTimeout(() => setToastMessage(null), 3200);
   };
 
-  // Gán icon tương ứng cho từng ngành
   const getMajorIcon = (majorName = "") => {
     const lower = majorName.toLowerCase();
     if (lower.includes("hệ thống")) return "bi-hdd-network";
@@ -102,7 +109,6 @@ export const AcademicSurveyModal = ({ isOpen, onSave, onDismiss }) => {
     return "bi-journal-code";
   };
 
-  // 2. Tải cấu hình số kỳ/năm từ bảng public.faculty_majors (nếu API có sẵn)
   const fetchMajorsMeta = useCallback(async (selectedMajorName) => {
     try {
       const res = await fetch(`${API_BASE}/faculty-majors`, {
@@ -134,12 +140,9 @@ export const AcademicSurveyModal = ({ isOpen, onSave, onDismiss }) => {
           setTotalYears(currentMeta.total_years);
         }
       }
-    } catch (e) {
-      // Giữ nguyên DEFAULT_MAJORS khi offline hoặc endpoint chưa mở
-    }
+    } catch (e) {}
   }, [detectedMajor]);
 
-  // 3. Tải trực tiếp môn học từ CSDL PostgreSQL
   const fetchSubjectsFromDB = useCallback(
     async (selectedMajor, selectedYear, selectedSem, selectedCohort, currentSemPerYear = 3) => {
       setIsLoadingSubjects(true);
@@ -237,7 +240,10 @@ export const AcademicSurveyModal = ({ isOpen, onSave, onDismiss }) => {
               cleanLevels[k] = parsed.subjectLevels[k];
             }
           });
-          setSubjectLevels(cleanLevels);
+          // Nếu có môn học trong bộ nhớ tạm, ưu tiên merge đè lên dbSubjects
+          if (Object.keys(cleanLevels).length > 0) {
+              setSubjectLevels(cleanLevels);
+          }
         }
       });
       return;
@@ -250,9 +256,9 @@ export const AcademicSurveyModal = ({ isOpen, onSave, onDismiss }) => {
     fetchSubjectsFromDB(initMajor, initYear, initSem, detectedCohort, semestersPerYear);
   }, [isOpen, detectedMajor, detectedYear, detectedCohort, fetchMajorsMeta, fetchSubjectsFromDB]);
 
-  // Chuyển ngành học
   const handleSelectMajor = (newMajor) => {
     setMajor(newMajor);
+    setOpenDropdown(null);
     const meta = availableMajors.find((m) => (m.major_name || m.name) === newMajor);
     let nextSemPerYear = semestersPerYear;
     if (meta?.semesters_per_year) {
@@ -268,21 +274,18 @@ export const AcademicSurveyModal = ({ isOpen, onSave, onDismiss }) => {
     fetchSubjectsFromDB(newMajor, year, validSem, detectedCohort, nextSemPerYear);
   };
 
-  // Chuyển năm học
   const handleSelectYear = (newYear) => {
     const val = Number(newYear);
     setYear(val);
     fetchSubjectsFromDB(major, val, semester, detectedCohort, semestersPerYear);
   };
 
-  // Chuyển học kỳ
   const handleSelectSemester = (newSemester) => {
     const val = Number(newSemester);
     setSemester(val);
     fetchSubjectsFromDB(major, year, val, detectedCohort, semestersPerYear);
   };
 
-  // Render danh sách nút học kỳ động theo semestersPerYear (2, 3 hoặc 4 kỳ)
   const semesterButtons = useMemo(() => {
     const count = Math.max(1, Number(semestersPerYear) || 3);
     const list = [];
@@ -300,7 +303,6 @@ export const AcademicSurveyModal = ({ isOpen, onSave, onDismiss }) => {
     return list;
   }, [semestersPerYear]);
 
-  // Hợp nhất môn học từ DB và môn người dùng tự thêm ngoài khung
   const allDisplaySubjects = useMemo(() => {
     const dbNames = new Set(dbSubjects.map((s) => s.subjectName));
     const customSubs = Object.keys(subjectLevels)
@@ -359,6 +361,7 @@ export const AcademicSurveyModal = ({ isOpen, onSave, onDismiss }) => {
     showToast(`Đã thêm môn "${trimmed}" vào danh sách!`);
   };
 
+  // ĐÃ SỬA: Lưu đúng biến major, year, semester và chuyển thẳng các môn học qua để Python xếp lịch
   const handleConfirm = async () => {
     const selectedSubs = Object.keys(subjectLevels).filter(
       (s) => s && s.trim() !== "" && s !== "undefined"
@@ -395,6 +398,7 @@ export const AcademicSurveyModal = ({ isOpen, onSave, onDismiss }) => {
     showToast("Đã lưu kế hoạch và lộ trình học tập cá nhân!");
 
     if (onSave) {
+      // Đóng modal sau 500ms và kích hoạt lại hàm fetch phía bên ngoài với data mới nhất
       setTimeout(() => onSave(studyPlan), 500);
     }
   };
@@ -406,13 +410,11 @@ export const AcademicSurveyModal = ({ isOpen, onSave, onDismiss }) => {
 
   return (
     <div
-      className="position-absolute top-0 start-0 w-100 h-100 bg-[#F4F7FE] d-flex flex-column select-none"
-      style={{ zIndex: 1200, overflowY: "auto", overflowX: "hidden" }}
+      className="fixed inset-0 w-full h-full bg-[#F4F7FE] flex flex-col z-[1200] overflow-y-auto overflow-x-hidden select-none"
     >
-      {/* Toast thông báo */}
       {toastMessage && (
         <div
-          className="fixed top-20 left-3 right-3 z-50 flex items-center justify-between p-3.5 rounded-2xl shadow-xl border transition-all duration-300 backdrop-blur-md break-words"
+          className="fixed top-20 left-3 right-3 z-[1300] flex items-center justify-between p-3.5 rounded-2xl shadow-xl border transition-all duration-300 backdrop-blur-md break-words"
           style={{
             backgroundColor:
               toastMessage.type === "error"
@@ -447,7 +449,7 @@ export const AcademicSurveyModal = ({ isOpen, onSave, onDismiss }) => {
       )}
 
       {/* Header Bar */}
-      <div className="bg-[#0045ce] text-white sticky-top shadow-xs select-none flex-shrink-0 z-20">
+      <div className="bg-[#0045ce] text-white sticky top-0 shadow-xs select-none flex-shrink-0 z-30 w-full">
         <div style={{ height: "max(var(--sat, 0px), 36px)", width: "100%" }} />
 
         <div className="px-3.5 pb-3 pt-1 flex items-center justify-between gap-2">
@@ -469,13 +471,13 @@ export const AcademicSurveyModal = ({ isOpen, onSave, onDismiss }) => {
               </span>
             </div>
           </div>
-          {/* Khoảng trống cho nút điều hướng Zalo Mini App */}
           <div className="w-[88px] shrink-0 pointer-events-none" />
         </div>
       </div>
 
       {/* Nội dung chính */}
-      <div className="p-3.5 space-y-3.5 flex-1 pb-28 max-w-lg mx-auto w-full">
+      <div className="p-3.5 space-y-3.5 flex-1 pb-28 max-w-lg mx-auto w-full overflow-x-hidden relative">
+        
         {/* Thanh trạng thái + Nút Lưu nhanh */}
         <div className="flex items-center justify-between px-1">
           <div className="flex items-center gap-1.5">
@@ -497,7 +499,7 @@ export const AcademicSurveyModal = ({ isOpen, onSave, onDismiss }) => {
         </div>
 
         {/* Khối 1: Chuyên ngành đào tạo */}
-        <div className="bg-white rounded-3xl p-3.5 border border-slate-200/80 shadow-xs space-y-2.5">
+        <div className="bg-white rounded-3xl p-3.5 border border-slate-200/80 shadow-xs space-y-2.5 z-20 relative" ref={dropdownRef}>
           <div className="flex items-center justify-between">
             <label className="font-extrabold text-slate-900 text-xs flex items-center gap-1.5 m-0">
               <span className="w-5 h-5 rounded-full bg-blue-100 text-[#0045ce] flex items-center justify-center text-[10.5px] font-black">
@@ -508,36 +510,57 @@ export const AcademicSurveyModal = ({ isOpen, onSave, onDismiss }) => {
             <span className="text-[10px] font-bold text-slate-400">Khoa CNTT</span>
           </div>
 
-          <div className="grid grid-cols-2 gap-2 pt-0.5">
-            {majorsListToRender.map((item) => {
-              const name = item.major_name || item.name;
-              const isSelected = major === name;
-              const iconCls = item.icon || getMajorIcon(name);
-              return (
-                <button
-                  type="button"
-                  key={name}
-                  onClick={() => handleSelectMajor(name)}
-                  className={`p-2.5 rounded-2xl border text-left font-bold transition text-[11.5px] flex items-center gap-2 cursor-pointer ${
-                    isSelected
-                      ? "bg-[#0045ce] text-white border-[#0045ce] shadow-xs"
-                      : "bg-slate-50 text-slate-700 border-slate-200 hover:bg-slate-100"
-                  }`}
-                >
-                  <i
-                    className={`bi ${iconCls} text-xs shrink-0 ${
-                      isSelected ? "text-amber-300" : "text-slate-400"
-                    }`}
-                  ></i>
-                  <span className="truncate">{name}</span>
-                </button>
-              );
-            })}
+          <div className="relative w-full mt-1.5">
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                setOpenDropdown((prev) => (prev === "major" ? null : "major"));
+              }}
+              className={`w-full flex items-center justify-between bg-slate-50 border rounded-2xl px-3.5 py-2.5 text-xs font-bold text-slate-800 transition cursor-pointer ${
+                openDropdown === "major" ? "border-[#0045ce] bg-white ring-2 ring-blue-100" : "border-slate-200 hover:bg-slate-100/80"
+              }`}
+            >
+              <div className="flex items-center gap-2">
+                 <i className={`bi ${getMajorIcon(major)} text-[#0045ce] text-sm`}></i>
+                 <span className="truncate">{major || "Chọn chuyên ngành..."}</span>
+              </div>
+              <i className={`bi bi-chevron-down text-[10px] text-slate-400 transition-transform duration-200 ${openDropdown === "major" ? "rotate-180 text-[#0045ce]" : ""}`}></i>
+            </button>
+
+            {openDropdown === "major" && (
+              <div 
+                className="absolute left-0 top-full mt-1.5 w-full max-h-60 overflow-y-auto bg-white rounded-2xl shadow-2xl border border-slate-200/90 py-1.5 z-50 animate-in fade-in zoom-in-95 duration-150"
+                onClick={(e) => e.stopPropagation()}
+              >
+                {majorsListToRender.map((item, idx) => {
+                  const name = item.major_name || item.name;
+                  const iconCls = item.icon || getMajorIcon(name);
+                  const isSelected = major === name;
+                  return (
+                    <button
+                      key={idx}
+                      type="button"
+                      onClick={() => handleSelectMajor(name)}
+                      className={`w-full text-left px-4 py-2.5 text-xs font-bold transition flex items-center justify-between border-0 cursor-pointer ${
+                        isSelected ? "bg-blue-50 text-[#0045ce]" : "bg-white text-slate-700 hover:bg-slate-50"
+                      }`}
+                    >
+                      <div className="flex items-center gap-2.5 truncate pr-2">
+                        <i className={`bi ${iconCls} text-sm ${isSelected ? "text-amber-500" : "text-slate-400"}`}></i>
+                        <span className="truncate">{name}</span>
+                      </div>
+                      {isSelected && <i className="bi bi-check2 text-sm shrink-0"></i>}
+                    </button>
+                  );
+                })}
+              </div>
+            )}
           </div>
         </div>
 
-        {/* Khối 2: Thời điểm học hiện tại (Nút Segmented thay cho <select> bị tràn) */}
-        <div className="bg-white rounded-3xl p-3.5 border border-slate-200/80 shadow-xs space-y-3">
+        {/* Khối 2: Thời điểm học hiện tại */}
+        <div className="bg-white rounded-3xl p-3.5 border border-slate-200/80 shadow-xs space-y-3 z-10 relative">
           <div className="flex items-center justify-between">
             <label className="font-extrabold text-slate-900 text-xs flex items-center gap-1.5 m-0">
               <span className="w-5 h-5 rounded-full bg-blue-100 text-[#0045ce] flex items-center justify-center text-[10.5px] font-black">
@@ -550,7 +573,6 @@ export const AcademicSurveyModal = ({ isOpen, onSave, onDismiss }) => {
             </span>
           </div>
 
-          {/* Chọn Năm học */}
           <div className="space-y-1.5">
             <label className="font-bold text-slate-500 block text-[10.5px] m-0">
               Năm học
@@ -591,7 +613,6 @@ export const AcademicSurveyModal = ({ isOpen, onSave, onDismiss }) => {
             </div>
           </div>
 
-          {/* Chọn Học kỳ động theo CSDL */}
           <div className="space-y-1.5">
             <div className="flex items-center justify-between">
               <label className="font-bold text-slate-500 block text-[10.5px] m-0">
@@ -636,7 +657,7 @@ export const AcademicSurveyModal = ({ isOpen, onSave, onDismiss }) => {
         </div>
 
         {/* Khối 3: Danh sách môn học cần ôn tập */}
-        <div className="bg-white rounded-3xl p-3.5 border border-slate-200/80 shadow-xs space-y-2.5">
+        <div className="bg-white rounded-3xl p-3.5 border border-slate-200/80 shadow-xs space-y-2.5 z-0 relative">
           <div className="flex items-center justify-between gap-2">
             <label className="font-extrabold text-slate-900 text-xs flex items-center gap-1.5 m-0">
               <span className="w-5 h-5 rounded-full bg-blue-100 text-[#0045ce] flex items-center justify-center text-[10.5px] font-black shrink-0">
@@ -768,7 +789,6 @@ export const AcademicSurveyModal = ({ isOpen, onSave, onDismiss }) => {
             </div>
           )}
 
-          {/* Thêm môn học ngoài khung */}
           <div className="flex gap-1.5 pt-1">
             <input
               type="text"
@@ -793,8 +813,8 @@ export const AcademicSurveyModal = ({ isOpen, onSave, onDismiss }) => {
           </div>
         </div>
 
-        {/* Khối 4: Điểm GPA hiện tại & Mục tiêu */}
-        <div className="bg-white rounded-3xl p-3.5 border border-slate-200/80 shadow-xs space-y-3">
+        {/* Khối 4: Điểm GPA */}
+        <div className="bg-white rounded-3xl p-3.5 border border-slate-200/80 shadow-xs space-y-3 z-0 relative">
           <div className="flex items-center justify-between">
             <label className="font-extrabold text-slate-900 text-xs flex items-center gap-1.5 m-0">
               <span className="w-5 h-5 rounded-full bg-blue-100 text-[#0045ce] flex items-center justify-center text-[10.5px] font-black">
@@ -856,8 +876,8 @@ export const AcademicSurveyModal = ({ isOpen, onSave, onDismiss }) => {
           </div>
         </div>
 
-        {/* Khối 5: Kế hoạch tự học mỗi ngày */}
-        <div className="bg-white rounded-3xl p-3.5 border border-slate-200/80 shadow-xs space-y-2">
+        {/* Khối 5: Kế hoạch */}
+        <div className="bg-white rounded-3xl p-3.5 border border-slate-200/80 shadow-xs space-y-2 z-0 relative">
           <label className="font-extrabold text-slate-900 text-xs flex items-center gap-1.5 m-0">
             <span className="w-5 h-5 rounded-full bg-blue-100 text-[#0045ce] flex items-center justify-center text-[10.5px] font-black">
               5
@@ -900,7 +920,6 @@ export const AcademicSurveyModal = ({ isOpen, onSave, onDismiss }) => {
           </div>
         </div>
 
-        {/* Nút xác nhận chính */}
         <button
           type="button"
           onClick={handleConfirm}
