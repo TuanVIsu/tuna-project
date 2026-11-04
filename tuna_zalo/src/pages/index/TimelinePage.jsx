@@ -133,7 +133,7 @@ export const TimelinePage = ({ onBack, onNavigateToTasks, onNavigateToDocs, onOp
     }
   }, [currentStudentId, startDateStr, endDateStr, todayStr]);
 
-  const handleTriggerWRRPlan = useCallback(async (isAuto = false) => {
+const handleTriggerWRRPlan = useCallback(async (isAuto = false) => {
     if (isWrrGenerating) return;
     setIsWrrGenerating(true);
     
@@ -141,10 +141,25 @@ export const TimelinePage = ({ onBack, onNavigateToTasks, onNavigateToDocs, onOp
 
     try {
       const fallbackSubs = ["Cơ sở dữ liệu", "Phân tích và thiết kế HTTT", "Hệ quản trị CSDL"];
-      
-      const subjectsPayload = Array.isArray(academicProfile?.subjects) && academicProfile.subjects.length > 0
-        ? academicProfile.subjects.map(s => ({ subject_name: s, user_level: academicProfile?.subjectLevels?.[s] || "medium", credits: 3 }))
-        : fallbackSubs.map(s => ({ subject_name: s, user_level: "medium", credits: 3 }));
+      const rawSubjects = Array.isArray(academicProfile?.subjects) && academicProfile.subjects.length > 0
+        ? academicProfile.subjects
+        : fallbackSubs;
+
+      // Chuẩn hóa tên môn thành mảng chuỗi đơn giản
+      const cleanSubjectNames = rawSubjects.map(s => (typeof s === 'object' ? (s.subject_name || s.name || s.subject) : String(s)));
+
+      const payload = {
+        userId: currentStudentId,
+        facultyMajor: academicProfile?.major || "Hệ Thống Thông Tin",
+        year: academicProfile?.year || 4,
+        semester: academicProfile?.semester || 1,
+        subjects: cleanSubjectNames, // Mảng chuỗi tên môn học chuẩn cho Node.js
+        subjectLevels: academicProfile?.subjectLevels || {},
+        currentGpa: Number(academicProfile?.currentGpa) || 3.0,
+        goalLevel: academicProfile?.targetGoal || "KhaGioi",
+        dailyPace: academicProfile?.dailyPace || 15,
+        startDate: startDateStr,
+      };
 
       const res = await fetch(`${API_BASE}/timelines/generate-wrr-plan`, {
         method: "POST",
@@ -152,17 +167,7 @@ export const TimelinePage = ({ onBack, onNavigateToTasks, onNavigateToDocs, onOp
           "Content-Type": "application/json",
           "x-user-id": encodeURIComponent(currentStudentId),
         },
-        body: JSON.stringify({
-          userId: currentStudentId,
-          facultyMajor: academicProfile?.major || "Hệ Thống Thông Tin",
-          year: academicProfile?.year || 4,
-          semester: academicProfile?.semester || 1,
-          subjects: subjectsPayload,
-          currentGpa: Number(academicProfile?.currentGpa) || 3.0,
-          goalLevel: academicProfile?.targetGoal || "KhaGioi",
-          dailyPace: academicProfile?.dailyPace || 15,
-          startDate: startDateStr,
-        }),
+        body: JSON.stringify(payload),
       });
 
       const data = await res.json();
@@ -170,7 +175,7 @@ export const TimelinePage = ({ onBack, onNavigateToTasks, onNavigateToDocs, onOp
         if (!isAuto) showToast("Đã tối ưu hóa lịch tự học thành công!", "success");
         await fetchTimelines();
       } else if (!isAuto) {
-        showToast(data.error || "Không thể tạo lịch trình", "error");
+        showToast(data.error || data.message || "Không thể tạo lịch trình", "error");
       }
     } catch (e) {
       if (!isAuto) showToast("Lỗi kết nối máy chủ!", "error");
@@ -178,7 +183,6 @@ export const TimelinePage = ({ onBack, onNavigateToTasks, onNavigateToDocs, onOp
       setIsWrrGenerating(false);
     }
   }, [currentStudentId, academicProfile, startDateStr, isWrrGenerating, fetchTimelines]);
-
   useEffect(() => {
     fetchTimelines();
   }, [fetchTimelines]);
