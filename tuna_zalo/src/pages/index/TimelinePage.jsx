@@ -161,7 +161,7 @@ const handleTriggerWRRPlan = useCallback(async (isAuto = false) => {
         startDate: startDateStr,
       };
 
-      const res = await fetch(`${API_BASE}/timelines/generate-wrr-plan`, {
+const res = await fetch(`${API_BASE}/timelines/generate-wrr-plan`, {
         method: "POST",
         headers: { 
           "Content-Type": "application/json",
@@ -173,9 +173,21 @@ const handleTriggerWRRPlan = useCallback(async (isAuto = false) => {
       const data = await res.json();
       if (data.success) {
         if (!isAuto) showToast("Đã tối ưu hóa lịch tự học thành công!", "success");
-        await fetchTimelines();
+        // CẬP NHẬT TRỰC TIẾP DỮ LIỆU ĐỂ HIỂN THỊ NGAY LẬP TỨC TRÊN GIAO DIỆN
+        if (Array.isArray(data.data) && data.data.length > 0) {
+          const formatted = data.data.map((item) => {
+            let d = item.timelineDate || item.timeline_date || "";
+            if (d.includes("T")) d = d.split("T")[0];
+            return { ...item, timelineDate: d, timeline_date: d };
+          });
+          setDbTimelines(formatted);
+          const todayItems = formatted.filter((t) => t.timelineDate === todayStr);
+          localStorage.setItem("tuna_today_tasks", JSON.stringify(todayItems));
+        } else {
+          await fetchTimelines();
+        }
       } else if (!isAuto) {
-        showToast(data.error || data.message || "Không thể tạo lịch trình", "error");
+        showToast(data.message || "Không thể tạo lịch trình", "error");
       }
     } catch (e) {
       if (!isAuto) showToast("Lỗi kết nối máy chủ!", "error");

@@ -717,7 +717,7 @@ router.delete('/admin/:id', authenticateToken, async (req, res) => {
 // =============================================================================
 // 7. THUẬT TOÁN TỐI ƯU WRR (100% DỮ LIỆU ĐỘNG TỪ CSDL, KHÔNG FIX CỨNG)
 // =============================================================================
-// routes/schedules.routes.js - Mục 7: THUẬT TOÁN TỐI ƯU WRR
+// routes/schedules.routes.js - Mục 7: TỐI ƯU HÓA LỊCH WRR VÀ NÉ TRÙNG LỊCH CHÍNH KHÓA
 
 router.post(['/generate-wrr-plan', '/timelines/generate-wrr-plan'], async (req, res) => {
   const userId = await resolveUserId(req);
@@ -726,139 +726,71 @@ router.post(['/generate-wrr-plan', '/timelines/generate-wrr-plan'], async (req, 
   }
 
   try {
-    // 1. LẤY HỒ SƠ SINH VIÊN TỪ BẢNG users
+    // 1. LẤY HỒ SƠ SINH VIÊN
     const userRes = await pool.query(
-      `SELECT id, student_code, faculty, class_name 
-       FROM users 
-       WHERE id = $1 LIMIT 1`,
+      `SELECT id, student_code, faculty, class_name FROM users WHERE id = $1 LIMIT 1`,
       [userId]
     );
 
     if (userRes.rows.length === 0) {
-      return res.status(404).json({ success: false, message: 'Không tìm thấy hồ sơ người dùng trong CSDL!' });
+      return res.status(404).json({ success: false, message: 'Không tìm thấy hồ sơ người dùng!' });
     }
 
     const user = userRes.rows[0];
     const userFaculty = user.faculty || req.body.facultyMajor || 'Hệ Thống Thông Tin';
 
-    const cohortMatch = (user.class_name || '').match(/K?(\d{2})/i) || (user.student_code || '').match(/(\d{2})/);
-    const userCohort = cohortMatch ? `K${cohortMatch[1]}` : 'K23';
-    const cohortDigits = userCohort.replace(/\D/g, '');
-
-    // 2. TÍNH GPA TÍCH LŨY THỰC TẾ
+    // 2. GPA & MỤC TIÊU
     const gpaRes = await pool.query(
       `SELECT 
-         COALESCE(
-           ROUND(SUM(grade_number * credits) / NULLIF(SUM(credits), 0), 2), 
-           3.0
-         ) AS current_gpa,
+         COALESCE(ROUND(SUM(grade_number * credits) / NULLIF(SUM(credits), 0), 2), 3.0) AS current_gpa,
          COALESCE(MAX(semester_learned), 1) AS max_semester
        FROM student_course_grades 
        WHERE user_id = $1`,
       [userId]
     );
 
-    const calculatedGpa = Number(gpaRes.rows[0]?.current_gpa || 3.0);
-    const nextSemester = Number(gpaRes.rows[0]?.max_semester || 1);
-
-    let autoGoalLevel = 'KhaGioi';
-    if (calculatedGpa >= 3.6) autoGoalLevel = 'HocBong';
-    else if (calculatedGpa < 2.5) autoGoalLevel = 'QuaMon';
-    
-    const goalLevel = req.body.goalLevel || autoGoalLevel;
-    const currentGpa = req.body.currentGpa !== undefined ? Number(req.body.currentGpa) : calculatedGpa;
+    const currentGpa = Number(gpaRes.rows[0]?.current_gpa || 3.0);
+    const goalLevel = req.body.goalLevel || 'HocBong';
     const dailyPace = Number(req.body.dailyPace) || 15;
 
-    // 3. XÁC ĐỊNH MÔN HỌC ĐẦU VÀO
-    let rawSubjects = Array.isArray(req.body.subjects) && req.body.subjects.length > 0 
-      ? req.body.subjects 
-      : [];
-
+    // 3. DANH SÁCH MÔN CẦN TỰ HỌC / LÀM BÀI TẬP
     let targetSubjects = [];
-    if (rawSubjects.length > 0) {
-      targetSubjects = rawSubjects.map(s => typeof s === 'object' ? (s.subject_name || s.name || s.subject) : String(s)).filter(Boolean);
+    if (Array.isArray(req.body.subjects) && req.body.subjects.length > 0) {
+      targetSubjects = req.body.subjects.map(s => typeof s === 'object' ? (s.subject_name || s.name || s.subject) : String(s)).filter(Boolean);
     }
 
     if (targetSubjects.length === 0) {
-      const curRes = await pool.query(
-        `SELECT DISTINCT cp.subject_name 
-         FROM curriculum_plans cp
-         WHERE cp.major_name ILIKE $1 
-           AND (cp.cohort ILIKE $2 OR cp.cohort ILIKE '%' || $3 || '%')
-           AND cp.semester_index = $4
-         ORDER BY cp.subject_name ASC`,
-        [`%${userFaculty.trim()}%`, userCohort, cohortDigits, nextSemester]
-      );
+      // Ưu tiên lấy các môn đang có trong thời khóa biểu chính khóa của sinh viên
+      const scheduleSubs = await pool.query(
+        `SELECT DISTINCT title FROM schedules 
+         WHERE (user_id = $1 OR faculty_major ILIKE $2) 
+           AND specific_date >= CURRENT_DATE - INTERVAL '14 days' 
+         LIMIT 4`,
+        [userId, `%${userFaculty}%`]
+      ).catch(() => ({ rows: [] }));
 
-      if (curRes.rows.length > 0) {
-        targetSubjects = curRes.rows.map(r => r.subject_name);
+      if (scheduleSubs.rows.length > 0) {
+        targetSubjects = scheduleSubs.rows.map(r => r.title);
       } else {
-        const fallbackRes = await pool.query(
-          `SELECT DISTINCT subject_name FROM curriculum_plans 
-           WHERE major_name ILIKE $1 
-           ORDER BY id ASC LIMIT 4`,
-          [`%${userFaculty.trim()}%`]
-        );
-        targetSubjects = fallbackRes.rows.map(r => r.subject_name);
+        targetSubjects = ["Blockchain căn bản", "Cơ sở dữ liệu", "Phân tích và thiết kế HTTT"];
       }
     }
 
-    if (targetSubjects.length === 0) {
-      targetSubjects = ["Cơ sở dữ liệu", "Phân tích và thiết kế HTTT", "Mạng máy tính"];
-    }
+    // 4. CHUẨN BỊ PAYLOAD CHO THUẬT TOÁN SWRR
+    const payloadSubjects = targetSubjects.map(sub => ({
+      subject_name: sub,
+      credits: 3,
+      quiz_total: 0,
+      quiz_correct: 0,
+      is_near_exam: false,
+      user_level: req.body.subjectLevels?.[sub] || 'medium'
+    }));
 
-    // 4. BÓC TÁCH DỮ LIỆU ĐỘNG CHO TỪNG MÔN HỌC
-    const payloadSubjects = [];
-
-    for (const sub of targetSubjects) {
-      const subInfo = await pool.query(
-        `SELECT credits FROM curriculum_plans WHERE subject_name ILIKE $1 LIMIT 1`,
-        [`%${sub.trim()}%`]
-      ).catch(() => ({ rows: [] }));
-      const credits = subInfo.rows[0]?.credits || 3;
-
-      const quizRes = await pool.query(
-        `SELECT COUNT(*) as total, COUNT(*) FILTER (WHERE is_correct = true) as correct
-         FROM quiz_answer_attempts 
-         WHERE user_id = $1 AND subject ILIKE $2`,
-        [userId, `%${sub.trim()}%`]
-      ).catch(() => ({ rows: [{ total: 0, correct: 0 }] }));
-
-      const totalQuiz = Number(quizRes.rows[0]?.total || 0);
-      const correctQuiz = Number(quizRes.rows[0]?.correct || 0);
-
-      const examRes = await pool.query(
-        `SELECT 1 FROM schedules 
-         WHERE schedule_scope = 'academic' 
-           AND schedule_type = 'exam'
-           AND title ILIKE $1 
-           AND specific_date BETWEEN CURRENT_DATE AND CURRENT_DATE + INTERVAL '14 days'
-         LIMIT 1`,
-        [`%${sub.trim()}%`]
-      ).catch(() => ({ rows: [] }));
-
-      let autoLevel = 'medium';
-      if (totalQuiz >= 5) {
-        const accuracy = correctQuiz / totalQuiz;
-        if (accuracy >= 0.8) autoLevel = 'hard';
-        else if (accuracy < 0.5) autoLevel = 'easy';
-      }
-
-      payloadSubjects.push({
-        subject_name: sub,
-        credits: credits,
-        quiz_total: totalQuiz,
-        quiz_correct: correctQuiz,
-        is_near_exam: examRes.rows.length > 0,
-        user_level: req.body.subjectLevels?.[sub] || autoLevel,
-      });
-    }
-
-    // 5. GỬI TỚI DỊCH VỤ PYTHON HOẶC FALLBACK THUẬT TOÁN TẠI CHỖ
+    // 5. GỌI PYTHON MICROSERVICE
     let pyData = null;
     try {
       const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 8000);
+      const timeoutId = setTimeout(() => controller.abort(), 6000);
 
       const pyResponse = await fetch(`${WRR_SERVICE_URL}/api/schedule/wrr`, {
         method: 'POST',
@@ -877,11 +809,11 @@ router.post(['/generate-wrr-plan', '/timelines/generate-wrr-plan'], async (req, 
         pyData = await pyResponse.json();
       }
     } catch (e) {
-      console.warn("Dịch vụ WRR Python bận, chuyển sang tính toán cục bộ:", e.message);
+      console.warn("Lỗi kết nối Python WRR, chuyển sang xếp lịch dự phòng:", e.message);
     }
 
-    // Tự sinh lịch nếu microservice chưa kịp phản hồi
-    if (!pyData || !pyData.success || !pyData.schedule_plan) {
+    // Fallback nếu Python microservice chưa kịp hồi đáp
+    if (!pyData || !pyData.schedule_plan) {
       const slotsPerDay = goalLevel === 'HocBong' ? 3 : 2;
       const flatList = [];
       let sIdx = 0;
@@ -909,72 +841,74 @@ router.post(['/generate-wrr-plan', '/timelines/generate-wrr-plan'], async (req, 
       };
     }
 
-    // 6. CẬP NHẬT TRỌNG SỐ VÀO BẢNG subject_learning_weights
-    for (const w of (pyData.weights || [])) {
-      await pool.query(
-        `INSERT INTO subject_learning_weights 
-         (user_id, subject_name, calculated_weight, updated_at)
-         VALUES ($1, $2, $3, CURRENT_TIMESTAMP)
-         ON CONFLICT (user_id, subject_name)
-         DO UPDATE SET calculated_weight = EXCLUDED.calculated_weight, updated_at = CURRENT_TIMESTAMP`,
-        [userId, w.subject, w.weight]
-      ).catch(() => {});
-    }
-
-    // 7. LƯU LỊCH VÀO BẢNG learning_timelines
-    await pool.query(`DELETE FROM learning_timelines WHERE user_id = $1`, [userId]).catch(() => {});
-    const insertedRows = [];
-
-    let startYear, startMonth, startDay;
+    // 6. XÁC ĐỊNH MỐC NGÀY BẮT ĐẦU CHÍNH XÁC (KHỚP VỚI THỨ 2 TUẦN NÀY)
+    let startDateObj;
     if (req.body.startDate && /^\d{4}-\d{2}-\d{2}$/.test(req.body.startDate)) {
-      const parts = req.body.startDate.split('-').map(Number);
-      startYear = parts[0];
-      startMonth = parts[1] - 1;
-      startDay = parts[2];
+      const [y, m, d] = req.body.startDate.split('-').map(Number);
+      startDateObj = new Date(y, m - 1, d);
     } else {
       const now = new Date();
-      startYear = now.getFullYear();
-      startMonth = now.getMonth();
-      startDay = now.getDate();
+      const day = now.getDay();
+      const diff = now.getDate() - day + (day === 0 ? -6 : 1);
+      startDateObj = new Date(now.setDate(diff));
     }
 
-    const availableTimeSlots = ['07:45 - 08:30', '12:00 - 12:45', '18:30 - 19:15', '20:00 - 20:45'];
+    // Xóa lịch cũ của chu kỳ này để nạp lịch mới tối ưu
+    await pool.query(`DELETE FROM learning_timelines WHERE user_id = $1`, [userId]).catch(() => {});
 
-    // Chuẩn hóa hỗ trợ cả Flat Array lẫn 2D Array
-    let tasksToProcess = [];
-    if (Array.isArray(pyData.schedule_plan)) {
-      if (pyData.schedule_plan.length > 0 && Array.isArray(pyData.schedule_plan[0])) {
-        // Nếu là mảng 2 chiều
-        pyData.schedule_plan.forEach((dayTasks, dIdx) => {
-          dayTasks.forEach((t, tIdx) => {
-            tasksToProcess.push({ ...t, day_offset: dIdx, slot_index: tIdx });
-          });
-        });
-      } else {
-        // Nếu là mảng phẳng (Flat array)
-        tasksToProcess = pyData.schedule_plan;
-      }
+    // 7. LẤY TOÀN BỘ LỊCH HỌC CHÍNH KHÓA ĐỂ NÉ TRÙNG GIỜ
+    const classSchedulesRes = await pool.query(
+      `SELECT TO_CHAR(specific_date, 'YYYY-MM-DD') AS date, start_period, end_period 
+       FROM schedules 
+       WHERE (user_id = $1 OR faculty_major ILIKE $2) 
+         AND specific_date IS NOT NULL`,
+      [userId, `%${userFaculty}%`]
+    ).catch(() => ({ rows: [] }));
+
+    const classScheduleMap = new Set();
+    classSchedulesRes.rows.forEach(r => {
+      classScheduleMap.add(`${r.date}_morning`);
+      classScheduleMap.add(`${r.date}_afternoon`);
+    });
+
+    // Các khung giờ tự học rèn luyện
+    const eveningSlots = ['19:30 - 20:15', '20:30 - 21:15', '21:30 - 22:15'];
+    const freeDaySlots = ['08:00 - 08:45', '14:30 - 15:15', '19:30 - 20:15'];
+
+    let tasksToProcess = Array.isArray(pyData.schedule_plan) ? pyData.schedule_plan : [];
+    if (tasksToProcess.length > 0 && Array.isArray(tasksToProcess[0])) {
+      tasksToProcess = tasksToProcess.flat();
     }
+
+    const insertedRows = [];
 
     for (const task of tasksToProcess) {
       const offset = Number(task.day_offset) || 0;
       const slotIdx = Number(task.slot_index) || 0;
 
-      const curDate = new Date(startYear, startMonth, startDay + offset);
-      const dateStr = formatLocalDate(curDate);
-      const assignedTimeSlot = availableTimeSlots[slotIdx % availableTimeSlots.length];
-      const matchedWeight = pyData.weights?.find((w) => w.subject === task.subject)?.weight || 1.0;
+      const targetDate = new Date(startDateObj);
+      targetDate.setDate(startDateObj.getDate() + offset);
+
+      const y = targetDate.getFullYear();
+      const m = String(targetDate.getMonth() + 1).padStart(2, '0');
+      const d = String(targetDate.getDate()).padStart(2, '0');
+      const dateStr = `${y}-${m}-${d}`;
+
+      // Né lịch học: Nếu ngày đó có lịch chính khóa thì xếp ca tự học vào buổi tối
+      const hasClassToday = classScheduleMap.has(`${dateStr}_morning`) || classScheduleMap.has(`${dateStr}_afternoon`);
+      const assignedTimeSlot = hasClassToday 
+        ? eveningSlots[slotIdx % eveningSlots.length] 
+        : freeDaySlots[slotIdx % freeDaySlots.length];
 
       const description =
         task.task_type === 'doc_study'
-          ? `Đọc hiểu kiến thức nền tảng & slide lý thuyết (Ưu tiên: ${matchedWeight})`
+          ? `Đọc hiểu kiến thức nền tảng & slide lý thuyết`
           : task.task_type === 'quiz'
-          ? `Thực hành làm đề trắc nghiệm vận dụng kiến thức (Ưu tiên: ${matchedWeight})`
-          : `Ghi nhớ nhanh các định nghĩa & thuật ngữ cốt lõi (Ưu tiên: ${matchedWeight})`;
+          ? `Thực hành làm đề trắc nghiệm củng cố kiến thức`
+          : `Ghi nhớ nhanh các định nghĩa & thuật ngữ cốt lõi`;
 
       const actionTarget = task.task_type === 'doc_study' ? 'docs' : 'tasks';
 
-      // Đã sửa chuẩn số lượng tham số (10 biến tương ứng $1 -> $10)
       const insertRes = await pool.query(
         `INSERT INTO learning_timelines 
          (user_id, subject, goal_level, timeline_date, time_slot, task_type, title, description, duration_minutes, is_completed, action_target)
@@ -994,29 +928,22 @@ router.post(['/generate-wrr-plan', '/timelines/generate-wrr-plan'], async (req, 
           dailyPace,
           actionTarget,
         ]
-      ).catch((err) => {
-        console.error("Lỗi INSERT timeline item:", err.message);
-        return { rows: [] };
-      });
+      );
 
       if (insertRes.rows && insertRes.rows[0]) {
         insertedRows.push(insertRes.rows[0]);
       }
     }
 
-    return res.json({
+    res.json({
       success: true,
       algorithm: 'Smooth Weighted Round Robin (SWRR)',
-      facultyMajor: userFaculty,
-      currentGpa,
-      goalLevel,
-      dailyPace,
       totalInserted: insertedRows.length,
       data: insertedRows,
     });
   } catch (err) {
     console.error('Lỗi controller /generate-wrr-plan:', err.message);
-    return res.status(500).json({ success: false, message: 'Lỗi máy chủ: ' + err.message });
+    res.status(500).json({ success: false, message: 'Lỗi máy chủ: ' + err.message });
   }
 });
 
