@@ -1,5 +1,5 @@
 // tuna_zalo/src/components/LibraryModal.jsx
-import React, { useState, useEffect, useMemo } from "react";
+import React, { useState, useEffect, useMemo, useRef } from "react";
 import { saveDocumentToDB } from "../services/aiService";
 
 const API_BASE = "https://tuna-project.onrender.com/api";
@@ -62,6 +62,10 @@ export const LibraryModal = ({ isOpen, onClose, userMajor = "Hệ Thống Thông
   const [selectedSemester, setSelectedSemester] = useState("all");
   const [isRoadmapOnly, setIsRoadmapOnly] = useState(false);
 
+  // State điều khiển Custom Dropdowns hiện đại
+  const [openDropdown, setOpenDropdown] = useState(null); // 'major' | 'year' | 'semester' | null
+  const dropdownRef = useRef(null);
+
   const [currentPage, setCurrentPage] = useState(1);
   const [resources, setResources] = useState({ docs: [], videos: [], quizzes: [] });
   const [loading, setLoading] = useState(false);
@@ -74,12 +78,22 @@ export const LibraryModal = ({ isOpen, onClose, userMajor = "Hệ Thống Thông
 
   const [profile, setProfile] = useState({ year: 4, semester: 1, major: userMajor });
 
-  // Toast thay alert()
   const [toastMessage, setToastMessage] = useState(null);
   const showToast = (message, type = "success") => {
     setToastMessage({ message, type });
     setTimeout(() => setToastMessage(null), 3200);
   };
+
+  // Đóng dropdown khi click ra ngoài
+  useEffect(() => {
+    const handleClickOutside = (e) => {
+      if (dropdownRef.current && !dropdownRef.current.contains(e.target)) {
+        setOpenDropdown(null);
+      }
+    };
+    document.addEventListener("mousedown", handleClickOutside);
+    return () => document.removeEventListener("mousedown", handleClickOutside);
+  }, []);
 
   useEffect(() => {
     if (!isOpen) return;
@@ -148,6 +162,7 @@ export const LibraryModal = ({ isOpen, onClose, userMajor = "Hệ Thống Thông
     setSelectedMajor(profile.major || userMajor);
     setSelectedYear(String(profile.year));
     setSelectedSemester(String(profile.semester));
+    setOpenDropdown(null);
   };
 
   const handleResetFilters = () => {
@@ -158,6 +173,7 @@ export const LibraryModal = ({ isOpen, onClose, userMajor = "Hệ Thống Thông
     setFilterType("all");
     setFilterSubCategory("all");
     setSearchQuery("");
+    setOpenDropdown(null);
   };
 
   const filterResources = (items) => {
@@ -170,19 +186,46 @@ export const LibraryModal = ({ isOpen, onClose, userMajor = "Hệ Thống Thông
       }
 
       if (selectedMajor !== "all" && selectedMajor !== "Tất cả ngành") {
-        const itemMajors = Array.isArray(item.facultyMajors) ? item.facultyMajors : [item.major];
-        const matchMajor = itemMajors.some(
-          (m) => m && normalizeText(m).includes(normalizeText(selectedMajor))
-        );
-        if (!matchMajor) return false;
+        const rawMajors = item.facultyMajors || item.faculty_majors || item.major || item.faculty || [];
+        const itemMajors = Array.isArray(rawMajors) 
+          ? rawMajors 
+          : typeof rawMajors === "string" 
+          ? [rawMajors] 
+          : [];
+
+        const isCommon = itemMajors.length === 0 || itemMajors.some((m) => {
+          const normM = normalizeText(m);
+          return normM === "all" || normM === "tat ca" || normM === "chung";
+        });
+
+        if (!isCommon) {
+          const matchTarget = normalizeText(selectedMajor);
+          const hasMatchedMajor = itemMajors.some((m) => {
+            if (!m) return false;
+            const normM = normalizeText(m);
+            return normM.includes(matchTarget) || matchTarget.includes(normM);
+          });
+
+          const matchSubjectName = normalizeText(item.subject).includes(matchTarget);
+
+          if (!hasMatchedMajor && !matchSubjectName) {
+            return false;
+          }
+        }
       }
 
-      if (selectedYear !== "all" && String(item.year) !== String(selectedYear)) {
-        return false;
+      if (selectedYear !== "all") {
+        const itemYear = String(item.year || item.academic_year || "");
+        if (itemYear && itemYear !== String(selectedYear)) {
+          return false;
+        }
       }
 
-      if (selectedSemester !== "all" && String(item.semester) !== String(selectedSemester)) {
-        return false;
+      if (selectedSemester !== "all") {
+        const itemSemester = String(item.semester || "");
+        if (itemSemester && itemSemester !== String(selectedSemester)) {
+          return false;
+        }
       }
 
       const rawQuery = searchQuery.trim();
@@ -194,11 +237,11 @@ export const LibraryModal = ({ isOpen, onClose, userMajor = "Hệ Thống Thông
       const normTitle = normalizeText(item.title);
       const normSubject = normalizeText(item.subject);
       const normAuthor = normalizeText(item.author);
-      const normCode = normalizeText(item.curriculumSubjectCode);
+      const normCode = normalizeText(item.curriculumSubjectCode || item.curriculum_subject_code);
       const normType = normalizeText(item.type);
       const isRefText = item.isReference ? "tham khao mo rong" : "chinh khoa giao trinh";
-      const yearText = `nam ${item.year} k${item.year}`;
-      const semText = `ky ${item.semester} hoc ky ${item.semester}`;
+      const yearText = `nam ${item.year || ""} k${item.year || ""}`;
+      const semText = `ky ${item.semester || ""} hoc ky ${item.semester || ""}`;
 
       const combinedData = `${normTitle} ${normSubject} ${normCode} ${normAuthor} ${normType} ${isRefText} ${yearText} ${semText}`;
       return keywords.every((kw) => combinedData.includes(kw));
@@ -262,14 +305,12 @@ export const LibraryModal = ({ isOpen, onClose, userMajor = "Hệ Thống Thông
     }
   };
 
-  // TẢI TỆP THỰC TẾ VÀ LƯU BLOB VÀO INDEXEDDB
   const handleDownloadAndSaveToDocs = async (doc) => {
     try {
       setDownloadingId(doc.id);
       const downloadUrl = getFullFileUrl(doc.downloadUrl || doc.fileUrl);
       const newDocId = `lib_doc_${doc.id}_${Date.now()}`;
 
-      // 1. Tải dữ liệu nhị phân (Blob) trực tiếp từ server
       if (downloadUrl && downloadUrl !== "#") {
         try {
           const res = await fetch(downloadUrl);
@@ -282,14 +323,12 @@ export const LibraryModal = ({ isOpen, onClose, userMajor = "Hệ Thống Thông
         }
       }
 
-      // 2. Định danh tên tệp kèm đuôi mở rộng chuẩn (.pdf / .docx)
       const ext = (doc.type || "PDF").toLowerCase();
       let properName = doc.title || "Tài liệu học tập";
       if (!properName.toLowerCase().endsWith(`.${ext}`)) {
         properName = `${properName}.${ext}`;
       }
 
-      // 3. Lưu thông tin metadata vào DB
       const newDoc = {
         id: newDocId,
         name: properName,
@@ -318,15 +357,20 @@ export const LibraryModal = ({ isOpen, onClose, userMajor = "Hệ Thống Thông
     }
   };
 
+  // Danh mục hiển thị của Dropdown
+  const majorLabel = selectedMajor === "all" ? "Tất cả ngành" : selectedMajor;
+  const yearLabel = selectedYear === "all" ? "Tất cả năm" : `Năm ${selectedYear}`;
+  const semesterLabel = selectedSemester === "all" ? "Tất cả kỳ" : `Học kỳ ${selectedSemester}`;
+
   return (
     <div
-      className="position-absolute top-0 start-0 w-100 h-100 bg-[#F8FAFC] d-flex flex-column"
-      style={{ zIndex: 1050, overflowY: "auto", overflowX: "hidden" }}
+      className="fixed inset-0 w-full h-full bg-[#F8FAFC] flex flex-col overflow-y-auto overflow-x-hidden z-[1050]"
+      onClick={() => setOpenDropdown(null)}
     >
-      {/* TOAST THÔNG BÁO HIỆN ĐẠI */}
+      {/* Toast thông báo */}
       {toastMessage && (
         <div 
-          className="fixed top-24 left-3 right-3 z-50 flex items-center justify-between p-3.5 rounded-2xl shadow-xl border animate-in slide-in-from-top duration-300 backdrop-blur-md"
+          className="fixed top-24 left-3 right-3 z-[1200] flex items-center justify-between p-3.5 rounded-2xl shadow-xl border animate-in slide-in-from-top duration-300 backdrop-blur-md"
           style={{
             backgroundColor: toastMessage.type === "error" ? "rgba(239, 68, 68, 0.95)" : "rgba(16, 185, 129, 0.95)",
             color: "white",
@@ -350,8 +394,8 @@ export const LibraryModal = ({ isOpen, onClose, userMajor = "Hệ Thống Thông
         </div>
       )}
 
-      {/* 1. Header Bar: Đệm né Dynamic Island / Tai thỏ iOS */}
-      <div className="bg-[#0045ce] text-white sticky-top shadow-xs select-none">
+      {/* Header Bar */}
+      <div className="bg-[#0045ce] text-white sticky top-0 shadow-xs select-none z-30">
         <div style={{ height: "max(var(--sat, 0px), 38px)", width: "100%" }} />
 
         <div className="px-4 pb-3 pt-1 flex items-center justify-between gap-3">
@@ -378,8 +422,8 @@ export const LibraryModal = ({ isOpen, onClose, userMajor = "Hệ Thống Thông
         </div>
       </div>
 
-      {/* 2. Thanh chuyển đổi 3 Tabs */}
-      <div className="bg-white px-3 py-2 border-b border-slate-200 flex items-center justify-between gap-2 shadow-2xs">
+      {/* 3 Tabs */}
+      <div className="bg-white px-3 py-2 border-b border-slate-200 flex items-center justify-between gap-2 shadow-2xs z-20">
         <div className="bg-slate-100 p-1 rounded-2xl flex flex-1 border border-slate-200/70">
           <button
             onClick={() => setActiveTab("docs")}
@@ -408,8 +452,8 @@ export const LibraryModal = ({ isOpen, onClose, userMajor = "Hệ Thống Thông
         </div>
       </div>
 
-      {/* 3. Khu vực tìm kiếm */}
-      <div className="bg-white px-3 py-2.5 border-b border-slate-200 flex flex-col gap-2">
+      {/* Tìm kiếm & BỘ LỌC DROPDOWN CHUYÊN NGHIỆP */}
+      <div className="bg-white px-3 py-2.5 border-b border-slate-200 flex flex-col gap-2 z-20" ref={dropdownRef}>
         <div className="flex items-center gap-2">
           <div className="relative flex-1 flex items-center">
             <i className="bi bi-search absolute left-3 text-slate-400 text-xs"></i>
@@ -417,7 +461,7 @@ export const LibraryModal = ({ isOpen, onClose, userMajor = "Hệ Thống Thông
               type="text"
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
-              placeholder="Tìm theo môn, mã HP, trắc nghiệm, giảng viên..."
+              placeholder="Tìm môn, mã HP, trắc nghiệm..."
               className="w-full bg-slate-100 border border-slate-200/80 rounded-2xl pl-8 pr-8 py-2 text-xs font-bold text-slate-800 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-[#0045ce] focus:bg-white transition"
             />
             {searchQuery && (
@@ -443,58 +487,160 @@ export const LibraryModal = ({ isOpen, onClose, userMajor = "Hệ Thống Thông
           </button>
         </div>
 
-        {/* Thanh lọc Ngành - Năm - Kỳ */}
-        <div className="grid grid-cols-3 gap-1.5 pt-0.5">
-          <select
-            value={selectedMajor}
-            onChange={(e) => {
-              setSelectedMajor(e.target.value);
-              setIsRoadmapOnly(false);
-            }}
-            className="bg-slate-50 border border-slate-200 rounded-xl px-2 py-1.5 text-[11px] font-bold text-slate-700 focus:outline-none focus:border-[#0045ce] truncate"
-          >
-            <option value="all">Tất cả ngành</option>
-            {allMajors.map((m, idx) => (
-              <option key={idx} value={m}>{m}</option>
-            ))}
-          </select>
+        {/* 3 CUSTOM DROPDOWNS HOÀN CHỈNH */}
+        <div className="grid grid-cols-3 gap-1.5 pt-0.5 w-full">
+          {/* Dropdown 1: Ngành */}
+          <div className="relative w-full min-w-0">
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                setOpenDropdown((prev) => (prev === "major" ? null : "major"));
+              }}
+              className={`w-full flex items-center justify-between bg-slate-50 border rounded-xl px-2.5 py-1.5 text-[11px] font-bold text-slate-700 transition cursor-pointer ${
+                openDropdown === "major" ? "border-[#0045ce] bg-white ring-2 ring-blue-100" : "border-slate-200 hover:bg-slate-100/80"
+              }`}
+            >
+              <span className="truncate">{majorLabel}</span>
+              <i className={`bi bi-chevron-down text-[9px] text-slate-400 transition-transform duration-200 ${openDropdown === "major" ? "rotate-180 text-[#0045ce]" : ""}`}></i>
+            </button>
 
-          <select
-            value={selectedYear}
-            onChange={(e) => {
-              setSelectedYear(e.target.value);
-              setIsRoadmapOnly(false);
-            }}
-            className="bg-slate-50 border border-slate-200 rounded-xl px-2 py-1.5 text-[11px] font-bold text-slate-700 focus:outline-none focus:border-[#0045ce]"
-          >
-            <option value="all">Tất cả năm</option>
-            <option value="1">Năm 1</option>
-            <option value="2">Năm 2</option>
-            <option value="3">Năm 3</option>
-            <option value="4">Năm 4</option>
-          </select>
+            {openDropdown === "major" && (
+              <div 
+                className="absolute left-0 top-full mt-1.5 w-48 bg-white rounded-2xl shadow-2xl border border-slate-200/90 py-1.5 z-50 animate-in fade-in zoom-in-95 duration-150 overflow-hidden"
+                onClick={(e) => e.stopPropagation()}
+              >
+                <button
+                  type="button"
+                  onClick={() => {
+                    setSelectedMajor("all");
+                    setIsRoadmapOnly(false);
+                    setOpenDropdown(null);
+                  }}
+                  className={`w-full text-left px-3 py-2 text-xs font-bold transition flex items-center justify-between border-0 cursor-pointer ${
+                    selectedMajor === "all" ? "bg-blue-50 text-[#0045ce]" : "bg-white text-slate-700 hover:bg-slate-50"
+                  }`}
+                >
+                  <span>Tất cả ngành</span>
+                  {selectedMajor === "all" && <i className="bi bi-check2 text-sm"></i>}
+                </button>
+                {allMajors.map((m, idx) => (
+                  <button
+                    key={idx}
+                    type="button"
+                    onClick={() => {
+                      setSelectedMajor(m);
+                      setIsRoadmapOnly(false);
+                      setOpenDropdown(null);
+                    }}
+                    className={`w-full text-left px-3 py-2 text-xs font-bold transition flex items-center justify-between border-0 cursor-pointer ${
+                      selectedMajor === m ? "bg-blue-50 text-[#0045ce]" : "bg-white text-slate-700 hover:bg-slate-50"
+                    }`}
+                  >
+                    <span className="truncate pr-1">{m}</span>
+                    {selectedMajor === m && <i className="bi bi-check2 text-sm shrink-0"></i>}
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
 
-          <select
-            value={selectedSemester}
-            onChange={(e) => {
-              setSelectedSemester(e.target.value);
-              setIsRoadmapOnly(false);
-            }}
-            className="bg-slate-50 border border-slate-200 rounded-xl px-2 py-1.5 text-[11px] font-bold text-slate-700 focus:outline-none focus:border-[#0045ce]"
-          >
-            <option value="all">Tất cả kỳ</option>
-            <option value="1">Học kỳ 1</option>
-            <option value="2">Học kỳ 2</option>
-            <option value="3">Học kỳ 3 (Hè)</option>
-          </select>
+          {/* Dropdown 2: Năm */}
+          <div className="relative w-full min-w-0">
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                setOpenDropdown((prev) => (prev === "year" ? null : "year"));
+              }}
+              className={`w-full flex items-center justify-between bg-slate-50 border rounded-xl px-2.5 py-1.5 text-[11px] font-bold text-slate-700 transition cursor-pointer ${
+                openDropdown === "year" ? "border-[#0045ce] bg-white ring-2 ring-blue-100" : "border-slate-200 hover:bg-slate-100/80"
+              }`}
+            >
+              <span className="truncate">{yearLabel}</span>
+              <i className={`bi bi-chevron-down text-[9px] text-slate-400 transition-transform duration-200 ${openDropdown === "year" ? "rotate-180 text-[#0045ce]" : ""}`}></i>
+            </button>
+
+            {openDropdown === "year" && (
+              <div 
+                className="absolute left-0 top-full mt-1.5 w-32 bg-white rounded-2xl shadow-2xl border border-slate-200/90 py-1.5 z-50 animate-in fade-in zoom-in-95 duration-150 overflow-hidden"
+                onClick={(e) => e.stopPropagation()}
+              >
+                {["all", "1", "2", "3", "4"].map((y) => (
+                  <button
+                    key={y}
+                    type="button"
+                    onClick={() => {
+                      setSelectedYear(y);
+                      setIsRoadmapOnly(false);
+                      setOpenDropdown(null);
+                    }}
+                    className={`w-full text-left px-3 py-2 text-xs font-bold transition flex items-center justify-between border-0 cursor-pointer ${
+                      selectedYear === y ? "bg-blue-50 text-[#0045ce]" : "bg-white text-slate-700 hover:bg-slate-50"
+                    }`}
+                  >
+                    <span>{y === "all" ? "Tất cả năm" : `Năm ${y}`}</span>
+                    {selectedYear === y && <i className="bi bi-check2 text-sm"></i>}
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+
+          {/* Dropdown 3: Kỳ */}
+          <div className="relative w-full min-w-0">
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                setOpenDropdown((prev) => (prev === "semester" ? null : "semester"));
+              }}
+              className={`w-full flex items-center justify-between bg-slate-50 border rounded-xl px-2.5 py-1.5 text-[11px] font-bold text-slate-700 transition cursor-pointer ${
+                openDropdown === "semester" ? "border-[#0045ce] bg-white ring-2 ring-blue-100" : "border-slate-200 hover:bg-slate-100/80"
+              }`}
+            >
+              <span className="truncate">{semesterLabel}</span>
+              <i className={`bi bi-chevron-down text-[9px] text-slate-400 transition-transform duration-200 ${openDropdown === "semester" ? "rotate-180 text-[#0045ce]" : ""}`}></i>
+            </button>
+
+            {openDropdown === "semester" && (
+              <div 
+                className="absolute right-0 top-full mt-1.5 w-36 bg-white rounded-2xl shadow-2xl border border-slate-200/90 py-1.5 z-50 animate-in fade-in zoom-in-95 duration-150 overflow-hidden"
+                onClick={(e) => e.stopPropagation()}
+              >
+                {[
+                  { id: "all", label: "Tất cả kỳ" },
+                  { id: "1", label: "Học kỳ 1" },
+                  { id: "2", label: "Học kỳ 2" },
+                  { id: "3", label: "Học kỳ 3 (Hè)" },
+                ].map((s) => (
+                  <button
+                    key={s.id}
+                    type="button"
+                    onClick={() => {
+                      setSelectedSemester(s.id);
+                      setIsRoadmapOnly(false);
+                      setOpenDropdown(null);
+                    }}
+                    className={`w-full text-left px-3 py-2 text-xs font-bold transition flex items-center justify-between border-0 cursor-pointer ${
+                      selectedSemester === s.id ? "bg-blue-50 text-[#0045ce]" : "bg-white text-slate-700 hover:bg-slate-50"
+                    }`}
+                  >
+                    <span>{s.label}</span>
+                    {selectedSemester === s.id && <i className="bi bi-check2 text-sm"></i>}
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
         </div>
 
-        {/* Bộ lọc nhãn con */}
-        <div className="flex items-center justify-between pt-0.5 overflow-x-auto gap-1">
+        {/* Thanh lọc nhãn con */}
+        <div className="flex items-center justify-between pt-0.5 overflow-x-auto gap-1 no-scrollbar w-full">
           <div className="flex gap-1 flex-nowrap shrink-0">
             <button
               onClick={() => setFilterSubCategory("all")}
-              className={`px-2 py-0.5 rounded-full text-[10px] font-extrabold border transition ${
+              className={`px-2 py-0.5 rounded-full text-[10px] font-extrabold border transition cursor-pointer ${
                 filterSubCategory === "all" ? "bg-slate-800 text-white border-slate-800" : "bg-white text-slate-600 border-slate-200"
               }`}
             >
@@ -504,7 +650,7 @@ export const LibraryModal = ({ isOpen, onClose, userMajor = "Hệ Thống Thông
               <button
                 key={key}
                 onClick={() => setFilterSubCategory(key)}
-                className={`px-2 py-0.5 rounded-full text-[10px] font-extrabold border transition text-nowrap ${
+                className={`px-2 py-0.5 rounded-full text-[10px] font-extrabold border transition text-nowrap cursor-pointer ${
                   filterSubCategory === key
                     ? "bg-[#0045ce] text-white border-[#0045ce]"
                     : "bg-white text-slate-600 border-slate-200 hover:bg-slate-50"
@@ -521,8 +667,8 @@ export const LibraryModal = ({ isOpen, onClose, userMajor = "Hệ Thống Thông
         </div>
       </div>
 
-      {/* 4. Danh sách học liệu */}
-      <div className="p-3 space-y-2.5 flex-1">
+      {/* Danh sách học liệu */}
+      <div className="p-3 space-y-2.5 flex-1 w-full max-w-full overflow-x-hidden" style={{ paddingBottom: "calc(var(--sab, 0px) + 20px)" }}>
         {activeTab === "docs" && (
           <>
             {loading ? (
@@ -535,8 +681,8 @@ export const LibraryModal = ({ isOpen, onClose, userMajor = "Hệ Thống Thông
                   <i className="bi bi-folder-x"></i>
                 </div>
                 <h6 className="font-black text-slate-800 text-xs mb-1">Không tìm thấy tài liệu phù hợp</h6>
-                <p className="text-[10.5px] text-slate-400 mb-3">Thử thay đổi bộ lọc hoặc xóa từ khóa tìm kiếm.</p>
-                <button onClick={handleResetFilters} className="px-3 py-1 rounded-full bg-blue-50 text-[#0045ce] font-extrabold text-[10.5px] border border-blue-200">
+                <p className="text-[10.5px] text-slate-400 mb-3">Thử đổi bộ lọc năm, kỳ hoặc xóa từ khóa tìm kiếm.</p>
+                <button onClick={handleResetFilters} className="px-3 py-1 rounded-full bg-blue-50 text-[#0045ce] font-extrabold text-[10.5px] border border-blue-200 cursor-pointer">
                   Xem tất cả
                 </button>
               </div>
@@ -608,7 +754,7 @@ export const LibraryModal = ({ isOpen, onClose, userMajor = "Hệ Thống Thông
                 </div>
                 <h6 className="font-black text-slate-800 text-xs mb-1">Chưa có video bài giảng</h6>
                 <p className="text-[10.5px] text-slate-400 mb-3">Không có video phù hợp bộ lọc đang chọn.</p>
-                <button onClick={handleResetFilters} className="px-3 py-1 rounded-full bg-blue-50 text-[#0045ce] font-extrabold text-[10.5px] border border-blue-200">
+                <button onClick={handleResetFilters} className="px-3 py-1 rounded-full bg-blue-50 text-[#0045ce] font-extrabold text-[10.5px] border border-blue-200 cursor-pointer">
                   Xem tất cả
                 </button>
               </div>
@@ -659,7 +805,7 @@ export const LibraryModal = ({ isOpen, onClose, userMajor = "Hệ Thống Thông
                 </div>
                 <h6 className="font-black text-slate-800 text-xs mb-1">Chưa có đề thi hoặc thẻ Flashcard</h6>
                 <p className="text-[10.5px] text-slate-400 mb-3">Thầy cô sẽ sớm cập nhật đề thi ôn tập cho môn học này.</p>
-                <button onClick={handleResetFilters} className="px-3 py-1 rounded-full bg-purple-50 text-purple-700 font-extrabold text-[10.5px] border border-purple-200">
+                <button onClick={handleResetFilters} className="px-3 py-1 rounded-full bg-purple-50 text-purple-700 font-extrabold text-[10.5px] border border-purple-200 cursor-pointer">
                   Xem tất cả
                 </button>
               </div>
@@ -713,9 +859,9 @@ export const LibraryModal = ({ isOpen, onClose, userMajor = "Hệ Thống Thông
         )}
       </div>
 
-      {/* 5. Phân trang */}
+      {/* Phân trang */}
       {totalPages > 1 && (
-        <div className="bg-white px-3 py-2 border-t border-slate-200 d-flex align-items-center justify-content-between sticky-bottom shadow-xs mt-auto">
+        <div className="bg-white px-3 py-2 border-t border-slate-200 flex items-center justify-between sticky bottom-0 shadow-xs mt-auto z-20 w-full" style={{ paddingBottom: "max(var(--sab, 0px), 8px)" }}>
           <button
             disabled={currentPage <= 1}
             onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
@@ -738,15 +884,14 @@ export const LibraryModal = ({ isOpen, onClose, userMajor = "Hệ Thống Thông
         </div>
       )}
 
-      {/* 6. Modal xem trước */}
+      {/* Modal xem trước */}
       {previewDoc && (
         <div
-          className="position-fixed top-0 start-0 w-100 h-100 bg-dark/60 d-flex align-items-center justify-content-center p-3"
-          style={{ zIndex: 1100 }}
+          className="fixed inset-0 w-full h-full bg-slate-900/60 flex items-center justify-center p-3 z-[1100]"
           onClick={() => setPreviewDoc(null)}
         >
           <div
-            className="bg-white rounded-3xl p-4 w-100 max-w-[420px] shadow-2xl flex flex-col gap-3"
+            className="bg-white rounded-3xl p-4 w-full max-w-[420px] shadow-2xl flex flex-col gap-3"
             onClick={(e) => e.stopPropagation()}
           >
             <div className="flex items-center justify-between border-b pb-2">
@@ -755,7 +900,7 @@ export const LibraryModal = ({ isOpen, onClose, userMajor = "Hệ Thống Thông
               </span>
               <button
                 onClick={() => setPreviewDoc(null)}
-                className="w-7 h-7 rounded-full bg-slate-100 text-slate-500 flex items-center justify-center border-0 cursor-pointer"
+                className="w-7 h-7 rounded-full bg-slate-100 text-slate-500 flex items-center justify-center border-0 cursor-pointer shrink-0"
               >
                 <i className="bi bi-x-lg text-xs"></i>
               </button>
@@ -787,15 +932,14 @@ export const LibraryModal = ({ isOpen, onClose, userMajor = "Hệ Thống Thông
         </div>
       )}
 
-      {/* 7. Modal làm bài trắc nghiệm / flashcard */}
+      {/* Modal làm bài trắc nghiệm / flashcard */}
       {activeQuizExam && (
         <div
-          className="position-fixed top-0 start-0 w-100 h-100 bg-dark/70 d-flex align-items-center justify-content-center p-3"
-          style={{ zIndex: 1150 }}
+          className="fixed inset-0 w-full h-full bg-slate-900/70 flex items-center justify-center p-3 z-[1150]"
           onClick={() => setActiveQuizExam(null)}
         >
           <div
-            className="bg-white rounded-3xl p-3.5 w-100 max-w-[480px] shadow-2xl flex flex-col gap-2.5 max-h-[88vh] overflow-hidden"
+            className="bg-white rounded-3xl p-3.5 w-full max-w-[480px] shadow-2xl flex flex-col gap-2.5 max-h-[88vh] overflow-hidden"
             onClick={(e) => e.stopPropagation()}
           >
             <div className="flex items-center justify-between border-b pb-2">

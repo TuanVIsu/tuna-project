@@ -39,6 +39,7 @@ module.exports = (io) => {
 
             if (checkRes.rows.length > 0) {
               const u = checkRes.rows[0];
+              
               if (u.warning_reason && u.warning_count > 0) {
                 socket.emit('admin_warning_received', {
                   userId: String(userId),
@@ -48,14 +49,17 @@ module.exports = (io) => {
                 });
               }
 
+              // CHỈ XỬ LÝ NẾU ĐANG BỊ KHÓA
               if (u.is_locked) {
                 if (u.lock_until && new Date() > new Date(u.lock_until)) {
+                  // Đã hết hạn khóa -> Gỡ khóa & Thông báo CÓ CHỦ ĐÍCH
                   await pool.query(
                     `UPDATE users SET is_locked = FALSE, lock_until = NULL, lock_reason = NULL WHERE id = $1`,
                     [u.id]
                   );
-                  socket.emit('user_unlocked', { userId: String(userId), isLocked: false });
+                  socket.emit('user_unlocked', { userId: String(userId), isLocked: false, showToast: true });
                 } else {
+                  // Vẫn đang trong thời gian bị khóa
                   socket.emit('user_locked', {
                     userId: String(userId),
                     isLocked: true,
@@ -64,9 +68,8 @@ module.exports = (io) => {
                     durationText: u.lock_until ? new Date(u.lock_until).toLocaleString('vi-VN') : 'Vĩnh viễn',
                   });
                 }
-              } else {
-                socket.emit('user_unlocked', { userId: String(userId), isLocked: false });
               }
+              // KHÔNG GỬI user_unlocked CHO NGƯỜI DÙNG BÌNH THƯỜNG Ở ĐÂY NỮA
             }
           }
         } catch (e) {
@@ -123,7 +126,6 @@ module.exports = (io) => {
           numericUserId = insUser.rows[0].id;
         }
 
-        // Kiểm tra trạng thái khóa tài khoản
         const checkRes = await pool.query(
           `SELECT id, is_locked, lock_until, lock_reason, student_code, class_name, warning_count FROM users WHERE id = $1`,
           [numericUserId]
@@ -133,7 +135,8 @@ module.exports = (io) => {
         if (uInfo.is_locked) {
           if (uInfo.lock_until && new Date() > new Date(uInfo.lock_until)) {
             await pool.query(`UPDATE users SET is_locked = FALSE, lock_until = NULL, lock_reason = NULL WHERE id = $1`, [uInfo.id]);
-            socket.emit('user_unlocked', { userId: String(userId), isLocked: false });
+            // Gửi mở khóa (kèm showToast: true vì mới được gỡ)
+            socket.emit('user_unlocked', { userId: String(userId), isLocked: false, showToast: true });
           } else {
             return socket.emit('user_locked', {
               userId: String(userId),

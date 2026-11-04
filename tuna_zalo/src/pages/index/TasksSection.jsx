@@ -1,19 +1,23 @@
 // tuna_zalo/src/pages/index/TasksSection.jsx
 import React, { useState, useEffect, useMemo, useCallback, useRef } from "react";
-import { fetchTasksFromDB, saveTaskToDB } from "../../services/aiService";
+import { 
+  fetchTasksFromDB, 
+  saveTaskToDB, 
+  fetchDocumentsFromDB, 
+  generateQuizFromDoc, 
+  generateFlashcardsFromDoc 
+} from "../../services/aiService";
 
 const API_BASE = "https://tuna-project.onrender.com/api";
 const ITEMS_PER_PAGE = 5;
 
-// Helper: Phân giải an toàn chuỗi văn bản từ option (cho dù là String hay Object)
+// Helper: Phân giải an toàn chuỗi văn bản từ option
 const extractOptionText = (opt, index) => {
   if (opt === null || opt === undefined) return "";
   if (typeof opt === "string") return opt.trim();
   if (typeof opt === "object") {
-    // Trường hợp { key: "A", text: "..." } hoặc { label: "A", value: "..." }
     const val = opt.text || opt.value || opt.content || opt.label;
     if (val !== undefined) return String(val).trim();
-    // Trường hợp { "A": "Nội dung" }
     const entries = Object.entries(opt);
     if (entries.length > 0) {
       const [k, v] = entries[0];
@@ -117,7 +121,6 @@ export const TasksSection = ({ onNavigate }) => {
   const [isFlipped, setIsFlipped] = useState(false);
   const [masteredCards, setMasteredCards] = useState(new Set());
 
-  // Lấy danh sách môn học từ Profile (Bọc an toàn JSON.parse)
   const userProfile = useMemo(() => {
     try {
       const p = localStorage.getItem("user_academic_profile");
@@ -181,6 +184,7 @@ export const TasksSection = ({ onNavigate }) => {
     fetchXp();
   }, [myUserId]);
 
+  // LOGIC CỐT LÕI: Lấy tài liệu từ thư viện trước khi tạo bài tập
   const generateDailyQuizAndFlash = useCallback(async (subjectName) => {
     const targetSubject = (subjectName && subjectName !== "undefined" && String(subjectName).trim() !== "")
       ? subjectName
@@ -191,37 +195,65 @@ export const TasksSection = ({ onNavigate }) => {
     setIsGeneratingDaily(true);
 
     try {
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 12000);
-
-      const payload = {
-        subject: targetSubject,
-        targetGoal: userProfile?.targetGoal || "KhaGioi",
-        userId: myUserId,
-      };
-
-      const res = await fetch(`${API_BASE}/daily-quiz/generate`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        signal: controller.signal,
-        body: JSON.stringify(payload),
-      }).catch(() => null);
-
-      clearTimeout(timeoutId);
-
       let generatedQuestions = [];
       let generatedFlashcards = [];
+      let sourceInfo = "Kiến thức chung AI";
 
-      if (res && res.ok) {
-        const data = await res.json();
-        if (data.success) {
-          generatedQuestions = data.questions || [];
-          generatedFlashcards = data.flashcards || [];
+      // 1. TÌM TÀI LIỆU CÓ SẴN TRONG THƯ VIỆN SỐ (Docs)
+      const allDocs = await fetchDocumentsFromDB();
+      // Ưu tiên tài liệu chứa tên môn học hoặc môn học khớp
+      const matchedDocs = allDocs.filter(doc => 
+        (doc.subject && doc.subject.includes(targetSubject)) || 
+        (doc.name && doc.name.toLowerCase().includes(targetSubject.toLowerCase()))
+      );
+
+      if (matchedDocs.length > 0) {
+        // Lấy tài liệu đầu tiên làm nguồn
+        const targetDoc = matchedDocs[0];
+        sourceInfo = `Tài liệu: ${targetDoc.name}`;
+        showToast(`Đang phân tích từ tài liệu: ${targetDoc.name}...`, "info");
+        
+        try {
+          const difficulty = userProfile?.targetGoal === "HocBong" ? "Nâng cao" : "Căn bản";
+          // 2. ÉP AI TẠO CÂU HỎI & FLASHCARD DỰA TRÊN NỘI DUNG TÀI LIỆU ĐÓ
+          const [quizRes, flashRes] = await Promise.all([
+            generateQuizFromDoc(targetDoc.content, 5, difficulty),
+            generateFlashcardsFromDoc(targetDoc.content, 5, difficulty)
+          ]);
+          
+          if (quizRes && quizRes.length > 0) generatedQuestions = quizRes;
+          if (flashRes && flashRes.length > 0) generatedFlashcards = flashRes;
+        } catch (docErr) {
+          console.warn("Lỗi tạo từ tài liệu, chuyển sang AI chung", docErr);
+        }
+      }
+
+      // 3. NẾU KHÔNG CÓ TÀI LIỆU HOẶC TẠO TỪ TÀI LIỆU THẤT BẠI -> FALLBACK API CHUNG
+      if (generatedQuestions.length === 0) {
+        showToast(`Không tìm thấy tài liệu cho môn ${targetSubject}, đang dùng AI chung...`, "info");
+        const payload = {
+          subject: targetSubject,
+          targetGoal: userProfile?.targetGoal || "KhaGioi",
+          userId: myUserId,
+        };
+
+        const res = await fetch(`${API_BASE}/daily-quiz/generate`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload),
+        }).catch(() => null);
+
+        if (res && res.ok) {
+          const data = await res.json();
+          if (data.success) {
+            generatedQuestions = data.questions || [];
+            generatedFlashcards = data.flashcards || [];
+          }
         }
       }
 
       if (generatedQuestions.length === 0) {
-        showToast("Máy chủ đang đồng bộ câu hỏi từ CSDL, vui lòng thử lại sau!", "warning");
+        showToast("Hệ thống đang quá tải, vui lòng thử lại sau!", "warning");
         return;
       }
 
@@ -232,6 +264,7 @@ export const TasksSection = ({ onNavigate }) => {
         id: `daily_quiz_${targetSubject}_${todayStr}`,
         featureId: "quiz",
         docName: `[Hôm nay] ${targetSubject}`,
+        source: sourceInfo, // Lưu lại nguồn để hiển thị UI
         status: "done",
         config: { difficulty: userProfile?.targetGoal === "HocBong" ? "Nâng cao" : "Căn bản" },
         resultData: generatedQuestions,
@@ -249,6 +282,7 @@ export const TasksSection = ({ onNavigate }) => {
           id: `daily_flash_${targetSubject}_${todayStr}`,
           featureId: "flashcard",
           docName: `[Thuật ngữ] ${targetSubject}`,
+          source: sourceInfo, // Lưu lại nguồn
           status: "done",
           config: { difficulty: "Căn bản" },
           resultData: generatedFlashcards,
@@ -269,7 +303,7 @@ export const TasksSection = ({ onNavigate }) => {
       ]);
       showToast(`Đã nạp bài tập môn ${targetSubject}!`, "success");
     } catch (err) {
-      showToast("Lỗi kết nối khi tải bài tập từ CSDL!", "error");
+      showToast("Lỗi kết nối khi tải bài tập!", "error");
     } finally {
       isGeneratingRef.current = false;
       setIsGeneratingDaily(false);
@@ -506,7 +540,7 @@ export const TasksSection = ({ onNavigate }) => {
     }
   };
 
-  // MÀN HÌNH LÀM BÀI TOÀN MÀN HÌNH
+  // MÀN HÌNH LÀM BÀI TOÀN MÀN HÌNH (GIAO DIỆN HIỂN THỊ NGUỒN)
   if (activeTaskView) {
     const isQuiz = activeTaskView.featureId === "quiz";
     const isFlashcard = activeTaskView.featureId === "flashcard";
@@ -524,12 +558,13 @@ export const TasksSection = ({ onNavigate }) => {
             >
               <i className="bi bi-arrow-left font-bold"></i>
             </button>
-            <div className="truncate">
+            <div className="truncate flex-1">
               <h6 className="mb-0 font-black text-sm text-white truncate leading-tight">
                 {isQuiz ? "Luyện Đề Trắc Nghiệm" : "Bộ Thẻ Flashcard"}
               </h6>
-              <span className="text-blue-100 text-[10.5px] truncate block">
-                {activeTaskView.docName}
+              <span className="text-blue-200 text-[10px] truncate block mt-0.5 font-medium">
+                <i className="bi bi-journal-text me-1"></i>
+                Nguồn: {activeTaskView.source || activeTaskView.docName || "Trí tuệ nhân tạo (AI)"}
               </span>
             </div>
           </div>
@@ -831,14 +866,14 @@ export const TasksSection = ({ onNavigate }) => {
         <div 
           className="fixed top-24 left-3 right-3 z-50 flex items-center justify-between p-3.5 rounded-2xl shadow-xl border animate-in slide-in-from-top duration-300 backdrop-blur-md"
           style={{
-            backgroundColor: toastMessage.type === "error" ? "rgba(239, 68, 68, 0.95)" : "rgba(16, 185, 129, 0.95)",
+            backgroundColor: toastMessage.type === "error" ? "rgba(239, 68, 68, 0.95)" : toastMessage.type === "info" ? "rgba(59, 130, 246, 0.95)" : "rgba(16, 185, 129, 0.95)",
             color: "white",
-            borderColor: toastMessage.type === "error" ? "#f87171" : "#34d399",
+            borderColor: toastMessage.type === "error" ? "#f87171" : toastMessage.type === "info" ? "#60a5fa" : "#34d399",
           }}
         >
           <div className="flex items-center gap-2.5 min-w-0 flex-1">
             <span className="w-7 h-7 rounded-xl bg-white/20 flex items-center justify-center text-sm shrink-0">
-              <i className={`bi ${toastMessage.type === "error" ? "bi-exclamation-triangle-fill" : "bi-check2-circle"} text-base`}></i>
+              <i className={`bi ${toastMessage.type === "error" ? "bi-exclamation-triangle-fill" : toastMessage.type === "info" ? "bi-info-circle-fill" : "bi-check2-circle"} text-base`}></i>
             </span>
             <span className="text-xs font-black truncate leading-snug">
               {toastMessage.message}
@@ -863,7 +898,7 @@ export const TasksSection = ({ onNavigate }) => {
             Bài tập & Luyện thi
           </h3>
           <p className="text-[11px] text-blue-100 font-medium m-0 opacity-90">
-            Luyện trắc nghiệm và flashcard theo môn học trong lộ trình.
+            Hệ thống ưu tiên quét tài liệu thư viện số trước khi dùng AI chung.
           </p>
         </div>
 
@@ -986,9 +1021,12 @@ export const TasksSection = ({ onNavigate }) => {
             )}
           </div>
         ) : isGeneratingDaily ? (
-          <div className="py-3 bg-white rounded-2xl border border-blue-100 text-center text-xs font-bold text-slate-600 flex items-center justify-center gap-2 shadow-2xs">
-            <span className="spinner-border spinner-border-sm text-[#0045ce]"></span>
-            <span>Đang lấy câu hỏi từ CSDL & AI...</span>
+          <div className="py-3 bg-white rounded-2xl border border-blue-100 text-center text-xs font-bold text-slate-600 flex flex-col items-center justify-center gap-2 shadow-2xs">
+            <div className="flex items-center gap-2">
+              <span className="spinner-border spinner-border-sm text-[#0045ce]"></span>
+              <span>Đang lấy câu hỏi...</span>
+            </div>
+            <span className="text-[10px] font-normal text-slate-500">Ưu tiên quét tìm tài liệu trong Thư viện số</span>
           </div>
         ) : (
           <div className="bg-white rounded-2xl p-2.5 border border-blue-100 flex items-center justify-between gap-2">
@@ -1106,8 +1144,8 @@ export const TasksSection = ({ onNavigate }) => {
                       <h4 className="text-xs font-black text-slate-900 m-0 truncate">
                         {task.docName || "Bài tập ôn tập"}
                       </h4>
-                      <p className="text-[10.5px] text-slate-400 font-medium m-0 mt-0.5">
-                        Cấp độ: <b className="text-slate-700">{task.config?.difficulty || "Căn bản"}</b>
+                      <p className="text-[10.5px] text-slate-400 font-medium m-0 mt-0.5 truncate">
+                        Nguồn: <b className="text-slate-700">{task.source || "Tự động"}</b>
                       </p>
                     </div>
                   </div>

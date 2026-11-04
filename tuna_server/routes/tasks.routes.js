@@ -3,7 +3,6 @@ const express = require('express');
 const router = express.Router();
 const pool = require('../config/db');
 
-// Helper: Phân giải user_id (INTEGER) từ thông tin request
 const resolveUserId = async (req) => {
   if (req.user?.id) return req.user.id;
   const rawId = String(
@@ -26,7 +25,6 @@ const resolveUserId = async (req) => {
   return uRes.rows[0]?.id || null;
 };
 
-// Helper: Chuẩn hóa parse an toàn dữ liệu JSON
 const safeParseJson = (val) => {
   if (!val) return null;
   if (typeof val === 'object') return val;
@@ -37,9 +35,7 @@ const safeParseJson = (val) => {
   }
 };
 
-// =============================================================================
-// 1. LẤY DANH SÁCH LỊCH SỬ TÁC VỤ & BÀI TẬP ĐÃ LƯU
-// =============================================================================
+// 1. LẤY DANH SÁCH BÀI TẬP (Có thêm trường source)
 router.get('/', async (req, res) => {
   const userId = await resolveUserId(req);
   try {
@@ -49,6 +45,7 @@ router.get('/', async (req, res) => {
         user_id AS "userId",
         feature_id AS "featureId", 
         doc_name AS "docName", 
+        source,
         status, 
         result_data AS "resultData",
         config,
@@ -72,7 +69,6 @@ router.get('/', async (req, res) => {
 
     const { rows } = await pool.query(query, params).catch(() => ({ rows: [] }));
 
-    // Chuẩn hóa parse lại resultData và config trước khi trả về Frontend
     const formatted = rows.map((r) => ({
       ...r,
       resultData: safeParseJson(r.resultData),
@@ -86,13 +82,11 @@ router.get('/', async (req, res) => {
   }
 });
 
-// =============================================================================
-// 2. LƯU HOẶC CẬP NHẬT TÁC VỤ AI (TỰ ĐỘNG BỒI ĐẮP VÀO BẢNG QUESTIONS DÙNG CHUNG)
-// =============================================================================
+// 2. LƯU/CẬP NHẬT TÁC VỤ (Bổ sung lưu source)
 router.post('/', async (req, res) => {
   const userId = await resolveUserId(req);
   const {
-    id, featureId, docName, status, resultData,
+    id, featureId, docName, source, status, resultData,
     config, errorMessage, isSaved, hiddenInHistory,
     isDaily, dailyDate
   } = req.body;
@@ -104,12 +98,13 @@ router.post('/', async (req, res) => {
 
     const query = `
       INSERT INTO ai_tasks (
-        id, user_id, feature_id, doc_name, status, result_data,
+        id, user_id, feature_id, doc_name, source, status, result_data,
         config, error_message, is_saved, hidden_in_history,
         is_daily, daily_date, created_at
       )
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, CURRENT_TIMESTAMP)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, CURRENT_TIMESTAMP)
       ON CONFLICT (id) DO UPDATE SET
+        source = COALESCE(EXCLUDED.source, ai_tasks.source),
         status = EXCLUDED.status,
         result_data = COALESCE(EXCLUDED.result_data, ai_tasks.result_data),
         config = COALESCE(EXCLUDED.config, ai_tasks.config),
@@ -126,6 +121,7 @@ router.post('/', async (req, res) => {
       userId,
       featureId || 'quiz',
       docName || 'Tài liệu học tập',
+      source || 'Kiến thức chung AI',
       status || 'done',
       parsedResult ? JSON.stringify(parsedResult) : null,
       parsedConfig ? JSON.stringify(parsedConfig) : null,
@@ -138,11 +134,7 @@ router.post('/', async (req, res) => {
 
     const result = await pool.query(query, values);
 
-    // =========================================================================
-    // ĐÓNG GÓP TỰ ĐỘNG VÀO NGÂN HÀNG CÂU HỎI CHUNG (BẢNG questions)
-    // Khi một bài trắc nghiệm được tạo hoàn tất, tự động bồi đắp vào ngân hàng chung
-    // để các sinh viên khác học cùng môn có thể rút về ngay mà không tốn token Gemini.
-    // =========================================================================
+    // Tự động đóng góp vào ngân hàng câu hỏi chung
     if ((featureId === 'quiz' || featureId === 'daily_quiz') && Array.isArray(parsedResult) && parsedResult.length > 0) {
       const subjectClean = (docName || '')
         .replace(/^\[Hôm nay\]\s*|^\[Trắc nghiệm\]\s*|\.pdf|\.docx|\.doc/gi, '')
@@ -179,9 +171,6 @@ router.post('/', async (req, res) => {
   }
 });
 
-// =============================================================================
-// 3. XÓA TÁC VỤ ĐƠN LẺ KHỎI LỊCH SỬ
-// =============================================================================
 router.delete('/:id', async (req, res) => {
   try {
     await pool.query(`DELETE FROM ai_tasks WHERE id = $1`, [req.params.id]);
@@ -191,13 +180,9 @@ router.delete('/:id', async (req, res) => {
   }
 });
 
-// =============================================================================
-// 4. DỌN DẸP LỊCH SỬ (CHỈ XÓA BẢN NHÁP, BẢO TOÀN CÁC BÀI TẬP ĐÃ LƯU)
-// =============================================================================
 router.delete('/', async (req, res) => {
   const userId = await resolveUserId(req);
   try {
-    // Chỉ xóa các tác vụ tạm/lịch sử xem, KHÔNG xóa bài tập sinh viên đã bấm "Lưu bài" (is_saved = true)
     if (userId) {
       await pool.query(
         `DELETE FROM ai_tasks 

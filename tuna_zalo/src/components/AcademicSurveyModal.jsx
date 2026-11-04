@@ -3,23 +3,55 @@ import React, { useState, useEffect, useCallback, useMemo } from "react";
 
 const API_BASE = "https://tuna-project.onrender.com/api";
 
+// Danh sách ngành mặc định chuẩn (Tránh lỗi ReferenceError: majors is not defined)
+const DEFAULT_MAJORS = [
+  { major_name: "Hệ Thống Thông Tin", icon: "bi-hdd-network", semesters_per_year: 3, total_years: 4 },
+  { major_name: "Công Nghệ Thông Tin", icon: "bi-cpu", semesters_per_year: 3, total_years: 4 },
+  { major_name: "Kỹ Thuật Phần Mềm", icon: "bi-code-square", semesters_per_year: 3, total_years: 4 },
+  { major_name: "An Ninh Mạng", icon: "bi-shield-lock", semesters_per_year: 3, total_years: 4 },
+];
+
+// Hàm đọc JSON an toàn từ localStorage (Chống lỗi SyntaxError: "undefined" is not valid JSON)
+const safeParseJSON = (raw, fallback = {}) => {
+  if (!raw || raw === "undefined" || raw === "null") return fallback;
+  try {
+    const parsed = JSON.parse(raw);
+    return parsed && typeof parsed === "object" ? parsed : fallback;
+  } catch (e) {
+    return fallback;
+  }
+};
+
 export const AcademicSurveyModal = ({ isOpen, onSave, onDismiss }) => {
   // 1. Tự động tính toán Khóa và Năm học theo MSSV / Email
-  const { detectedYear, detectedCohort, detectedMajor } = useMemo(() => {
+  const { detectedYear, detectedCohort, detectedMajor, detectedGpa } = useMemo(() => {
     let studentCode = "";
     let faculty = "Hệ Thống Thông Tin";
+    let defaultGpa = 3.0;
 
     try {
-      const u = JSON.parse(localStorage.getItem("user") || localStorage.getItem("user_info") || "{}");
+      const rawUser = localStorage.getItem("user");
+      const rawUserInfo = localStorage.getItem("user_info");
+      const u = safeParseJSON(
+        rawUser && rawUser !== "undefined" ? rawUser : rawUserInfo,
+        {}
+      );
       studentCode = u.student_code || u.email || "";
-      if (u.faculty) faculty = u.faculty;
+      if (u.faculty && u.faculty !== "undefined") faculty = u.faculty;
+      if (u.gpa && !isNaN(parseFloat(u.gpa))) defaultGpa = parseFloat(u.gpa);
     } catch (e) {}
 
-    if (!studentCode) {
-      studentCode = localStorage.getItem("tuna_user_id") || localStorage.getItem("user_email") || "";
+    if (!studentCode || studentCode === "undefined") {
+      const backupId = localStorage.getItem("tuna_user_id");
+      const backupEmail = localStorage.getItem("user_email");
+      studentCode =
+        (backupId && backupId !== "undefined" ? backupId : "") ||
+        (backupEmail && backupEmail !== "undefined" ? backupEmail : "");
     }
 
-    const match = String(studentCode).match(/(?:20)?(2[0-6])\d{5}/) || String(studentCode).match(/K?(2[0-6])/i);
+    const match =
+      String(studentCode).match(/(?:20)?(2[0-6])\d{5}/) ||
+      String(studentCode).match(/K?(2[0-6])/i);
     const admissionYearShort = match ? parseInt(match[1], 10) : 23;
     const admissionYearFull = 2000 + admissionYearShort; // 2023
 
@@ -32,6 +64,7 @@ export const AcademicSurveyModal = ({ isOpen, onSave, onDismiss }) => {
       detectedYear: calcYear,
       detectedCohort: `K${admissionYearShort}`,
       detectedMajor: faculty,
+      detectedGpa: defaultGpa,
     };
   }, []);
 
@@ -39,11 +72,16 @@ export const AcademicSurveyModal = ({ isOpen, onSave, onDismiss }) => {
   const [year, setYear] = useState(detectedYear);
   const [semester, setSemester] = useState(1);
 
+  // Số học kỳ mỗi năm & tổng số năm học đồng bộ từ bảng public.faculty_majors
+  const [semestersPerYear, setSemestersPerYear] = useState(3);
+  const [totalYears, setTotalYears] = useState(4);
+  const [availableMajors, setAvailableMajors] = useState(DEFAULT_MAJORS);
+
   const [dbSubjects, setDbSubjects] = useState([]);
   const [isLoadingSubjects, setIsLoadingSubjects] = useState(false);
   const [subjectLevels, setSubjectLevels] = useState({});
   const [customSubjectInput, setCustomSubjectInput] = useState("");
-  const [currentGpa, setCurrentGpa] = useState(3.0);
+  const [currentGpa, setCurrentGpa] = useState(detectedGpa);
   const [targetGoal, setTargetGoal] = useState("KhaGioi");
   const [dailyPace, setDailyPace] = useState(15);
   const [reminderTime, setReminderTime] = useState("20:00");
@@ -54,49 +92,113 @@ export const AcademicSurveyModal = ({ isOpen, onSave, onDismiss }) => {
     setTimeout(() => setToastMessage(null), 3200);
   };
 
-  const majors = ["Hệ Thống Thông Tin", "Công Nghệ Thông Tin", "Kỹ Thuật Phần Mềm", "An Ninh Mạng"];
+  // Gán icon tương ứng cho từng ngành
+  const getMajorIcon = (majorName = "") => {
+    const lower = majorName.toLowerCase();
+    if (lower.includes("hệ thống")) return "bi-hdd-network";
+    if (lower.includes("công nghệ")) return "bi-cpu";
+    if (lower.includes("phần mềm")) return "bi-code-square";
+    if (lower.includes("an ninh") || lower.includes("an toàn")) return "bi-shield-lock";
+    return "bi-journal-code";
+  };
 
-  // 2. Tải trực tiếp môn học từ CSDL PostgreSQL (Không gán cứng)
-  const fetchSubjectsFromDB = useCallback(async (selectedMajor, selectedYear, selectedSem, selectedCohort) => {
-    setIsLoadingSubjects(true);
+  // 2. Tải cấu hình số kỳ/năm từ bảng public.faculty_majors (nếu API có sẵn)
+  const fetchMajorsMeta = useCallback(async (selectedMajorName) => {
     try {
-      const cohortParam = selectedCohort || detectedCohort;
-      const res = await fetch(
-        `${API_BASE}/curriculum?major=${encodeURIComponent(selectedMajor)}&year=${selectedYear}&semester=${selectedSem}&cohort=${encodeURIComponent(cohortParam)}`,
-        {
-          headers: {
-            "Content-Type": "application/json",
-            "bypass-tunnel-reminder": "true",
-          },
-        }
-      );
-      const json = await res.json();
-      if (json.success && Array.isArray(json.data) && json.data.length > 0) {
-        const normalized = json.data.map((item) => ({
-          subjectName: item.subject_name || item.subjectName || "Môn học chuyên ngành",
-          credits: item.credits || 3,
-        }));
+      const res = await fetch(`${API_BASE}/faculty-majors`, {
+        headers: {
+          "Content-Type": "application/json",
+          "bypass-tunnel-reminder": "true",
+        },
+      });
+      if (!res.ok) return;
+      const text = await res.text();
+      const json = safeParseJSON(text, null);
 
-        setDbSubjects(normalized);
-        const init = {};
-        normalized.forEach((item) => {
-          if (item.subjectName && item.subjectName !== "undefined") {
-            init[item.subjectName] = "medium";
+      if (json && json.success && Array.isArray(json.data) && json.data.length > 0) {
+        const formatted = json.data.map((m) => ({
+          ...m,
+          major_name: m.major_name || m.name || "Chuyên ngành",
+          icon: m.icon || getMajorIcon(m.major_name || m.name),
+          semesters_per_year: Number(m.semesters_per_year) || 3,
+          total_years: Math.ceil(Number(m.total_years) || 4),
+        }));
+        setAvailableMajors(formatted);
+
+        const targetName = selectedMajorName || detectedMajor;
+        const currentMeta = formatted.find(
+          (m) => m.major_name.toLowerCase() === targetName.toLowerCase()
+        );
+        if (currentMeta) {
+          setSemestersPerYear(currentMeta.semesters_per_year);
+          setTotalYears(currentMeta.total_years);
+        }
+      }
+    } catch (e) {
+      // Giữ nguyên DEFAULT_MAJORS khi offline hoặc endpoint chưa mở
+    }
+  }, [detectedMajor]);
+
+  // 3. Tải trực tiếp môn học từ CSDL PostgreSQL
+  const fetchSubjectsFromDB = useCallback(
+    async (selectedMajor, selectedYear, selectedSem, selectedCohort, currentSemPerYear = 3) => {
+      setIsLoadingSubjects(true);
+      try {
+        const cohortParam = selectedCohort || detectedCohort;
+        const semIndex = (Number(selectedYear) - 1) * Number(currentSemPerYear) + Number(selectedSem);
+
+        const res = await fetch(
+          `${API_BASE}/curriculum?major=${encodeURIComponent(
+            selectedMajor
+          )}&year=${selectedYear}&semester=${selectedSem}&semester_index=${semIndex}&cohort=${encodeURIComponent(
+            cohortParam
+          )}`,
+          {
+            headers: {
+              "Content-Type": "application/json",
+              "bypass-tunnel-reminder": "true",
+            },
           }
-        });
-        setSubjectLevels(init);
-      } else {
+        );
+
+        const text = await res.text();
+        const json = safeParseJSON(text, { success: false, data: [] });
+
+        if (json.semesters_per_year) {
+          setSemestersPerYear(Number(json.semesters_per_year));
+        }
+
+        if (json.success && Array.isArray(json.data) && json.data.length > 0) {
+          const normalized = json.data.map((item) => ({
+            subjectCode: item.subject_code || item.subjectCode || "",
+            subjectName: item.subject_name || item.subjectName || "Môn học chuyên ngành",
+            credits: item.credits || 3,
+            subjectType: item.subject_type || "mandatory",
+            isCustom: false,
+          }));
+
+          setDbSubjects(normalized);
+          const init = {};
+          normalized.forEach((item) => {
+            if (item.subjectName && item.subjectName !== "undefined") {
+              init[item.subjectName] = "medium";
+            }
+          });
+          setSubjectLevels(init);
+        } else {
+          setDbSubjects([]);
+          setSubjectLevels({});
+        }
+      } catch (err) {
+        console.error("Lỗi nạp môn học từ CSDL:", err.message);
         setDbSubjects([]);
         setSubjectLevels({});
+      } finally {
+        setIsLoadingSubjects(false);
       }
-    } catch (err) {
-      console.error("Lỗi nạp môn học từ CSDL:", err.message);
-      setDbSubjects([]);
-      setSubjectLevels({});
-    } finally {
-      setIsLoadingSubjects(false);
-    }
-  }, [detectedCohort]);
+    },
+    [detectedCohort]
+  );
 
   useEffect(() => {
     if (!isOpen) return;
@@ -105,44 +207,117 @@ export const AcademicSurveyModal = ({ isOpen, onSave, onDismiss }) => {
     let initYear = detectedYear;
     let initSem = 1;
 
-    try {
-      const saved = localStorage.getItem("user_academic_profile");
-      if (saved && saved !== "undefined") {
-        const parsed = JSON.parse(saved);
-        if (parsed.major) { initMajor = parsed.major; setMajor(parsed.major); }
-        if (parsed.year) { initYear = parsed.year; setYear(parsed.year); }
-        if (parsed.semester) { initSem = parsed.semester; setSemester(parsed.semester); }
-        if (parsed.currentGpa !== undefined) setCurrentGpa(parsed.currentGpa);
-        if (parsed.targetGoal) setTargetGoal(parsed.targetGoal);
-        if (parsed.dailyPace) setDailyPace(parsed.dailyPace);
-        if (parsed.reminderTime) setReminderTime(parsed.reminderTime);
+    const savedRaw = localStorage.getItem("user_academic_profile");
+    const parsed = safeParseJSON(savedRaw, null);
 
-        fetchSubjectsFromDB(initMajor, initYear, initSem, detectedCohort).then(() => {
-          if (parsed.subjectLevels) {
-            const cleanLevels = {};
-            Object.keys(parsed.subjectLevels).forEach((k) => {
-              if (k && k !== "undefined") {
-                cleanLevels[k] = parsed.subjectLevels[k];
-              }
-            });
-            setSubjectLevels(cleanLevels);
-          }
-        });
-        return;
+    if (parsed && Object.keys(parsed).length > 0) {
+      if (parsed.major && parsed.major !== "undefined") {
+        initMajor = parsed.major;
+        setMajor(parsed.major);
       }
-    } catch (e) {
-      console.error("Lỗi đọc academic profile:", e);
+      if (parsed.year) {
+        initYear = Number(parsed.year);
+        setYear(Number(parsed.year));
+      }
+      if (parsed.semester) {
+        initSem = Number(parsed.semester);
+        setSemester(Number(parsed.semester));
+      }
+      if (parsed.currentGpa !== undefined) setCurrentGpa(parsed.currentGpa);
+      if (parsed.targetGoal) setTargetGoal(parsed.targetGoal);
+      if (parsed.dailyPace) setDailyPace(Number(parsed.dailyPace));
+      if (parsed.reminderTime) setReminderTime(parsed.reminderTime);
+
+      fetchMajorsMeta(initMajor);
+      fetchSubjectsFromDB(initMajor, initYear, initSem, detectedCohort, semestersPerYear).then(() => {
+        if (parsed.subjectLevels && typeof parsed.subjectLevels === "object") {
+          const cleanLevels = {};
+          Object.keys(parsed.subjectLevels).forEach((k) => {
+            if (k && k !== "undefined") {
+              cleanLevels[k] = parsed.subjectLevels[k];
+            }
+          });
+          setSubjectLevels(cleanLevels);
+        }
+      });
+      return;
     }
 
     setMajor(initMajor);
     setYear(initYear);
     setSemester(initSem);
-    fetchSubjectsFromDB(initMajor, initYear, initSem, detectedCohort);
-  }, [isOpen, detectedMajor, detectedYear, detectedCohort, fetchSubjectsFromDB]);
+    fetchMajorsMeta(initMajor);
+    fetchSubjectsFromDB(initMajor, initYear, initSem, detectedCohort, semestersPerYear);
+  }, [isOpen, detectedMajor, detectedYear, detectedCohort, fetchMajorsMeta, fetchSubjectsFromDB]);
 
-  const handleSelectFramework = (newMajor, newYear, newSemester) => {
-    fetchSubjectsFromDB(newMajor, newYear, newSemester, detectedCohort);
+  // Chuyển ngành học
+  const handleSelectMajor = (newMajor) => {
+    setMajor(newMajor);
+    const meta = availableMajors.find((m) => (m.major_name || m.name) === newMajor);
+    let nextSemPerYear = semestersPerYear;
+    if (meta?.semesters_per_year) {
+      nextSemPerYear = Number(meta.semesters_per_year);
+      setSemestersPerYear(nextSemPerYear);
+    }
+    if (meta?.total_years) {
+      setTotalYears(Math.ceil(Number(meta.total_years)));
+    }
+    const validSem = semester > nextSemPerYear ? 1 : semester;
+    if (validSem !== semester) setSemester(validSem);
+
+    fetchSubjectsFromDB(newMajor, year, validSem, detectedCohort, nextSemPerYear);
   };
+
+  // Chuyển năm học
+  const handleSelectYear = (newYear) => {
+    const val = Number(newYear);
+    setYear(val);
+    fetchSubjectsFromDB(major, val, semester, detectedCohort, semestersPerYear);
+  };
+
+  // Chuyển học kỳ
+  const handleSelectSemester = (newSemester) => {
+    const val = Number(newSemester);
+    setSemester(val);
+    fetchSubjectsFromDB(major, year, val, detectedCohort, semestersPerYear);
+  };
+
+  // Render danh sách nút học kỳ động theo semestersPerYear (2, 3 hoặc 4 kỳ)
+  const semesterButtons = useMemo(() => {
+    const count = Math.max(1, Number(semestersPerYear) || 3);
+    const list = [];
+    for (let i = 1; i <= count; i++) {
+      let label = `Học kỳ ${i}`;
+      let subText = "Kỳ chính";
+      if (i === 3) {
+        label = "Học kỳ 3";
+        subText = "Kỳ hè / Phụ";
+      } else if (i > 3) {
+        subText = "Kỳ phụ";
+      }
+      list.push({ id: i, label, subText });
+    }
+    return list;
+  }, [semestersPerYear]);
+
+  // Hợp nhất môn học từ DB và môn người dùng tự thêm ngoài khung
+  const allDisplaySubjects = useMemo(() => {
+    const dbNames = new Set(dbSubjects.map((s) => s.subjectName));
+    const customSubs = Object.keys(subjectLevels)
+      .filter((name) => name && name !== "undefined" && !dbNames.has(name))
+      .map((name) => ({
+        subjectCode: "",
+        subjectName: name,
+        credits: "Tự chọn",
+        subjectType: "elective",
+        isCustom: true,
+      }));
+    return [...dbSubjects, ...customSubs];
+  }, [dbSubjects, subjectLevels]);
+
+  const selectedCount = useMemo(() => {
+    return Object.keys(subjectLevels).filter((k) => k && k !== "undefined").length;
+  }, [subjectLevels]);
 
   if (!isOpen) return null;
 
@@ -154,6 +329,20 @@ export const AcademicSurveyModal = ({ isOpen, onSave, onDismiss }) => {
       else updated[subName] = "medium";
       return updated;
     });
+  };
+
+  const toggleAllSubjects = () => {
+    if (selectedCount === allDisplaySubjects.length && allDisplaySubjects.length > 0) {
+      setSubjectLevels({});
+    } else {
+      const next = {};
+      allDisplaySubjects.forEach((s) => {
+        if (s.subjectName && s.subjectName !== "undefined") {
+          next[s.subjectName] = subjectLevels[s.subjectName] || "medium";
+        }
+      });
+      setSubjectLevels(next);
+    }
   };
 
   const changeLevel = (subName, level, e) => {
@@ -185,14 +374,17 @@ export const AcademicSurveyModal = ({ isOpen, onSave, onDismiss }) => {
       cleanSubjectLevels[sub] = subjectLevels[sub] || "medium";
     });
 
+    const parsedGpa = Math.min(4.0, Math.max(0.0, Number(currentGpa) || 3.0));
+
     const studyPlan = {
       major,
       cohort: detectedCohort,
       year: Number(year),
       semester: Number(semester),
+      semesterIndex: (Number(year) - 1) * Number(semestersPerYear) + Number(semester),
       subjects: selectedSubs,
       subjectLevels: cleanSubjectLevels,
-      currentGpa: Number(currentGpa) || 3.0,
+      currentGpa: parsedGpa,
       targetGoal,
       dailyPace: Number(dailyPace),
       reminderTime,
@@ -207,29 +399,45 @@ export const AcademicSurveyModal = ({ isOpen, onSave, onDismiss }) => {
     }
   };
 
+  const majorsListToRender =
+    Array.isArray(availableMajors) && availableMajors.length > 0
+      ? availableMajors
+      : DEFAULT_MAJORS;
+
   return (
     <div
-      className="position-absolute top-0 start-0 w-100 h-100 bg-[#F8FAFC] d-flex flex-column"
+      className="position-absolute top-0 start-0 w-100 h-100 bg-[#F4F7FE] d-flex flex-column select-none"
       style={{ zIndex: 1200, overflowY: "auto", overflowX: "hidden" }}
     >
+      {/* Toast thông báo */}
       {toastMessage && (
-        <div 
-          className="fixed top-24 left-3 right-3 z-50 flex items-center justify-between p-3.5 rounded-2xl shadow-xl border animate-in slide-in-from-top duration-300 backdrop-blur-md break-words"
+        <div
+          className="fixed top-20 left-3 right-3 z-50 flex items-center justify-between p-3.5 rounded-2xl shadow-xl border transition-all duration-300 backdrop-blur-md break-words"
           style={{
-            backgroundColor: toastMessage.type === "error" ? "rgba(239, 68, 68, 0.95)" : "rgba(16, 185, 129, 0.95)",
+            backgroundColor:
+              toastMessage.type === "error"
+                ? "rgba(239, 68, 68, 0.96)"
+                : "rgba(16, 185, 129, 0.96)",
             color: "white",
             borderColor: toastMessage.type === "error" ? "#f87171" : "#34d399",
           }}
         >
           <div className="flex items-center gap-2.5 min-w-0 flex-1">
             <span className="w-7 h-7 rounded-xl bg-white/20 flex items-center justify-center text-sm shrink-0">
-              <i className={`bi ${toastMessage.type === "error" ? "bi-exclamation-triangle-fill" : "bi-check2-circle"} text-base`}></i>
+              <i
+                className={`bi ${
+                  toastMessage.type === "error"
+                    ? "bi-exclamation-triangle-fill"
+                    : "bi-check2-circle"
+                } text-base`}
+              ></i>
             </span>
             <span className="text-xs font-black truncate leading-snug">
               {toastMessage.message}
             </span>
           </div>
           <button
+            type="button"
             onClick={() => setToastMessage(null)}
             className="w-6 h-6 rounded-full bg-white/20 text-white flex items-center justify-center border-0 cursor-pointer shrink-0 ml-2"
           >
@@ -239,35 +447,47 @@ export const AcademicSurveyModal = ({ isOpen, onSave, onDismiss }) => {
       )}
 
       {/* Header Bar */}
-      <div className="bg-[#0045ce] text-white sticky-top shadow-xs select-none flex-shrink-0">
-        <div style={{ height: "max(var(--sat, 0px), 38px)", width: "100%" }} />
+      <div className="bg-[#0045ce] text-white sticky-top shadow-xs select-none flex-shrink-0 z-20">
+        <div style={{ height: "max(var(--sat, 0px), 36px)", width: "100%" }} />
 
-        <div className="px-4 pb-3 pt-1 flex items-center justify-between gap-3">
-          <div className="flex items-center gap-3 min-w-0 flex-1">
+        <div className="px-3.5 pb-3 pt-1 flex items-center justify-between gap-2">
+          <div className="flex items-center gap-2.5 min-w-0 flex-1">
             <button
+              type="button"
               onClick={onDismiss}
-              className="w-9 h-9 rounded-full bg-white/15 hover:bg-white/25 active:scale-95 flex items-center justify-center border-0 text-white transition shrink-0 cursor-pointer shadow-2xs"
+              className="w-8 h-8 rounded-full bg-white/15 hover:bg-white/25 active:scale-95 flex items-center justify-center border-0 text-white transition shrink-0 cursor-pointer shadow-2xs"
               title="Quay lại"
             >
               <i className="bi bi-arrow-left text-sm font-black"></i>
             </button>
             <div className="flex flex-col justify-center min-w-0 flex-1">
-              <h6 className="mb-0 font-black text-[16px] tracking-tight leading-tight truncate text-white">
+              <h6 className="mb-0 font-black text-[15px] tracking-tight leading-tight truncate text-white">
                 Kế hoạch & Lộ trình học tập
               </h6>
-              <span className="text-blue-100/80 text-[11px] font-medium block truncate mt-0.5">
+              <span className="text-blue-100/90 text-[11px] font-medium block truncate mt-0.5">
                 Đồng bộ Khóa {detectedCohort} • {major}
               </span>
             </div>
           </div>
-          <div className="w-[105px] shrink-0 pointer-events-none" />
+          {/* Khoảng trống cho nút điều hướng Zalo Mini App */}
+          <div className="w-[88px] shrink-0 pointer-events-none" />
         </div>
       </div>
 
-      <div className="p-3.5 space-y-4 flex-1 pb-24 max-w-lg mx-auto w-full">
+      {/* Nội dung chính */}
+      <div className="p-3.5 space-y-3.5 flex-1 pb-28 max-w-lg mx-auto w-full">
+        {/* Thanh trạng thái + Nút Lưu nhanh */}
         <div className="flex items-center justify-between px-1">
-          <span className="text-xs font-bold text-slate-500">Thông số lộ trình</span>
+          <div className="flex items-center gap-1.5">
+            <span className="text-xs font-extrabold text-slate-600">
+              Thông số lộ trình
+            </span>
+            <span className="text-[10.5px] font-bold text-[#0045ce] bg-blue-50 px-2 py-0.5 rounded-full border border-blue-200/60">
+              Năm {year} • HK{semester}
+            </span>
+          </div>
           <button
+            type="button"
             onClick={handleConfirm}
             className="px-3.5 py-1.5 rounded-full bg-amber-400 hover:bg-amber-500 text-slate-950 font-black text-xs border-0 shadow-xs active:scale-95 transition cursor-pointer flex items-center gap-1"
           >
@@ -276,104 +496,182 @@ export const AcademicSurveyModal = ({ isOpen, onSave, onDismiss }) => {
           </button>
         </div>
 
-        {/* Khối 1: Ngành */}
-        <div className="bg-white rounded-3xl p-3.5 border border-slate-200/80 shadow-xs space-y-2">
-          <label className="font-extrabold text-slate-900 text-xs flex items-center gap-1.5 m-0">
-            <span className="w-5 h-5 rounded-full bg-blue-100 text-[#0045ce] flex items-center justify-center text-[10.5px] font-black">1</span>
-            Chuyên ngành đào tạo:
-          </label>
-          <div className="grid grid-cols-2 gap-2 pt-1">
-            {majors.map((item) => (
-              <button
-                type="button"
-                key={item}
-                onClick={() => {
-                  setMajor(item);
-                  handleSelectFramework(item, year, semester);
-                }}
-                className={`p-2.5 rounded-2xl border text-left font-bold transition text-[11px] ${
-                  major === item
-                    ? "bg-[#0045ce] text-white border-[#0045ce] shadow-xs"
-                    : "bg-slate-50 text-slate-700 border-slate-200 hover:bg-slate-100"
-                }`}
-              >
-                {item}
-              </button>
-            ))}
+        {/* Khối 1: Chuyên ngành đào tạo */}
+        <div className="bg-white rounded-3xl p-3.5 border border-slate-200/80 shadow-xs space-y-2.5">
+          <div className="flex items-center justify-between">
+            <label className="font-extrabold text-slate-900 text-xs flex items-center gap-1.5 m-0">
+              <span className="w-5 h-5 rounded-full bg-blue-100 text-[#0045ce] flex items-center justify-center text-[10.5px] font-black">
+                1
+              </span>
+              Chuyên ngành đào tạo:
+            </label>
+            <span className="text-[10px] font-bold text-slate-400">Khoa CNTT</span>
+          </div>
+
+          <div className="grid grid-cols-2 gap-2 pt-0.5">
+            {majorsListToRender.map((item) => {
+              const name = item.major_name || item.name;
+              const isSelected = major === name;
+              const iconCls = item.icon || getMajorIcon(name);
+              return (
+                <button
+                  type="button"
+                  key={name}
+                  onClick={() => handleSelectMajor(name)}
+                  className={`p-2.5 rounded-2xl border text-left font-bold transition text-[11.5px] flex items-center gap-2 cursor-pointer ${
+                    isSelected
+                      ? "bg-[#0045ce] text-white border-[#0045ce] shadow-xs"
+                      : "bg-slate-50 text-slate-700 border-slate-200 hover:bg-slate-100"
+                  }`}
+                >
+                  <i
+                    className={`bi ${iconCls} text-xs shrink-0 ${
+                      isSelected ? "text-amber-300" : "text-slate-400"
+                    }`}
+                  ></i>
+                  <span className="truncate">{name}</span>
+                </button>
+              );
+            })}
           </div>
         </div>
 
-        {/* Khối 2: Năm & Kỳ (Tự chọn Năm 4 cho Khóa 23) */}
-        <div className="bg-white rounded-3xl p-3.5 border border-slate-200/80 shadow-xs space-y-2">
+        {/* Khối 2: Thời điểm học hiện tại (Nút Segmented thay cho <select> bị tràn) */}
+        <div className="bg-white rounded-3xl p-3.5 border border-slate-200/80 shadow-xs space-y-3">
           <div className="flex items-center justify-between">
             <label className="font-extrabold text-slate-900 text-xs flex items-center gap-1.5 m-0">
-              <span className="w-5 h-5 rounded-full bg-blue-100 text-[#0045ce] flex items-center justify-center text-[10.5px] font-black">2</span>
+              <span className="w-5 h-5 rounded-full bg-blue-100 text-[#0045ce] flex items-center justify-center text-[10.5px] font-black">
+                2
+              </span>
               Thời điểm học hiện tại:
             </label>
-            <span className="text-[10px] font-bold text-blue-700 bg-blue-50 px-2 py-0.5 rounded-full border border-blue-200">
+            <span className="text-[10px] font-bold text-blue-700 bg-blue-50 px-2.5 py-0.5 rounded-full border border-blue-200">
               Khóa: {detectedCohort}
             </span>
           </div>
 
-          <div className="grid grid-cols-2 gap-2 pt-1">
-            <div>
-              <label className="font-bold text-slate-500 mb-1 block text-[10.5px]">Năm học</label>
-              <select
-                value={year}
-                onChange={(e) => {
-                  const val = Number(e.target.value);
-                  setYear(val);
-                  handleSelectFramework(major, val, semester);
-                }}
-                className="w-full p-2 bg-slate-50 rounded-xl border border-slate-200 font-bold text-xs"
-              >
-                <option value={1}>Năm 1</option>
-                <option value={2}>Năm 2</option>
-                <option value={3}>Năm 3</option>
-                <option value={4}>Năm 4 (Hiện tại)</option>
-              </select>
+          {/* Chọn Năm học */}
+          <div className="space-y-1.5">
+            <label className="font-bold text-slate-500 block text-[10.5px] m-0">
+              Năm học
+            </label>
+            <div
+              className="grid gap-1.5"
+              style={{
+                gridTemplateColumns: `repeat(${totalYears || 4}, minmax(0, 1fr))`,
+              }}
+            >
+              {Array.from({ length: totalYears || 4 }, (_, idx) => idx + 1).map((y) => {
+                const active = Number(year) === y;
+                const isCurrentCohortYear = y === detectedYear;
+                return (
+                  <button
+                    type="button"
+                    key={y}
+                    onClick={() => handleSelectYear(y)}
+                    className={`py-2 px-1 rounded-xl border text-center transition cursor-pointer ${
+                      active
+                        ? "bg-[#0045ce] text-white border-[#0045ce] font-black shadow-2xs"
+                        : "bg-slate-50 text-slate-700 border-slate-200 font-bold hover:bg-slate-100"
+                    }`}
+                  >
+                    <div className="text-xs">Năm {y}</div>
+                    {isCurrentCohortYear && (
+                      <div
+                        className={`text-[9px] font-bold leading-none mt-0.5 ${
+                          active ? "text-amber-300" : "text-[#0045ce]"
+                        }`}
+                      >
+                        Hiện tại
+                      </div>
+                    )}
+                  </button>
+                );
+              })}
             </div>
-            <div>
-              <label className="font-bold text-slate-500 mb-1 block text-[10.5px]">Học kỳ</label>
-              <select
-                value={semester}
-                onChange={(e) => {
-                  const val = Number(e.target.value);
-                  setSemester(val);
-                  handleSelectFramework(major, year, val);
-                }}
-                className="w-full p-2 bg-slate-50 rounded-xl border border-slate-200 font-bold text-xs"
-              >
-                <option value={1}>Học kỳ 1</option>
-                <option value={2}>Học kỳ 2</option>
-                <option value={3}>Học kỳ 3 (Hè)</option>
-              </select>
+          </div>
+
+          {/* Chọn Học kỳ động theo CSDL */}
+          <div className="space-y-1.5">
+            <div className="flex items-center justify-between">
+              <label className="font-bold text-slate-500 block text-[10.5px] m-0">
+                Học kỳ
+              </label>
+              <span className="text-[10px] text-slate-400 font-semibold">
+                {semestersPerYear} học kỳ / năm
+              </span>
+            </div>
+            <div
+              className="grid gap-1.5"
+              style={{
+                gridTemplateColumns: `repeat(${semesterButtons.length}, minmax(0, 1fr))`,
+              }}
+            >
+              {semesterButtons.map((sem) => {
+                const active = Number(semester) === sem.id;
+                return (
+                  <button
+                    type="button"
+                    key={sem.id}
+                    onClick={() => handleSelectSemester(sem.id)}
+                    className={`py-2 px-1.5 rounded-xl border text-center transition cursor-pointer ${
+                      active
+                        ? "bg-[#0045ce] text-white border-[#0045ce] font-black shadow-2xs"
+                        : "bg-slate-50 text-slate-700 border-slate-200 font-bold hover:bg-slate-100"
+                    }`}
+                  >
+                    <div className="text-xs">{sem.label}</div>
+                    <div
+                      className={`text-[9.5px] font-semibold mt-0.5 leading-none ${
+                        active ? "text-blue-100" : "text-slate-400"
+                      }`}
+                    >
+                      {sem.subText}
+                    </div>
+                  </button>
+                );
+              })}
             </div>
           </div>
         </div>
 
-        {/* Khối 3: Danh sách môn */}
+        {/* Khối 3: Danh sách môn học cần ôn tập */}
         <div className="bg-white rounded-3xl p-3.5 border border-slate-200/80 shadow-xs space-y-2.5">
-          <div className="flex items-center justify-between">
+          <div className="flex items-center justify-between gap-2">
             <label className="font-extrabold text-slate-900 text-xs flex items-center gap-1.5 m-0">
-              <span className="w-5 h-5 rounded-full bg-blue-100 text-[#0045ce] flex items-center justify-center text-[10.5px] font-black">3</span>
-              Môn học cần ôn tập ({Object.keys(subjectLevels).filter((k) => k !== "undefined").length} môn đã chọn):
+              <span className="w-5 h-5 rounded-full bg-blue-100 text-[#0045ce] flex items-center justify-center text-[10.5px] font-black shrink-0">
+                3
+              </span>
+              <span>
+                Môn học cần ôn tập ({selectedCount} môn đã chọn):
+              </span>
             </label>
-            <span className="text-[10px] text-slate-400 font-bold">CTĐT {detectedCohort}</span>
+
+            {allDisplaySubjects.length > 0 && (
+              <button
+                type="button"
+                onClick={toggleAllSubjects}
+                className="text-[10.5px] font-extrabold text-[#0045ce] bg-blue-50 hover:bg-blue-100 px-2.5 py-1 rounded-lg border-0 cursor-pointer transition shrink-0"
+              >
+                {selectedCount === allDisplaySubjects.length
+                  ? "Bỏ chọn hết"
+                  : "Chọn tất cả"}
+              </button>
+            )}
           </div>
 
           {isLoadingSubjects ? (
-            <div className="py-6 text-center text-xs font-bold text-slate-400">
+            <div className="py-7 text-center text-xs font-bold text-slate-400 bg-slate-50 rounded-2xl border border-slate-100">
               <span className="spinner-border spinner-border-sm text-[#0045ce] me-2"></span>
               Đang tải môn học từ CSDL...
             </div>
-          ) : dbSubjects.length === 0 ? (
+          ) : allDisplaySubjects.length === 0 ? (
             <div className="p-4 text-center text-xs text-slate-400 font-bold bg-slate-50 rounded-2xl border border-dashed border-slate-200">
               Chưa có môn học trong CSDL cho học kỳ này. Bạn có thể tự thêm môn bên dưới.
             </div>
           ) : (
-            <div className="space-y-2 max-h-56 overflow-y-auto pr-1">
-              {dbSubjects.map((sub, idx) => {
+            <div className="space-y-2 max-h-64 overflow-y-auto pr-1">
+              {allDisplaySubjects.map((sub, idx) => {
                 const subName = sub.subjectName;
                 if (!subName || subName === "undefined") return null;
 
@@ -382,37 +680,86 @@ export const AcademicSurveyModal = ({ isOpen, onSave, onDismiss }) => {
 
                 return (
                   <div
-                    key={idx}
+                    key={`${subName}-${idx}`}
                     onClick={() => toggleSubject(subName)}
-                    className={`p-2 rounded-2xl border transition cursor-pointer ${
-                      isChecked ? "bg-blue-50/70 border-blue-300" : "bg-slate-50 border-slate-200 opacity-60"
+                    className={`p-2.5 rounded-2xl border transition cursor-pointer ${
+                      isChecked
+                        ? "bg-blue-50/70 border-blue-300 shadow-2xs"
+                        : "bg-slate-50 border-slate-200 opacity-65 hover:opacity-95"
                     }`}
                   >
-                    <div className="flex items-center justify-between">
-                      <div>
-                        <span className="font-bold text-xs text-slate-800 break-words">{subName}</span>
-                        <span className="text-[10px] text-slate-500 ml-2 font-semibold">({sub.credits} tín chỉ)</span>
+                    <div className="flex items-start justify-between gap-2">
+                      <div className="min-w-0 flex-1">
+                        <span className="font-bold text-xs text-slate-800 break-words leading-snug block">
+                          {subName}
+                        </span>
+                        <div className="flex items-center gap-1.5 mt-1">
+                          <span className="text-[10px] text-slate-500 font-semibold bg-white px-2 py-0.5 rounded-md border border-slate-200/80">
+                            {typeof sub.credits === "number"
+                              ? `${sub.credits} tín chỉ`
+                              : sub.credits}
+                          </span>
+                          {sub.isCustom && (
+                            <span className="text-[10px] font-bold text-purple-700 bg-purple-50 px-2 py-0.5 rounded-md border border-purple-200">
+                              Ngoài khung
+                            </span>
+                          )}
+                        </div>
                       </div>
-                      <i className={`bi ${isChecked ? "bi-check-circle-fill text-[#0045ce]" : "bi-circle text-slate-300"}`}></i>
+                      <i
+                        className={`bi text-base shrink-0 ${
+                          isChecked
+                            ? "bi-check-circle-fill text-[#0045ce]"
+                            : "bi-circle text-slate-300"
+                        }`}
+                      ></i>
                     </div>
 
                     {isChecked && (
-                      <div className="flex items-center gap-1.5 mt-2 pt-1.5 border-t border-blue-100/80" onClick={(e) => e.stopPropagation()}>
-                        <span className="text-[10px] font-extrabold text-slate-500">Độ tự tin:</span>
-                        {[
-                          { id: "weak", label: "Yếu", color: currentLvl === "weak" ? "bg-rose-500 text-white" : "bg-white text-rose-600 border-rose-200" },
-                          { id: "medium", label: "Vừa", color: currentLvl === "medium" ? "bg-amber-500 text-white" : "bg-white text-amber-700 border-amber-200" },
-                          { id: "good", label: "Tốt", color: currentLvl === "good" ? "bg-emerald-600 text-white" : "bg-white text-emerald-700 border-emerald-200" },
-                        ].map((btn) => (
-                          <button
-                            key={btn.id}
-                            type="button"
-                            onClick={(e) => changeLevel(subName, btn.id, e)}
-                            className={`px-2 py-0.5 rounded-lg border text-[10px] font-black transition ${btn.color}`}
-                          >
-                            {btn.label}
-                          </button>
-                        ))}
+                      <div
+                        className="flex items-center justify-between gap-1.5 mt-2 pt-2 border-t border-blue-100/90"
+                        onClick={(e) => e.stopPropagation()}
+                      >
+                        <span className="text-[10px] font-extrabold text-slate-500">
+                          Độ tự tin:
+                        </span>
+                        <div className="flex items-center gap-1">
+                          {[
+                            {
+                              id: "weak",
+                              label: "Yếu",
+                              color:
+                                currentLvl === "weak"
+                                  ? "bg-rose-500 text-white border-rose-500"
+                                  : "bg-white text-rose-600 border-rose-200",
+                            },
+                            {
+                              id: "medium",
+                              label: "Vừa",
+                              color:
+                                currentLvl === "medium"
+                                  ? "bg-amber-500 text-white border-amber-500"
+                                  : "bg-white text-amber-700 border-amber-200",
+                            },
+                            {
+                              id: "good",
+                              label: "Tốt",
+                              color:
+                                currentLvl === "good"
+                                  ? "bg-emerald-600 text-white border-emerald-600"
+                                  : "bg-white text-emerald-700 border-emerald-200",
+                            },
+                          ].map((btn) => (
+                            <button
+                              key={btn.id}
+                              type="button"
+                              onClick={(e) => changeLevel(subName, btn.id, e)}
+                              className={`px-2.5 py-0.5 rounded-lg border text-[10px] font-black transition cursor-pointer ${btn.color}`}
+                            >
+                              {btn.label}
+                            </button>
+                          ))}
+                        </div>
                       </div>
                     )}
                   </div>
@@ -421,40 +768,55 @@ export const AcademicSurveyModal = ({ isOpen, onSave, onDismiss }) => {
             </div>
           )}
 
+          {/* Thêm môn học ngoài khung */}
           <div className="flex gap-1.5 pt-1">
             <input
               type="text"
               value={customSubjectInput}
               onChange={(e) => setCustomSubjectInput(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") {
+                  e.preventDefault();
+                  handleAddCustomSubject();
+                }
+              }}
               placeholder="Thêm môn học ngoài khung..."
-              className="flex-1 px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-semibold"
+              className="flex-1 px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-semibold focus:outline-none focus:border-[#0045ce]"
             />
             <button
               type="button"
               onClick={handleAddCustomSubject}
-              className="px-3.5 py-2 bg-slate-900 text-white rounded-xl font-black text-xs border-0 cursor-pointer"
+              className="px-3.5 py-2 bg-slate-900 hover:bg-slate-800 text-white rounded-xl font-black text-xs border-0 cursor-pointer shrink-0 transition"
             >
               + Thêm
             </button>
           </div>
         </div>
 
-        {/* Khối 4: Điểm GPA */}
+        {/* Khối 4: Điểm GPA hiện tại & Mục tiêu */}
         <div className="bg-white rounded-3xl p-3.5 border border-slate-200/80 shadow-xs space-y-3">
           <div className="flex items-center justify-between">
             <label className="font-extrabold text-slate-900 text-xs flex items-center gap-1.5 m-0">
-              <span className="w-5 h-5 rounded-full bg-blue-100 text-[#0045ce] flex items-center justify-center text-[10.5px] font-black">4</span>
+              <span className="w-5 h-5 rounded-full bg-blue-100 text-[#0045ce] flex items-center justify-center text-[10.5px] font-black">
+                4
+              </span>
               Điểm GPA hiện tại & Mục tiêu:
             </label>
-            <span className="text-[10px] text-slate-400 font-bold">Thang điểm 4.0</span>
+            <span className="text-[10px] text-slate-400 font-bold">
+              Thang điểm 4.0
+            </span>
           </div>
 
-          <div className="bg-slate-50 p-2.5 rounded-2xl border border-slate-200/80 flex items-center justify-between">
+          <div className="bg-slate-50 p-2.5 rounded-2xl border border-slate-200/80 flex items-center justify-between gap-2">
             <div>
-              <span className="text-xs font-black text-slate-800 block">GPA tích lũy hiện tại:</span>
-              <span className="text-[10px] text-slate-400 font-medium">Bù trừ trọng số theo khoảng cách điểm mục tiêu</span>
+              <span className="text-xs font-black text-slate-800 block">
+                GPA tích lũy hiện tại:
+              </span>
+              <span className="text-[10px] text-slate-400 font-medium">
+                Bù trừ trọng số theo khoảng cách điểm mục tiêu
+              </span>
             </div>
-            <div className="flex items-center gap-1">
+            <div className="flex items-center gap-1 shrink-0">
               <input
                 type="number"
                 step="0.05"
@@ -479,35 +841,41 @@ export const AcademicSurveyModal = ({ isOpen, onSave, onDismiss }) => {
                 type="button"
                 key={g.id}
                 onClick={() => setTargetGoal(g.id)}
-                className={`p-2.5 rounded-2xl border text-center transition ${
+                className={`p-2.5 rounded-2xl border text-center transition cursor-pointer ${
                   targetGoal === g.id
                     ? "bg-[#0045ce] text-white border-[#0045ce] shadow-sm"
                     : "bg-slate-50 text-slate-700 border-slate-200 hover:bg-slate-100"
                 }`}
               >
                 <div className="font-black text-xs">{g.label}</div>
-                <div className="text-[9.5px] font-bold mt-0.5 opacity-80">{g.gpa}</div>
+                <div className="text-[9.5px] font-bold mt-0.5 opacity-80">
+                  {g.gpa}
+                </div>
               </button>
             ))}
           </div>
         </div>
 
-        {/* Khối 5: Kế hoạch tự học */}
+        {/* Khối 5: Kế hoạch tự học mỗi ngày */}
         <div className="bg-white rounded-3xl p-3.5 border border-slate-200/80 shadow-xs space-y-2">
           <label className="font-extrabold text-slate-900 text-xs flex items-center gap-1.5 m-0">
-            <span className="w-5 h-5 rounded-full bg-blue-100 text-[#0045ce] flex items-center justify-center text-[10.5px] font-black">5</span>
+            <span className="w-5 h-5 rounded-full bg-blue-100 text-[#0045ce] flex items-center justify-center text-[10.5px] font-black">
+              5
+            </span>
             Kế hoạch tự học mỗi ngày:
           </label>
           <div className="grid grid-cols-2 gap-2 pt-1">
             <div>
-              <label className="font-bold text-slate-600 mb-1 block text-[11px]">Thời lượng</label>
+              <label className="font-bold text-slate-600 mb-1 block text-[11px]">
+                Thời lượng
+              </label>
               <div className="flex gap-1">
                 {[15, 30, 45].map((pace) => (
                   <button
                     type="button"
                     key={pace}
                     onClick={() => setDailyPace(pace)}
-                    className={`flex-1 py-2 rounded-xl border font-black text-xs transition ${
+                    className={`flex-1 py-2 rounded-xl border font-black text-xs transition cursor-pointer ${
                       dailyPace === pace
                         ? "bg-[#0045ce] text-white border-[#0045ce] shadow-xs"
                         : "bg-slate-50 text-slate-700 border-slate-200"
@@ -519,18 +887,22 @@ export const AcademicSurveyModal = ({ isOpen, onSave, onDismiss }) => {
               </div>
             </div>
             <div>
-              <label className="font-bold text-slate-600 mb-1 block text-[11px]">Giờ nhắc học</label>
+              <label className="font-bold text-slate-600 mb-1 block text-[11px]">
+                Giờ nhắc học
+              </label>
               <input
                 type="time"
                 value={reminderTime}
                 onChange={(e) => setReminderTime(e.target.value)}
-                className="w-full p-2 bg-slate-50 rounded-xl border border-slate-200 font-bold text-xs text-slate-800"
+                className="w-full p-2 bg-slate-50 rounded-xl border border-slate-200 font-bold text-xs text-slate-800 focus:outline-none focus:border-[#0045ce]"
               />
             </div>
           </div>
         </div>
 
+        {/* Nút xác nhận chính */}
         <button
+          type="button"
           onClick={handleConfirm}
           className="w-full py-3.5 bg-gradient-to-r from-emerald-600 to-teal-700 text-white font-black text-sm rounded-2xl shadow-lg shadow-emerald-500/25 active:scale-95 transition border-0 cursor-pointer"
         >

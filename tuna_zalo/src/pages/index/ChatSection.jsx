@@ -34,10 +34,7 @@ export const ChatSection = ({ currentUser }) => {
   const [previewMsgContext, setPreviewMsgContext] = useState(null);
   const [isConnected, setIsConnected] = useState(false);
 
-  // Trả lời tin nhắn
   const [replyingMessage, setReplyingMessage] = useState(null);
-
-  // Menu tương tác tin nhắn (Trả lời / Thu hồi)
   const [activeActionMsg, setActiveActionMsg] = useState(null);
 
   const [typingUsers, setTypingUsers] = useState([]);
@@ -49,7 +46,6 @@ export const ChatSection = ({ currentUser }) => {
     setTimeout(() => setToastMessage(null), 3000);
   };
 
-  // Cảnh báo & Khóa từ Admin
   const [adminWarning, setAdminWarning] = useState(null);
   const [penaltyStatus, setPenaltyStatus] = useState({
     isLocked: false,
@@ -59,7 +55,6 @@ export const ChatSection = ({ currentUser }) => {
     showLockModal: false,
   });
 
-  // Quản lý danh tính
   const [isAnonymous, setIsAnonymous] = useState(() => {
     return localStorage.getItem("tuna_chat_is_anon") === "true";
   });
@@ -100,7 +95,6 @@ export const ChatSection = ({ currentUser }) => {
     messagesEndRef.current?.scrollIntoView({ behavior });
   }, []);
 
-  // Đóng menu thao tác khi click ra ngoài
   useEffect(() => {
     const handleClickOutside = (e) => {
       if (actionMenuRef.current && !actionMenuRef.current.contains(e.target)) {
@@ -113,7 +107,7 @@ export const ChatSection = ({ currentUser }) => {
     return () => document.removeEventListener("mousedown", handleClickOutside);
   }, [activeActionMsg]);
 
-  // Kiểm tra trạng thái phạt từ server (Bắt cả warningReason và lastWarningReason)
+  // Kiểm tra trạng thái phạt từ REST API
   const checkMyPenaltyStatus = useCallback(async () => {
     if (!myUserId) return;
     try {
@@ -128,6 +122,15 @@ export const ChatSection = ({ currentUser }) => {
             lockReason: data.lockReason || "Tài khoản bị tạm khóa quyền nhắn tin",
             durationText: data.durationText || "Tạm đình chỉ",
           }));
+        } else {
+          // Bắt trường hợp admin đã mở khóa qua REST API (để đồng bộ local state)
+          setPenaltyStatus((prev) => {
+            if (prev.isLocked) {
+              // Vừa được mở khóa ngầm
+              return { isLocked: false, lockUntil: null, lockReason: "", durationText: "", showLockModal: false };
+            }
+            return prev;
+          });
         }
 
         const reason = data.warningReason || data.lastWarningReason;
@@ -152,7 +155,6 @@ export const ChatSection = ({ currentUser }) => {
     return () => clearInterval(interval);
   }, [checkMyPenaltyStatus]);
 
-  // Kết nối Socket và Lắng nghe sự kiện
   useEffect(() => {
     const socket = io(SOCKET_SERVER, {
       transports: ["websocket", "polling"],
@@ -167,7 +169,6 @@ export const ChatSection = ({ currentUser }) => {
 
     socket.on("disconnect", () => setIsConnected(false));
 
-    // Lắng nghe CẢNH BÁO từ Admin (Khớp đa tầng theo ID và Tên)
     const handleReceiveWarning = (data) => {
       if (!data) return;
       const targetId = String(data.userId || "").trim().toLowerCase();
@@ -190,7 +191,7 @@ export const ChatSection = ({ currentUser }) => {
     socket.on("admin_warning_received", handleReceiveWarning);
     socket.on("user_warned", handleReceiveWarning);
 
-    // Lắng nghe KHÓA TÀI KHOẢN
+    // XỬ LÝ SỰ KIỆN KHÓA / MỞ KHÓA TÀI KHOẢN TỪ SOCKET
     socket.on("user_locked", (data) => {
       if (String(data.userId) === myUserId || String(data.userId).toLowerCase() === myUserId.toLowerCase()) {
         setPenaltyStatus({
@@ -205,18 +206,22 @@ export const ChatSection = ({ currentUser }) => {
 
     socket.on("user_unlocked", (data) => {
       if (String(data.userId) === myUserId || String(data.userId).toLowerCase() === myUserId.toLowerCase()) {
-        setPenaltyStatus({
-          isLocked: false,
-          lockUntil: null,
-          lockReason: "",
-          durationText: "",
-          showLockModal: false,
+        setPenaltyStatus((prev) => {
+          // Chỉ show toast nếu trước đó trạng thái local đang là khóa, HOẶC server cố tình đẩy cờ showToast
+          if (prev.isLocked || data.showToast) {
+            showToast("Tài khoản đã được mở quyền nhắn tin!");
+          }
+          return {
+            isLocked: false,
+            lockUntil: null,
+            lockReason: "",
+            durationText: "",
+            showLockModal: false,
+          };
         });
-        showToast("Tài khoản đã được mở quyền nhắn tin!");
       }
     });
 
-    // Nhận tin nhắn mới
     socket.on("receive_message", (newMsg) => {
       if (!newMsg) return;
       setMessages((prev) => {
@@ -238,7 +243,6 @@ export const ChatSection = ({ currentUser }) => {
       setTypingUsers((prev) => prev.filter((u) => u.userId !== String(newMsg.user_id)));
     });
 
-    // Thu hồi tin nhắn
     socket.on("message_recalled", ({ messageId }) => {
       setMessages((prev) =>
         prev.map((m) =>
@@ -281,7 +285,6 @@ export const ChatSection = ({ currentUser }) => {
     };
   }, [myUserId, myDisplayName, previewMsgContext, currentUser, nickname]);
 
-  // Nạp lịch sử
   useEffect(() => {
     const fetchHistory = async () => {
       try {
